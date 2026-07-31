@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1
+
+- إصلاح فشل بناء Xcode 16.4 في `RoomScanViewModel`.
+- إضافة متطلبات `NSCoding` التي يفرضها `RoomCaptureViewDelegate` في iOS SDK 18.5.
+- إضافة `@preconcurrency` إلى مطابقة delegate لتفادي تعارض عزل `MainActor` مع بروتوكول RoomPlan.
+- تحديث رقم البناء إلى `7`.
+
 ## 0.6.0
 
 - تثبيت ميزان الميل على سلوك النسخة 0.4.0 دون تعديل ملفاته.

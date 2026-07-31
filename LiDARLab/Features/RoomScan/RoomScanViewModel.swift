@@ -13,7 +13,7 @@ struct RoomScanExport: Identifiable {
 }
 
 @MainActor
-final class RoomScanViewModel: NSObject, ObservableObject, RoomCaptureViewDelegate {
+final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate {
     @Published private(set) var isScanning = false
     @Published private(set) var isProcessing = false
     @Published private(set) var capturedRoom: CapturedRoom?
@@ -23,6 +23,18 @@ final class RoomScanViewModel: NSObject, ObservableObject, RoomCaptureViewDelega
 
     private weak var captureView: RoomCaptureView?
     private var pendingStart = false
+
+    override init() {
+        super.init()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init()
+    }
+
+    func encode(with coder: NSCoder) {
+        // RoomScanViewModel owns live scan state only; there is no persistent state to encode.
+    }
 
     var wallCount: Int { capturedRoom?.walls.count ?? 0 }
     var doorCount: Int { capturedRoom?.doors.count ?? 0 }
