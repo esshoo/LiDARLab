@@ -145,7 +145,7 @@ final class ExportCenterViewModel: ObservableObject {
                         modifiedAt: item.modifiedAt,
                         sizeBytes: item.sizeBytes,
                         fileCount: item.fileCount,
-                        relativePath: item.url.path.replacingOccurrences(of: storage.rootURL.path + "/", with: "")
+                        relativePath: storage.relativePath(for: item.url) ?? item.name
                     )
                 }
                 let catalog = ExportCatalog(

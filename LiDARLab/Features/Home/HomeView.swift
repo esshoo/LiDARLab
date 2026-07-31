@@ -7,6 +7,12 @@ struct HomeView: View {
     }
 
     @AppStorage("homeLayoutMode") private var layoutModeRawValue = LayoutMode.grid.rawValue
+    @EnvironmentObject private var storage: LiDARLabStorage
+    @EnvironmentObject private var urlRouter: ThreeEURLRouter
+    @State private var navigationPath = NavigationPath()
+    @State private var showFolderPicker = false
+    @State private var showReselectionAlert = false
+    @State private var folderPickerError: String?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -33,10 +39,13 @@ struct HomeView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(spacing: 18) {
                     header
+                    ThreeEStorageStatusView(storage: storage) {
+                        showFolderPicker = true
+                    }
                     layoutPicker
                     featureCollection
                 }
@@ -46,10 +55,66 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity)
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("LiDAR Lab")
+            .navigationTitle("3ELiDAR")
             .navigationBarTitleDisplayMode(.large)
             .navigationDestination(for: LiDARFeature.self) { feature in
                 FeatureRouterView(feature: feature)
+            }
+            .sheet(isPresented: $showFolderPicker) {
+                ThreeEFolderPicker { result in
+                    showFolderPicker = false
+                    switch result {
+                    case .success(let url):
+                        do {
+                            try storage.connectToSelectedThreeEFolder(url)
+                        } catch {
+                            folderPickerError = error.localizedDescription
+                        }
+                    case .failure(let error):
+                        if !(error is CancellationError) {
+                            folderPickerError = error.localizedDescription
+                        }
+                    }
+                }
+            }
+            .sheet(item: $urlRouter.pendingTarget) { target in
+                ThreeEPathOpenView(target: target)
+            }
+            .alert("إعادة ربط مجلد 3E", isPresented: $showReselectionAlert) {
+                Button("اختيار مجلد 3E") {
+                    storage.clearFolderReselectionRequest()
+                    showFolderPicker = true
+                }
+                Button("لاحقًا", role: .cancel) {
+                    storage.clearFolderReselectionRequest()
+                }
+            } message: {
+                Text("تعذر استعادة صلاحية المجلد السابق. اختر مجلد 3E نفسه المستخدم في التطبيقات الأخرى.")
+            }
+            .alert("تعذر ربط المجلد", isPresented: Binding(
+                get: { folderPickerError != nil },
+                set: { if !$0 { folderPickerError = nil } }
+            )) {
+                Button("حسنًا", role: .cancel) { folderPickerError = nil }
+            } message: {
+                Text(folderPickerError ?? "حدث خطأ غير معروف.")
+            }
+            .alert("تعذر فتح رابط 3E", isPresented: Binding(
+                get: { urlRouter.errorMessage != nil },
+                set: { if !$0 { urlRouter.clearError() } }
+            )) {
+                Button("حسنًا", role: .cancel) { urlRouter.clearError() }
+            } message: {
+                Text(urlRouter.errorMessage ?? "حدث خطأ غير معروف.")
+            }
+            .task {
+                showReselectionAlert = storage.needsFolderReselection
+            }
+            .onChange(of: storage.needsFolderReselection) { _, needsSelection in
+                if needsSelection { showReselectionAlert = true }
+            }
+            .onChange(of: urlRouter.homeRequestID) { _, _ in
+                navigationPath = NavigationPath()
             }
         }
     }

@@ -171,7 +171,7 @@ struct ExportCenterView: View {
                     .font(.title2)
                     .foregroundStyle(.cyan)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("مكتبة LiDAR Lab")
+                    Text("مكتبة 3ELiDAR")
                         .font(.headline)
                     Text(model.statusMessage)
                         .font(.caption)
@@ -195,7 +195,7 @@ struct ExportCenterView: View {
             .buttonStyle(.borderedProminent)
             .disabled(model.isWorking)
 
-            Text("يمكن الوصول إلى مجلد LiDARLab أيضًا من تطبيق الملفات لأن مشاركة مستندات التطبيق مفعّلة.")
+            Text("عند ربط مجلد 3E تُحفظ النتائج داخل Apps/LiDARLab، وإلا تستخدم مساحة التطبيق الخاصة مؤقتًا.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

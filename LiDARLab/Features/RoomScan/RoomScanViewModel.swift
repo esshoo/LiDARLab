@@ -130,8 +130,9 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
             let name = "Room-\(formatter.string(from: Date()))-\(kind)"
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            let folder = documents.appendingPathComponent("LiDARLab/Rooms/\(name)", isDirectory: true)
+            let storage = LiDARLabStorage.shared
+            try storage.ensureDirectories()
+            let folder = storage.roomsURL.appendingPathComponent(name, isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
             let jsonURL = folder.appendingPathComponent("room.json")

@@ -173,8 +173,9 @@ final class DepthPhotoViewModel: NSObject, ObservableObject, ARSessionDelegate {
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let name = "DepthPhoto-\(formatter.string(from: date))"
 
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let folder = documents.appendingPathComponent("LiDARLab/Captures/\(name)", isDirectory: true)
+        let storage = LiDARLabStorage.shared
+        try storage.ensureDirectories()
+        let folder = storage.capturesURL.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
         guard let colorImage = makeCameraImage(frame.capturedImage, orientation: orientation),
