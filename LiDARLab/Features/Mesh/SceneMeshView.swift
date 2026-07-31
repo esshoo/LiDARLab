@@ -11,18 +11,17 @@ struct SceneMeshView: View {
                 .ignoresSafeArea(edges: .bottom)
 
             VStack(spacing: 12) {
-                HStack {
-                    Toggle("إظهار الشبكة", isOn: $showMesh)
-                        .font(.subheadline.bold())
-
-                    Spacer()
-
-                    Button {
-                        model.run(reset: true)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        meshToggle
+                        Spacer(minLength: 8)
+                        restartButton
                     }
-                    .buttonStyle(.borderedProminent)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        meshToggle
+                        restartButton
+                    }
                 }
                 .padding(12)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -30,19 +29,22 @@ struct SceneMeshView: View {
                 Spacer()
 
                 VStack(spacing: 10) {
-                    HStack(spacing: 10) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 94), spacing: 9)], spacing: 9) {
                         MetricChip(title: "الأجزاء", value: "\(model.anchorCount)", systemImage: "square.stack.3d.up")
                         MetricChip(title: "الرؤوس", value: formatted(model.vertexCount), systemImage: "circle.grid.3x3")
                         MetricChip(title: "المثلثات", value: formatted(model.faceCount), systemImage: "triangle")
                     }
 
-                    HStack {
-                        Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
-                            .font(.caption.bold())
-                        Spacer()
-                        Text("تحرّك ببطء حول المكان")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    ViewThatFits(in: .horizontal) {
+                        HStack {
+                            trackingLabel
+                            Spacer(minLength: 8)
+                            movementHint
+                        }
+                        VStack(alignment: .leading, spacing: 5) {
+                            trackingLabel
+                            movementHint
+                        }
                     }
                     .padding(.horizontal, 4)
                 }
@@ -61,6 +63,32 @@ struct SceneMeshView: View {
         } message: {
             Text(model.errorMessage ?? "خطأ غير معروف")
         }
+    }
+
+    private var meshToggle: some View {
+        Toggle("إظهار الشبكة", isOn: $showMesh)
+            .font(.subheadline.bold())
+    }
+
+    private var restartButton: some View {
+        Button {
+            model.run(reset: true)
+        } label: {
+            Label("إعادة المسح", systemImage: "arrow.clockwise")
+                .font(.caption.bold())
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
+    private var trackingLabel: some View {
+        Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
+            .font(.caption.bold())
+    }
+
+    private var movementHint: some View {
+        Text("تحرّك ببطء حول المكان")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     private func formatted(_ value: Int) -> String {

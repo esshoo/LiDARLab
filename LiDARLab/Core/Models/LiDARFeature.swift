@@ -1,6 +1,5 @@
 import Foundation
 
-
 enum FeaturePhase: String {
     case ready
     case comingSoon
@@ -16,6 +15,7 @@ enum FeatureRequirement {
 enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
     case depthCamera
     case distanceMeasure
+    case levelTool
     case pointCloud
     case sceneMesh
     case surfaceClassification
@@ -34,6 +34,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .depthCamera: "كاميرا العمق"
         case .distanceMeasure: "قياس المسافة"
+        case .levelTool: "ميزان الميل والزاوية"
         case .pointCloud: "السحابة النقطية"
         case .sceneMesh: "شبكة المكان"
         case .surfaceClassification: "تصنيف الأسطح"
@@ -52,6 +53,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .depthCamera: "خريطة حرارية وقراءات عمق مباشرة"
         case .distanceMeasure: "قراءة المسافة من مركز الشاشة"
+        case .levelTool: "خطوط جاذبية وقياس ميل تلقائي أو يدوي"
         case .pointCloud: "تحويل العمق إلى نقاط ثلاثية الأبعاد"
         case .sceneMesh: "عرض شبكة البيئة المحيطة"
         case .surfaceClassification: "تمييز الجدران والأرضيات والأسقف"
@@ -59,7 +61,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .arPlayground: "وضع وتحريك مجسمات داخل المكان"
         case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
         case .roomScan: "تجربة RoomPlan لمسح غرفة"
-        case .sensorTests: "اختبار المدى والثبات والثقة"
+        case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
         case .recordings: "تسجيل بيانات الجلسة وإعادتها"
         case .exportCenter: "تصدير النتائج والصور والنماذج"
         case .deviceInfo: "فحص دعم LiDAR وخصائص ARKit"
@@ -70,6 +72,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .depthCamera: "camera.metering.matrix"
         case .distanceMeasure: "ruler"
+        case .levelTool: "level"
         case .pointCloud: "circle.grid.3x3.fill"
         case .sceneMesh: "cube.transparent"
         case .surfaceClassification: "square.3.layers.3d"
@@ -86,7 +89,8 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
 
     var phase: FeaturePhase {
         switch self {
-        case .depthCamera, .distanceMeasure, .sceneMesh, .arPlayground, .deviceInfo:
+        case .depthCamera, .distanceMeasure, .levelTool, .sceneMesh,
+             .arPlayground, .sensorTests, .deviceInfo:
             .ready
         default:
             .comingSoon
@@ -97,7 +101,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .deviceInfo:
             .none
-        case .arPlayground:
+        case .levelTool, .arPlayground:
             .worldTracking
         case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto, .roomScan,
              .sensorTests, .recordings, .exportCenter:
@@ -132,8 +136,6 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
             ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
         case .roomScan:
             ["الجدران والأبواب والنوافذ", "أبعاد الغرفة", "نموذج RoomPlan ثلاثي الأبعاد"]
-        case .sensorTests:
-            ["اختبار الثبات", "اختبار المسافات", "مقارنة أنواع الأسطح والإضاءة"]
         case .recordings:
             ["تسجيل الإطارات والعمق", "إعادة تشغيل الجلسة", "استخراج إطار وبياناته"]
         case .exportCenter:

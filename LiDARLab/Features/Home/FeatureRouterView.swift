@@ -16,10 +16,14 @@ struct FeatureRouterView: View {
                 DepthCameraView()
             case .distanceMeasure:
                 DistanceMeasureView()
+            case .levelTool:
+                LevelToolView()
             case .sceneMesh:
                 SceneMeshView()
             case .arPlayground:
                 ARPlaygroundView()
+            case .sensorTests:
+                SensorStabilityTestView()
             case .deviceInfo:
                 DeviceInfoView()
             default:

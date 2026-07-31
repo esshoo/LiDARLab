@@ -27,10 +27,16 @@ struct DistanceMeasureView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
-                    Text(formattedDistance)
-                        .font(.system(size: 54, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
+                    ViewThatFits(in: .horizontal) {
+                        Text(formattedDistance)
+                            .font(.system(size: 54, weight: .bold, design: .rounded))
+                        Text(formattedDistance)
+                            .font(.system(size: 40, weight: .bold, design: .rounded))
+                    }
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.55)
+                    .lineLimit(1)
+                    .contentTransition(.numericText())
 
                     Label("مستوى الثقة: \(model.centerConfidence)", systemImage: "checkmark.shield")
                         .font(.caption.bold())
@@ -39,21 +45,17 @@ struct DistanceMeasureView: View {
                 .frame(maxWidth: .infinity)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
 
-                HStack(spacing: 12) {
-                    Button {
-                        model.isFrozen.toggle()
-                    } label: {
-                        Label(model.isFrozen ? "متابعة القياس" : "تثبيت القراءة", systemImage: model.isFrozen ? "play.fill" : "pause.fill")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        freezeButton
+                        restartButton
+                    }
+
+                    VStack(spacing: 10) {
+                        freezeButton
+                        restartButton
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-
-                    Button {
-                        model.startSession(resetTracking: true)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
                 }
             }
             .padding(16)
@@ -64,6 +66,27 @@ struct DistanceMeasureView: View {
         .onDisappear {
             model.stopSession()
         }
+    }
+
+
+    private var freezeButton: some View {
+        Button {
+            model.isFrozen.toggle()
+        } label: {
+            Label(model.isFrozen ? "متابعة القياس" : "تثبيت القراءة", systemImage: model.isFrozen ? "play.fill" : "pause.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
+    private var restartButton: some View {
+        Button {
+            model.startSession(resetTracking: true)
+        } label: {
+            Label("إعادة التتبع", systemImage: "arrow.clockwise")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
     }
 
     private var formattedDistance: String {

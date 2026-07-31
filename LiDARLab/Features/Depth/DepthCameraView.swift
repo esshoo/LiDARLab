@@ -65,17 +65,18 @@ struct DepthCameraView: View {
                 .pickerStyle(.segmented)
             }
 
-            HStack(spacing: 12) {
-                Toggle("ثقة مرتفعة فقط", isOn: $highConfidenceOnly)
-                    .font(.caption)
-
-                Button {
-                    model.isFrozen.toggle()
-                } label: {
-                    Label(model.isFrozen ? "متابعة" : "تجميد", systemImage: model.isFrozen ? "play.fill" : "pause.fill")
-                        .font(.caption.bold())
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    confidenceToggle
+                    Spacer(minLength: 6)
+                    freezeButton
                 }
-                .buttonStyle(.borderedProminent)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    confidenceToggle
+                    freezeButton
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             HStack {
@@ -90,9 +91,24 @@ struct DepthCameraView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
+    private var confidenceToggle: some View {
+        Toggle("ثقة مرتفعة فقط", isOn: $highConfidenceOnly)
+            .font(.caption)
+    }
+
+    private var freezeButton: some View {
+        Button {
+            model.isFrozen.toggle()
+        } label: {
+            Label(model.isFrozen ? "متابعة" : "تجميد", systemImage: model.isFrozen ? "play.fill" : "pause.fill")
+                .font(.caption.bold())
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
     private var statistics: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 94), spacing: 9)], spacing: 9) {
                 MetricChip(title: "المركز", value: format(model.centerDistance), systemImage: "scope")
                 MetricChip(title: "الأقرب", value: format(model.minimumDistance), systemImage: "arrow.down.to.line")
                 MetricChip(title: "الأبعد", value: format(model.maximumDistance), systemImage: "arrow.up.to.line")
