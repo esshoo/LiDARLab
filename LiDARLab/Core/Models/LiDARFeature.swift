@@ -67,8 +67,8 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
         case .roomScan: "تجربة RoomPlan لمسح غرفة"
         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
-        case .recordings: "تسجيل بيانات الجلسة وإعادتها"
-        case .exportCenter: "تصدير النتائج والصور والنماذج"
+        case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
+        case .exportCenter: "إدارة الصور والغرف والجلسات المحفوظة"
         case .deviceInfo: "فحص دعم LiDAR وخصائص ARKit"
         }
     }
@@ -97,7 +97,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .depthCamera, .distanceMeasure, .angleMeasure, .levelTool, .pointCloud, .sceneMesh,
              .surfaceClassification, .planeDetection, .arPlayground, .depthPhoto, .roomScan,
-             .sensorTests, .deviceInfo:
+             .sensorTests, .recordings, .exportCenter, .deviceInfo:
             .ready
         default:
             .comingSoon
@@ -106,12 +106,12 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
 
     var requirement: FeatureRequirement {
         switch self {
-        case .deviceInfo:
+        case .deviceInfo, .exportCenter:
             .none
         case .angleMeasure, .levelTool, .planeDetection, .arPlayground:
             .worldTracking
         case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto,
-             .sensorTests, .recordings, .exportCenter:
+             .sensorTests, .recordings:
             .sceneDepth
         case .roomScan:
             .roomPlan
@@ -152,9 +152,9 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .roomScan:
             ["الجدران والأبواب والنوافذ", "أبعاد الغرفة", "نموذج RoomPlan ثلاثي الأبعاد"]
         case .recordings:
-            ["تسجيل الإطارات والعمق", "إعادة تشغيل الجلسة", "استخراج إطار وبياناته"]
+            ["تسجيل الصورة والعمق وحركة الكاميرا", "تشغيل مرئي للإطارات", "مشاركة ملفات الجلسة"]
         case .exportCenter:
-            ["صور وJSON وCSV", "نماذج Mesh وPoint Cloud", "إدارة الملفات ومشاركتها"]
+            ["البحث والتصفية", "مشاركة وإعادة تسمية وحذف", "فهرس JSON وCSV"]
         default:
             []
         }

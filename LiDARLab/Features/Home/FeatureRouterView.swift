@@ -36,6 +36,10 @@ struct FeatureRouterView: View {
                 RoomScanView()
             case .sensorTests:
                 SensorStabilityTestView()
+            case .recordings:
+                SessionRecordingsView()
+            case .exportCenter:
+                ExportCenterView()
             case .deviceInfo:
                 DeviceInfoView()
             default:
