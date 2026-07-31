@@ -9,7 +9,7 @@ enum ThreeERegistryError: LocalizedError {
         case .invalidRootObject:
             return "ملف registry.json الموجود لا يحتوي على كائن JSON صالح، لذلك لم يتم تعديله."
         case .invalidAppsCollection:
-            return "الحقل apps داخل registry.json ليس قائمة صالحة، لذلك لم يتم تعديله."
+            return "الحقل apps داخل registry.json ليس قائمة أو كائنًا صالحًا، لذلك لم يتم تعديله."
         }
     }
 }
@@ -39,7 +39,7 @@ enum ThreeERegistry {
                 } else {
                     rootObject = [
                         "schemaVersion": ThreeEStorageConstants.registrySchemaVersion,
-                        "apps": []
+                        "apps": [String: Any]()
                     ]
                 }
 
@@ -47,31 +47,20 @@ enum ThreeERegistry {
                     rootObject["schemaVersion"] = ThreeEStorageConstants.registrySchemaVersion
                 }
 
-                var apps: [[String: Any]]
-                if let existingApps = rootObject["apps"] {
-                    guard let appArray = existingApps as? [[String: Any]] else {
-                        throw ThreeERegistryError.invalidAppsCollection
-                    }
-                    apps = appArray
-                } else {
-                    apps = []
+                var apps = try normalizedApps(from: rootObject["apps"])
+                let appKey = ThreeEStorageConstants.appKey
+                var updatedEntry = apps[appKey] ?? [:]
+
+                for (key, value) in ThreeEStorageConstants.registryEntry {
+                    updatedEntry[key] = value
                 }
 
-                let newValues = ThreeEStorageConstants.registryEntry
-                if let index = apps.firstIndex(where: { ($0["appKey"] as? String) == ThreeEStorageConstants.appKey }) {
-                    var updatedEntry = apps[index]
-                    for (key, value) in newValues {
-                        updatedEntry[key] = value
-                    }
-                    apps[index] = updatedEntry
-                } else {
-                    apps.append(newValues)
-                }
-
+                apps[appKey] = updatedEntry
                 rootObject["apps"] = apps
+
                 let data = try JSONSerialization.data(
                     withJSONObject: rootObject,
-                    options: [.prettyPrinted, .sortedKeys]
+                    options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
                 )
                 try data.write(to: coordinatedURL, options: .atomic)
             } catch {
@@ -85,5 +74,50 @@ enum ThreeERegistry {
         if let operationError {
             throw operationError
         }
+    }
+
+    /// Accepts both historical formats:
+    /// 1. "apps": [{ "appKey": "lidar", ... }]
+    /// 2. "apps": { "lidar": { "appKey": "lidar", ... } }
+    /// The returned value always uses the canonical dictionary format.
+    private static func normalizedApps(from rawValue: Any?) throws -> [String: [String: Any]] {
+        guard let rawValue else {
+            return [:]
+        }
+
+        if let dictionary = rawValue as? [String: Any] {
+            var result: [String: [String: Any]] = [:]
+
+            for (dictionaryKey, rawEntry) in dictionary {
+                guard var entry = rawEntry as? [String: Any] else {
+                    throw ThreeERegistryError.invalidAppsCollection
+                }
+
+                let storedKey = (entry["appKey"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let appKey = (storedKey?.isEmpty == false) ? storedKey! : dictionaryKey
+                entry["appKey"] = appKey
+                result[appKey] = entry
+            }
+
+            return result
+        }
+
+        if let array = rawValue as? [[String: Any]] {
+            var result: [String: [String: Any]] = [:]
+
+            for entry in array {
+                guard let appKey = (entry["appKey"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                    !appKey.isEmpty else {
+                    throw ThreeERegistryError.invalidAppsCollection
+                }
+                result[appKey] = entry
+            }
+
+            return result
+        }
+
+        throw ThreeERegistryError.invalidAppsCollection
     }
 }

@@ -28,3 +28,5 @@
 - يستخدم الإنشاء `minimalBookmark` والاستعادة `withoutUI`.
 - يبقى `startAccessingSecurityScopedResource()` مطلوبًا بعد الاختيار وبعد الاستعادة.
 - لا توجد App Group Entitlements في المشروع.
+
+- التحقق من قبول `apps` بصيغة القائمة وبصيغة الكائن المفهرس، وحفظ الصيغة الموحدة دون فقد سجلات التطبيقات الأخرى.
