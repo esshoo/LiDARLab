@@ -15,6 +15,7 @@ enum FeatureRequirement {
 enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
     case depthCamera
     case distanceMeasure
+    case angleMeasure
     case levelTool
     case pointCloud
     case sceneMesh
@@ -34,6 +35,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .depthCamera: "كاميرا العمق"
         case .distanceMeasure: "قياس المسافة"
+        case .angleMeasure: "قياس الزوايا"
         case .levelTool: "ميزان الميل والزاوية"
         case .pointCloud: "السحابة النقطية"
         case .sceneMesh: "شبكة المكان"
@@ -53,6 +55,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .depthCamera: "خريطة حرارية وقراءات عمق مباشرة"
         case .distanceMeasure: "قراءة المسافة من مركز الشاشة"
+        case .angleMeasure: "قياس زاوية بين ثلاثة مواضع حقيقية"
         case .levelTool: "تثبيت العنصر على الحائط وقياس ميله بالنسبة للجاذبية"
         case .pointCloud: "تحويل العمق إلى نقاط ثلاثية الأبعاد"
         case .sceneMesh: "عرض شبكة البيئة المحيطة"
@@ -72,6 +75,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .depthCamera: "camera.metering.matrix"
         case .distanceMeasure: "ruler"
+        case .angleMeasure: "angle"
         case .levelTool: "level"
         case .pointCloud: "circle.grid.3x3.fill"
         case .sceneMesh: "cube.transparent"
@@ -89,7 +93,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
 
     var phase: FeaturePhase {
         switch self {
-        case .depthCamera, .distanceMeasure, .levelTool, .sceneMesh, .planeDetection,
+        case .depthCamera, .distanceMeasure, .angleMeasure, .levelTool, .sceneMesh, .planeDetection,
              .arPlayground, .sensorTests, .deviceInfo:
             .ready
         default:
@@ -101,7 +105,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .deviceInfo:
             .none
-        case .levelTool, .planeDetection, .arPlayground:
+        case .angleMeasure, .levelTool, .planeDetection, .arPlayground:
             .worldTracking
         case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto, .roomScan,
              .sensorTests, .recordings, .exportCenter:

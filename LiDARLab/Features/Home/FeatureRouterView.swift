@@ -16,6 +16,8 @@ struct FeatureRouterView: View {
                 DepthCameraView()
             case .distanceMeasure:
                 DistanceMeasureView()
+            case .angleMeasure:
+                ThreePointAngleView()
             case .levelTool:
                 LevelToolView()
             case .sceneMesh:

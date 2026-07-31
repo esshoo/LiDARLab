@@ -53,12 +53,23 @@ struct LevelToolView: View {
                         )
                 }
 
-                ReferenceAxesOverlay(
-                    origin: model.referenceCenter,
-                    horizonAngleDegrees: model.horizonAngleDegrees,
-                    isLevel: measurement?.isLevel == true
-                )
-                .allowsHitTesting(false)
+                if let screenAxes = model.screenReferenceAxes {
+                    ReferenceAxesOverlay(
+                        axes: screenAxes,
+                        isLevel: measurement?.isLevel == true,
+                        style: .screenCompass
+                    )
+                    .allowsHitTesting(false)
+                }
+
+                if let wallAxes = model.wallReferenceAxes, mode != .manualLine {
+                    ReferenceAxesOverlay(
+                        axes: wallAxes,
+                        isLevel: measurement?.isLevel == true,
+                        style: .wallAnchor
+                    )
+                    .allowsHitTesting(false)
+                }
 
                 if let target = model.target, mode != .manualLine {
                     TrackedTargetOverlay(target: target)
@@ -278,11 +289,11 @@ struct LevelToolView: View {
         case .automatic:
             model.target == nil
                 ? "اضغط على اللوحة نفسها؛ سيُثبّت الرسم على الحائط ويستمر في تتبعها."
-                : "البرتقالي أقرب ضلع أفقي، والبنفسجي أقرب ضلع رأسي."
+                : "الخطان المتصلان مرجع الشاشة، والمتقطعان مثبتان عند العنصر على الحائط."
         case .fourPoints:
             model.target == nil
                 ? "اضغط الزوايا الأربع حول أي شكل عندما لا ينجح الاكتشاف التلقائي."
-                : "تم تثبيت النقاط على مستوى الحائط وقياسها بالنسبة للجاذبية."
+                : "الإطار والنقاط ثابتة في العالم، والخطان المتقطعان هما مرجع الحائط الحقيقي."
         case .manualLine:
             "اضغط لنقل الخط، واسحب دائرة التدوير أو استخدم شريط الزاوية."
         }
@@ -317,35 +328,52 @@ struct LevelToolView: View {
 }
 
 private struct ReferenceAxesOverlay: View {
-    let origin: CGPoint?
-    let horizonAngleDegrees: Double
+    enum Style: Equatable {
+        case screenCompass
+        case wallAnchor
+    }
+
+    let axes: ProjectedReferenceAxes
     let isLevel: Bool
+    let style: Style
 
     var body: some View {
-        GeometryReader { geometry in
-            let center = origin ?? CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
-            let length = hypot(geometry.size.width, geometry.size.height) * 1.45
+        Canvas { context, _ in
+            var horizontal = Path()
+            horizontal.move(to: axes.horizontal.start)
+            horizontal.addLine(to: axes.horizontal.end)
 
-            ZStack {
-                Rectangle()
-                    .fill(isLevel ? Color.green : Color.white.opacity(0.94))
-                    .frame(width: length, height: 2)
-                    .rotationEffect(.degrees(horizonAngleDegrees))
-                    .position(center)
-                    .shadow(color: .black.opacity(0.8), radius: 1)
+            var vertical = Path()
+            vertical.move(to: axes.vertical.start)
+            vertical.addLine(to: axes.vertical.end)
 
-                Rectangle()
-                    .fill(Color.cyan.opacity(0.94))
-                    .frame(width: length, height: 2)
-                    .rotationEffect(.degrees(horizonAngleDegrees + 90))
-                    .position(center)
-                    .shadow(color: .black.opacity(0.8), radius: 1)
+            let horizontalColor: Color = isLevel ? .green : (style == .screenCompass ? .white : .yellow)
+            let verticalColor: Color = style == .screenCompass ? .cyan : .mint
+            let lineWidth: CGFloat = style == .screenCompass ? 2 : 3
+            let dash: [CGFloat] = style == .screenCompass ? [] : [9, 6]
 
-                Circle()
-                    .stroke(isLevel ? Color.green : Color.white, lineWidth: 1.5)
-                    .frame(width: 18, height: 18)
-                    .position(center)
-            }
+            context.stroke(
+                horizontal,
+                with: .color(horizontalColor.opacity(style == .screenCompass ? 0.94 : 0.92)),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, dash: dash)
+            )
+            context.stroke(
+                vertical,
+                with: .color(verticalColor.opacity(style == .screenCompass ? 0.94 : 0.92)),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, dash: dash)
+            )
+
+            let radius: CGFloat = style == .screenCompass ? 9 : 7
+            context.stroke(
+                Path(ellipseIn: CGRect(
+                    x: axes.origin.x - radius,
+                    y: axes.origin.y - radius,
+                    width: radius * 2,
+                    height: radius * 2
+                )),
+                with: .color(horizontalColor),
+                lineWidth: 1.5
+            )
         }
     }
 }

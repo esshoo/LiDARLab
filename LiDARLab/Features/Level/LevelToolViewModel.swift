@@ -21,6 +21,12 @@ struct LevelLine: Equatable {
     }
 }
 
+struct ProjectedReferenceAxes: Equatable {
+    let horizontal: LevelLine
+    let vertical: LevelLine
+    let origin: CGPoint
+}
+
 struct LevelMeasurement: Equatable {
     let signedHorizontalDeviation: Double
     let signedVerticalDeviation: Double
@@ -86,7 +92,8 @@ private struct WorldLevelTarget {
 
 final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var horizonAngleDegrees: Double = 0
-    @Published private(set) var referenceCenter: CGPoint?
+    @Published private(set) var screenReferenceAxes: ProjectedReferenceAxes?
+    @Published private(set) var wallReferenceAxes: ProjectedReferenceAxes?
     @Published private(set) var target: TrackedLevelTarget?
     @Published private(set) var draftCornerPoints: [CGPoint] = []
     @Published private(set) var isDetecting = false
@@ -145,7 +152,7 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
     func clearSelection() {
         worldTarget = nil
         target = nil
-        referenceCenter = nil
+        wallReferenceAxes = nil
         draftCornerPoints = []
         draftWorldPoints = []
         draftPlaneOrigin = nil
@@ -428,6 +435,18 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let viewportSize = arView.bounds.size
         let orientation = interfaceOrientation
 
+        let rawHorizon = gravityHorizonAngle(
+            frame: frame,
+            orientation: orientation,
+            viewportSize: viewportSize
+        )
+        updateStableHorizon(rawHorizon)
+        screenReferenceAxes = makeScreenReferenceAxes(
+            center: CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2),
+            horizonAngle: horizonAngleDegrees,
+            viewportSize: viewportSize
+        )
+
         if let worldTarget {
             let projected = worldTarget.corners.map {
                 frame.camera.projectPoint($0, orientation: orientation, viewportSize: viewportSize)
@@ -437,8 +456,7 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
             let stableCorners = smooth(points: projected)
             let metrics = targetMetrics(
                 worldCorners: worldTarget.corners,
-                planeNormal: worldTarget.planeNormal,
-                cameraTransform: frame.camera.transform
+                planeNormal: worldTarget.planeNormal
             )
 
             let horizontalLine = LevelLine(
@@ -451,15 +469,14 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
             )
             let center = averagePoint(stableCorners)
 
-            let rawHorizon = projectedAxisAngle(
+            wallReferenceAxes = projectWorldAxes(
                 origin: metrics.center,
-                axis: metrics.horizontalAxis,
+                horizontalAxis: metrics.horizontalAxis,
+                verticalAxis: metrics.verticalAxis,
                 frame: frame,
                 orientation: orientation,
                 viewportSize: viewportSize
             )
-            updateStableHorizon(rawHorizon)
-            referenceCenter = center
 
             target = TrackedLevelTarget(
                 corners: stableCorners,
@@ -473,17 +490,11 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
                 confidence: worldTarget.confidence,
                 sourceText: worldTarget.source.rawValue
             )
-            gravityReliabilityText = "مرجع ARKit مثبت بالجاذبية"
+            gravityReliabilityText = "مرجع العالم مثبت بالجاذبية"
         } else {
-            referenceCenter = nil
-            let rawHorizon = cameraHorizonAngle(
-                frame: frame,
-                orientation: orientation,
-                viewportSize: viewportSize
-            )
-            updateStableHorizon(rawHorizon)
+            wallReferenceAxes = nil
             gravityReliabilityText = frame.camera.trackingState.isNormal
-                ? "مرجع ARKit ثابت"
+                ? "اتجاه الجاذبية ثابت"
                 : "انتظر استقرار التتبع"
 
             if !draftWorldPoints.isEmpty {
@@ -496,8 +507,7 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
 
     private func targetMetrics(
         worldCorners: [SIMD3<Float>],
-        planeNormal: SIMD3<Float>,
-        cameraTransform: simd_float4x4
+        planeNormal: SIMD3<Float>
     ) -> (
         center: SIMD3<Float>,
         horizontalAxis: SIMD3<Float>,
@@ -518,10 +528,7 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
         vertical = simd_normalize(vertical)
         if simd_dot(vertical, worldUp) < 0 { vertical *= -1 }
 
-        var horizontal = simd_normalize(simd_cross(vertical, normal))
-        let cameraRight = simd_normalize(cameraTransform.columns.0.xyz)
-        if simd_dot(horizontal, cameraRight) < 0 { horizontal *= -1 }
-        normal = simd_normalize(simd_cross(horizontal, vertical))
+        let horizontal = simd_normalize(simd_cross(vertical, normal))
 
         let edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
         var bestHorizontal = edges[0]
@@ -565,7 +572,7 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
         return Double(atan2(simd_dot(direction, secondary), simd_dot(direction, primary))) * 180 / .pi
     }
 
-    private func cameraHorizonAngle(
+    private func gravityHorizonAngle(
         frame: ARFrame,
         orientation: UIInterfaceOrientation,
         viewportSize: CGSize
@@ -574,31 +581,87 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let position = transform.columns.3.xyz
         let forward = simd_normalize(-transform.columns.2.xyz)
         let worldUp = SIMD3<Float>(0, 1, 0)
-        var horizontal = simd_cross(worldUp, forward)
-        if simd_length(horizontal) < 0.05 {
-            horizontal = transform.columns.0.xyz
-        }
-        horizontal = simd_normalize(horizontal)
         let origin = position + forward * 2
-        return projectedAxisAngle(
-            origin: origin,
-            axis: horizontal,
-            frame: frame,
+
+        let lower = frame.camera.projectPoint(
+            origin - worldUp * 0.35,
             orientation: orientation,
             viewportSize: viewportSize
         )
+        let upper = frame.camera.projectPoint(
+            origin + worldUp * 0.35,
+            orientation: orientation,
+            viewportSize: viewportSize
+        )
+
+        guard lower.x.isFinite, lower.y.isFinite, upper.x.isFinite, upper.y.isFinite else {
+            return horizonAngleDegrees
+        }
+
+        let verticalAngle = Double(atan2(upper.y - lower.y, upper.x - lower.x)) * 180 / .pi
+        return normalizedAxisAngle(verticalAngle - 90)
     }
 
-    private func projectedAxisAngle(
+    private func makeScreenReferenceAxes(
+        center: CGPoint,
+        horizonAngle: Double,
+        viewportSize: CGSize
+    ) -> ProjectedReferenceAxes {
+        let length = hypot(viewportSize.width, viewportSize.height) * 1.45
+        let horizontal = line(center: center, angleDegrees: horizonAngle, length: length)
+        let vertical = line(center: center, angleDegrees: horizonAngle + 90, length: length)
+        return ProjectedReferenceAxes(horizontal: horizontal, vertical: vertical, origin: center)
+    }
+
+    private func projectWorldAxes(
         origin: SIMD3<Float>,
-        axis: SIMD3<Float>,
+        horizontalAxis: SIMD3<Float>,
+        verticalAxis: SIMD3<Float>,
         frame: ARFrame,
         orientation: UIInterfaceOrientation,
         viewportSize: CGSize
-    ) -> Double {
-        let first = frame.camera.projectPoint(origin - axis * 0.25, orientation: orientation, viewportSize: viewportSize)
-        let second = frame.camera.projectPoint(origin + axis * 0.25, orientation: orientation, viewportSize: viewportSize)
-        return normalizedAxisAngle(Double(atan2(second.y - first.y, second.x - first.x)) * 180 / .pi)
+    ) -> ProjectedReferenceAxes? {
+        let halfLength: Float = 0.55
+        let horizontalStart = frame.camera.projectPoint(
+            origin - horizontalAxis * halfLength,
+            orientation: orientation,
+            viewportSize: viewportSize
+        )
+        let horizontalEnd = frame.camera.projectPoint(
+            origin + horizontalAxis * halfLength,
+            orientation: orientation,
+            viewportSize: viewportSize
+        )
+        let verticalStart = frame.camera.projectPoint(
+            origin - verticalAxis * halfLength,
+            orientation: orientation,
+            viewportSize: viewportSize
+        )
+        let verticalEnd = frame.camera.projectPoint(
+            origin + verticalAxis * halfLength,
+            orientation: orientation,
+            viewportSize: viewportSize
+        )
+        let center = frame.camera.projectPoint(origin, orientation: orientation, viewportSize: viewportSize)
+
+        let points = [horizontalStart, horizontalEnd, verticalStart, verticalEnd, center]
+        guard points.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else { return nil }
+
+        return ProjectedReferenceAxes(
+            horizontal: LevelLine(start: horizontalStart, end: horizontalEnd),
+            vertical: LevelLine(start: verticalStart, end: verticalEnd),
+            origin: center
+        )
+    }
+
+    private func line(center: CGPoint, angleDegrees: Double, length: CGFloat) -> LevelLine {
+        let radians = angleDegrees * .pi / 180
+        let half = length / 2
+        let offset = CGPoint(x: CGFloat(cos(radians)) * half, y: CGFloat(sin(radians)) * half)
+        return LevelLine(
+            start: CGPoint(x: center.x - offset.x, y: center.y - offset.y),
+            end: CGPoint(x: center.x + offset.x, y: center.y + offset.y)
+        )
     }
 
     private func updateStableHorizon(_ rawAngle: Double) {
@@ -610,15 +673,15 @@ final class LevelToolViewModel: NSObject, ObservableObject, ARSessionDelegate {
         }
 
         let delta = normalizedAxisAngle(rawAngle - current)
-        if abs(delta) < 0.07 {
+        if abs(delta) < 0.12 {
             return
         }
 
         let alpha: Double
         switch abs(delta) {
-        case 0..<0.6: alpha = 0.08
-        case 0.6..<3: alpha = 0.16
-        default: alpha = 0.32
+        case 0..<0.5: alpha = 0.10
+        case 0.5..<2.0: alpha = 0.35
+        default: alpha = 0.75
         }
 
         let updated = normalizedAxisAngle(current + delta * alpha)
