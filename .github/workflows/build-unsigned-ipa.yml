@@ -1,0 +1,83 @@
+name: Build LiDAR Lab Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "feature/**"
+      - "agent/**"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show build environment
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Validate generated project
+        run: |
+          test -d LiDARLab.xcodeproj
+          xcodebuild -project LiDARLab.xcodeproj -scheme LiDARLab -showBuildSettings >/dev/null
+
+      - name: Build application without signing
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project LiDARLab.xcodeproj \
+            -scheme LiDARLab \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            clean build
+
+      - name: Create unsigned IPA
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -type d -name 'LiDARLab.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "LiDARLab.app was not found."
+            find build/Build/Products -maxdepth 3 -print || true
+            exit 1
+          fi
+
+          rm -rf Payload LiDARLab-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry LiDARLab-unsigned.ipa Payload
+          rm -rf Payload
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiDARLab-unsigned-${{ github.run_number }}
+          path: LiDARLab-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
