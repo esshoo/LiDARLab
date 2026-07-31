@@ -20,6 +20,7 @@ struct DeviceInfoView: View {
                 CapabilityRow(title: "Smoothed Scene Depth", isSupported: capabilities.smoothedDepthSupported)
                 CapabilityRow(title: "Scene Mesh", isSupported: capabilities.meshSupported)
                 CapabilityRow(title: "Mesh Classification", isSupported: capabilities.meshClassificationSupported)
+                CapabilityRow(title: "RoomPlan", isSupported: capabilities.roomPlanSupported)
             }
 
             Section {

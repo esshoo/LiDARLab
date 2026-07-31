@@ -30,6 +30,10 @@ struct FeatureRouterView: View {
                 PlaneDetectionView()
             case .arPlayground:
                 ARPlaygroundView()
+            case .depthPhoto:
+                DepthPhotoView()
+            case .roomScan:
+                RoomScanView()
             case .sensorTests:
                 SensorStabilityTestView()
             case .deviceInfo:

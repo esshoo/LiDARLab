@@ -11,6 +11,7 @@ enum FeatureRequirement {
     case sceneDepth
     case sceneMesh
     case sceneMeshClassification
+    case roomPlan
 }
 
 enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
@@ -95,7 +96,8 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
     var phase: FeaturePhase {
         switch self {
         case .depthCamera, .distanceMeasure, .angleMeasure, .levelTool, .pointCloud, .sceneMesh,
-             .surfaceClassification, .planeDetection, .arPlayground, .sensorTests, .deviceInfo:
+             .surfaceClassification, .planeDetection, .arPlayground, .depthPhoto, .roomScan,
+             .sensorTests, .deviceInfo:
             .ready
         default:
             .comingSoon
@@ -108,9 +110,11 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
             .none
         case .angleMeasure, .levelTool, .planeDetection, .arPlayground:
             .worldTracking
-        case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto, .roomScan,
+        case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto,
              .sensorTests, .recordings, .exportCenter:
             .sceneDepth
+        case .roomScan:
+            .roomPlan
         case .sceneMesh:
             .sceneMesh
         case .surfaceClassification:
@@ -130,6 +134,8 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
             capabilities.meshSupported
         case .sceneMeshClassification:
             capabilities.meshClassificationSupported
+        case .roomPlan:
+            capabilities.roomPlanSupported
         }
     }
 

@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.5.0"
-    CURRENT_PROJECT_VERSION: "5"
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "6"
     PRODUCT_BUNDLE_IDENTIFIER: com.esshoo.LiDARLab
     PRODUCT_NAME: LiDARLab
     DEVELOPMENT_LANGUAGE: ar
@@ -37,6 +37,7 @@ targets:
     dependencies:
       - sdk: ARKit.framework
       - sdk: RealityKit.framework
+      - sdk: RoomPlan.framework
       - sdk: SceneKit.framework
       - sdk: AVFoundation.framework
       - sdk: CoreImage.framework

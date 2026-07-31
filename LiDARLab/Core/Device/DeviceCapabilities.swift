@@ -1,6 +1,7 @@
 import ARKit
 import AVFoundation
 import Foundation
+import RoomPlan
 import UIKit
 
 struct DeviceCapabilities {
@@ -12,6 +13,7 @@ struct DeviceCapabilities {
     let meshSupported: Bool
     let meshClassificationSupported: Bool
     let cameraAuthorization: AVAuthorizationStatus
+    let roomPlanSupported: Bool
 
     init() {
         worldTrackingSupported = ARWorldTrackingConfiguration.isSupported
@@ -20,6 +22,7 @@ struct DeviceCapabilities {
         meshSupported = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
         meshClassificationSupported = ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
         cameraAuthorization = AVCaptureDevice.authorizationStatus(for: .video)
+        roomPlanSupported = RoomCaptureSession.isSupported
     }
 
     var lidarAvailable: Bool {
