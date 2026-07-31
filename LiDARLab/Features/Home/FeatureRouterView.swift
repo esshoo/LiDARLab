@@ -20,6 +20,8 @@ struct FeatureRouterView: View {
                 LevelToolView()
             case .sceneMesh:
                 SceneMeshView()
+            case .planeDetection:
+                PlaneDetectionView()
             case .arPlayground:
                 ARPlaygroundView()
             case .sensorTests:

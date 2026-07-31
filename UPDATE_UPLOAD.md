@@ -1,16 +1,30 @@
-# رفع تحديث 0.2.0
+# رفع تحديث LiDAR Lab 0.3.0
 
-## الخيار الآمن
+## باستخدام الحزمة الكاملة
 
-ارفع محتويات الحزمة الكاملة إلى المستودع مع استبدال الملفات المتطابقة، ثم شغّل GitHub Actions.
+1. فك ضغط `LiDARLab-v0.3.0.zip`.
+2. ارفع **محتويات** مجلد `LiDARLab_v0.3.0` إلى جذر المستودع `esshoo/LiDARLab`.
+3. وافق على استبدال الملفات القديمة.
+4. افتح GitHub Actions وشغّل `Build LiDAR Lab Unsigned IPA`.
 
-## خيار ملفات التحديث فقط
+## باستخدام حزمة التحديث فقط
 
-حزمة `LiDARLab-v0.2.0-update-only.zip` تحتوي فقط على الملفات الجديدة أو المعدلة. فكها داخل جذر المستودع مع الحفاظ على المجلدات.
+1. فك ضغط `LiDARLab-v0.3.0-update-only.zip` داخل نسخة المستودع على جهازك.
+2. وافق على دمج مجلد `LiDARLab` واستبدال الملفات.
+3. ارفع الملفات الجديدة والمعدلة إلى الفرع `main` أو إلى فرع اختبار.
+4. شغّل GitHub Actions.
 
-## بعد الرفع
+## الملفات الجديدة أو المعدلة
 
-1. افتح تبويب Actions.
-2. شغّل `Build LiDAR Lab Unsigned IPA`.
-3. تأكد من نجاح مرحلة `Build application without signing`.
-4. نزّل Artifact الجديد وثبّته بعد التوقيع.
+- `LiDARLab/Features/Measure/DistanceMeasureView.swift`
+- `LiDARLab/Features/Level/LevelToolView.swift`
+- `LiDARLab/Features/Level/LevelToolViewModel.swift`
+- `LiDARLab/Features/Planes/PlaneDetectionView.swift`
+- `LiDARLab/Core/Models/LiDARFeature.swift`
+- `LiDARLab/Features/Home/FeatureRouterView.swift`
+- `project.yml`
+- `README.md`
+- `CHANGELOG.md`
+- `VALIDATION.md`
+
+يفضل الاحتفاظ بالـcommit الناجح السابق `035a06f3f9ff389cf1a6c741d1d4ca8d18387fee` كنقطة رجوع قبل رفع التحديث.

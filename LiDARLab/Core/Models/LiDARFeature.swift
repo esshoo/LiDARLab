@@ -53,7 +53,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .depthCamera: "خريطة حرارية وقراءات عمق مباشرة"
         case .distanceMeasure: "قراءة المسافة من مركز الشاشة"
-        case .levelTool: "خطوط جاذبية وقياس ميل تلقائي أو يدوي"
+        case .levelTool: "تثبيت العنصر على الحائط وقياس ميله بالنسبة للجاذبية"
         case .pointCloud: "تحويل العمق إلى نقاط ثلاثية الأبعاد"
         case .sceneMesh: "عرض شبكة البيئة المحيطة"
         case .surfaceClassification: "تمييز الجدران والأرضيات والأسقف"
@@ -89,7 +89,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
 
     var phase: FeaturePhase {
         switch self {
-        case .depthCamera, .distanceMeasure, .levelTool, .sceneMesh,
+        case .depthCamera, .distanceMeasure, .levelTool, .sceneMesh, .planeDetection,
              .arPlayground, .sensorTests, .deviceInfo:
             .ready
         default:
@@ -101,12 +101,12 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .deviceInfo:
             .none
-        case .levelTool, .arPlayground:
+        case .levelTool, .planeDetection, .arPlayground:
             .worldTracking
         case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto, .roomScan,
              .sensorTests, .recordings, .exportCenter:
             .sceneDepth
-        case .sceneMesh, .surfaceClassification, .planeDetection:
+        case .sceneMesh, .surfaceClassification:
             .sceneMesh
         }
     }

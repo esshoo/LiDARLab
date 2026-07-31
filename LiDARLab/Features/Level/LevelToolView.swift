@@ -1,16 +1,19 @@
 import RealityKit
 import SwiftUI
+import UIKit
 
-private enum LevelToolMode: String, CaseIterable, Identifiable {
+fileprivate enum LevelToolMode: String, CaseIterable, Identifiable {
     case automatic
-    case manual
+    case fourPoints
+    case manualLine
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .automatic: "تلقائي"
-        case .manual: "يدوي"
+        case .fourPoints: "4 نقاط"
+        case .manualLine: "خط يدوي"
         }
     }
 }
@@ -20,31 +23,27 @@ struct LevelToolView: View {
     @State private var mode: LevelToolMode = .automatic
     @State private var manualCenter = CGPoint(x: 0.5, y: 0.5)
     @State private var manualAngleDegrees: Double = 0
-
-    private var activeLineAngle: Double? {
-        switch mode {
-        case .automatic:
-            model.selectedLine?.angleDegrees
-        case .manual:
-            manualAngleDegrees
-        }
-    }
+    @State private var lastLevelState = false
 
     private var measurement: LevelMeasurement? {
-        guard let activeLineAngle else { return nil }
-        return LevelMeasurement.calculate(
-            lineAngle: activeLineAngle,
-            horizonAngle: model.horizonAngleDegrees
-        )
+        switch mode {
+        case .automatic, .fourPoints:
+            model.automaticMeasurement
+        case .manualLine:
+            LevelMeasurement.screenMeasurement(
+                lineAngle: manualAngleDegrees,
+                horizonAngle: model.horizonAngleDegrees
+            )
+        }
     }
 
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                LevelARViewContainer(model: model, automaticMode: mode == .automatic)
+                LevelARViewContainer(model: model, mode: mode)
                     .ignoresSafeArea(edges: .bottom)
 
-                if mode == .manual {
+                if mode == .manualLine {
                     Color.clear
                         .contentShape(Rectangle())
                         .gesture(
@@ -55,19 +54,23 @@ struct LevelToolView: View {
                 }
 
                 ReferenceAxesOverlay(
+                    origin: model.referenceCenter,
                     horizonAngleDegrees: model.horizonAngleDegrees,
                     isLevel: measurement?.isLevel == true
                 )
                 .allowsHitTesting(false)
 
-                if mode == .automatic {
-                    DetectedRectanglesOverlay(
-                        rectangles: model.rectangles,
-                        selectedID: model.selectedRectangleID,
-                        selectedLine: model.selectedLine
-                    )
-                    .allowsHitTesting(false)
-                } else {
+                if let target = model.target, mode != .manualLine {
+                    TrackedTargetOverlay(target: target)
+                        .allowsHitTesting(false)
+                }
+
+                if mode == .fourPoints, !model.draftCornerPoints.isEmpty {
+                    DraftCornersOverlay(points: model.draftCornerPoints)
+                        .allowsHitTesting(false)
+                }
+
+                if mode == .manualLine {
                     ManualLevelLineOverlay(
                         center: $manualCenter,
                         angleDegrees: $manualAngleDegrees
@@ -88,9 +91,24 @@ struct LevelToolView: View {
         .navigationTitle("ميزان الميل والزاوية")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: mode) { _, newMode in
-            if newMode == .manual {
+            switch newMode {
+            case .automatic:
                 model.clearSelection()
+            case .fourPoints:
+                model.beginFourPointSelection()
+            case .manualLine:
+                model.clearSelection()
+                manualCenter = CGPoint(x: 0.5, y: 0.5)
+                manualAngleDegrees = model.horizonAngleDegrees
             }
+        }
+        .onChange(of: measurement?.isLevel) { _, isLevel in
+            guard isLevel == true, !lastLevelState else {
+                lastLevelState = isLevel == true
+                return
+            }
+            lastLevelState = true
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
         }
         .onDisappear {
             model.stop()
@@ -136,45 +154,72 @@ struct LevelToolView: View {
 
     @ViewBuilder
     private var modeActions: some View {
-        if mode == .automatic {
+        switch mode {
+        case .automatic:
             Button {
-                model.scanForRectangles()
+                model.scanForRectangle()
             } label: {
-                Label(model.isDetecting ? "جاري الاكتشاف" : "اكتشاف اللوحة", systemImage: model.isDetecting ? "viewfinder.circle" : "viewfinder")
-                    .font(.caption.bold())
+                Label(
+                    model.isDetecting ? "جاري التحديد" : "تحديد من المنتصف",
+                    systemImage: model.isDetecting ? "viewfinder.circle" : "viewfinder"
+                )
+                .font(.caption.bold())
             }
             .buttonStyle(.borderedProminent)
             .disabled(model.isDetecting)
 
+            clearButton
+
+        case .fourPoints:
             Button {
-                model.clearSelection()
+                model.undoDraftCorner()
             } label: {
-                Image(systemName: "xmark")
+                Label("تراجع", systemImage: "arrow.uturn.backward")
+                    .font(.caption.bold())
             }
             .buttonStyle(.bordered)
-            .disabled(model.rectangles.isEmpty)
-        } else {
+            .disabled(model.draftCornerPoints.isEmpty)
+
+            clearButton
+
+        case .manualLine:
             Button {
                 manualCenter = CGPoint(x: 0.5, y: 0.5)
                 manualAngleDegrees = model.horizonAngleDegrees
             } label: {
-                Label("محاذاة مع الأفقي", systemImage: "arrow.triangle.2.circlepath")
+                Label("محاذاة بالأفقي", systemImage: "level")
                     .font(.caption.bold())
             }
             .buttonStyle(.borderedProminent)
         }
     }
 
-    private var trackingLabel: some View {
-        HStack(spacing: 8) {
-            Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
-            Text("•")
-                .foregroundStyle(.tertiary)
-            Text(model.gravityReliabilityText)
+    private var clearButton: some View {
+        Button {
+            if mode == .fourPoints {
+                model.beginFourPointSelection()
+            } else {
+                model.clearSelection()
+            }
+        } label: {
+            Image(systemName: "xmark")
         }
-        .font(.caption.bold())
+        .buttonStyle(.bordered)
+    }
+
+    private var trackingLabel: some View {
+        HStack(spacing: 7) {
+            Label("AR: \(model.trackingState)", systemImage: "location.viewfinder")
+            Text("•").foregroundStyle(.tertiary)
+            Text(model.gravityReliabilityText)
+            if model.target != nil {
+                Text("•").foregroundStyle(.tertiary)
+                Text(model.isTrackingTarget ? "العنصر متتبع" : "مثبت بالموقع")
+            }
+        }
+        .font(.caption2.bold())
         .lineLimit(2)
-        .minimumScaleFactor(0.75)
+        .minimumScaleFactor(0.7)
     }
 
     private var measurementPanel: some View {
@@ -190,37 +235,37 @@ struct LevelToolView: View {
                     Text(instructionText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(3)
                 }
 
                 Spacer(minLength: 0)
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 9)], spacing: 9) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 9)], spacing: 9) {
                 MetricChip(
                     title: "الميل عن الأفقي",
                     value: measurement.map { signedDegrees($0.signedHorizontalDeviation) } ?? "—",
                     systemImage: "arrow.left.and.right"
                 )
                 MetricChip(
-                    title: "الزاوية مع الرأسي",
-                    value: measurement.map { degrees($0.verticalAngle) } ?? "—",
+                    title: "الانحراف عن الرأسي",
+                    value: measurement.map { signedDegrees($0.signedVerticalDeviation) } ?? "—",
                     systemImage: "arrow.up.and.down"
                 )
                 MetricChip(
-                    title: "خط الجاذبية",
-                    value: degrees(model.horizonAngleDegrees),
-                    systemImage: "level"
+                    title: "ثقة التتبع",
+                    value: confidenceText,
+                    systemImage: "scope"
                 )
             }
 
-            if mode == .manual {
+            if mode == .manualLine {
                 HStack(spacing: 10) {
                     Image(systemName: "rotate.right")
                     Slider(value: $manualAngleDegrees, in: -90...90, step: 0.1)
                     Text(degrees(manualAngleDegrees))
                         .font(.caption.monospacedDigit().bold())
-                        .frame(minWidth: 54, alignment: .trailing)
+                        .frame(minWidth: 55, alignment: .trailing)
                 }
             }
         }
@@ -231,12 +276,23 @@ struct LevelToolView: View {
     private var instructionText: String {
         switch mode {
         case .automatic:
-            model.selectedRectangle == nil
-                ? "اضغط مباشرة على اللوحة، أو استخدم زر الاكتشاف."
-                : "الخط البرتقالي يمثل أقرب ضلع أفقي للعنصر المكتشف."
-        case .manual:
-            "اضغط لنقل الخط، واسحب الدائرة الصغيرة لتغيير زاويته."
+            model.target == nil
+                ? "اضغط على اللوحة نفسها؛ سيُثبّت الرسم على الحائط ويستمر في تتبعها."
+                : "البرتقالي أقرب ضلع أفقي، والبنفسجي أقرب ضلع رأسي."
+        case .fourPoints:
+            model.target == nil
+                ? "اضغط الزوايا الأربع حول أي شكل عندما لا ينجح الاكتشاف التلقائي."
+                : "تم تثبيت النقاط على مستوى الحائط وقياسها بالنسبة للجاذبية."
+        case .manualLine:
+            "اضغط لنقل الخط، واسحب دائرة التدوير أو استخدم شريط الزاوية."
         }
+    }
+
+    private var confidenceText: String {
+        guard let target = model.target else {
+            return mode == .manualLine ? "يدوي" : "—"
+        }
+        return String(format: "%.0f%%", target.confidence * 100)
     }
 
     private func normalized(_ point: CGPoint, in size: CGSize) -> CGPoint {
@@ -261,71 +317,118 @@ struct LevelToolView: View {
 }
 
 private struct ReferenceAxesOverlay: View {
+    let origin: CGPoint?
     let horizonAngleDegrees: Double
     let isLevel: Bool
 
     var body: some View {
         GeometryReader { geometry in
-            let length = hypot(geometry.size.width, geometry.size.height) * 1.35
+            let center = origin ?? CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
+            let length = hypot(geometry.size.width, geometry.size.height) * 1.45
 
             ZStack {
                 Rectangle()
-                    .fill(isLevel ? Color.green : Color.white.opacity(0.92))
-                    .frame(width: length, height: 1.5)
+                    .fill(isLevel ? Color.green : Color.white.opacity(0.94))
+                    .frame(width: length, height: 2)
                     .rotationEffect(.degrees(horizonAngleDegrees))
-                    .shadow(color: .black.opacity(0.75), radius: 1)
+                    .position(center)
+                    .shadow(color: .black.opacity(0.8), radius: 1)
 
                 Rectangle()
-                    .fill(Color.cyan.opacity(0.92))
-                    .frame(width: length, height: 1.5)
+                    .fill(Color.cyan.opacity(0.94))
+                    .frame(width: length, height: 2)
                     .rotationEffect(.degrees(horizonAngleDegrees + 90))
-                    .shadow(color: .black.opacity(0.75), radius: 1)
+                    .position(center)
+                    .shadow(color: .black.opacity(0.8), radius: 1)
 
                 Circle()
                     .stroke(isLevel ? Color.green : Color.white, lineWidth: 1.5)
                     .frame(width: 18, height: 18)
+                    .position(center)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
 
-private struct DetectedRectanglesOverlay: View {
-    let rectangles: [DetectedLevelRectangle]
-    let selectedID: UUID?
-    let selectedLine: LevelLine?
+private struct TrackedTargetOverlay: View {
+    let target: TrackedLevelTarget
+
+    var body: some View {
+        ZStack {
+            Canvas { context, _ in
+                guard target.corners.count == 4 else { return }
+
+                var outline = Path()
+                outline.move(to: target.corners[0])
+                for point in target.corners.dropFirst() {
+                    outline.addLine(to: point)
+                }
+                outline.closeSubpath()
+                context.stroke(outline, with: .color(.green), style: StrokeStyle(lineWidth: 3, lineJoin: .round))
+
+                var horizontal = Path()
+                horizontal.move(to: target.horizontalLine.start)
+                horizontal.addLine(to: target.horizontalLine.end)
+                context.stroke(horizontal, with: .color(.orange), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+
+                var vertical = Path()
+                vertical.move(to: target.verticalLine.start)
+                vertical.addLine(to: target.verticalLine.end)
+                context.stroke(vertical, with: .color(.purple), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+
+                for point in target.corners {
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)),
+                        with: .color(.green)
+                    )
+                }
+            }
+
+            angleBadge(
+                text: String(format: "%+.1f° أفقي", target.measurement.signedHorizontalDeviation),
+                color: target.measurement.isLevel ? .green : .orange
+            )
+            .position(target.horizontalLine.midpoint)
+
+            angleBadge(
+                text: String(format: "%+.1f° رأسي", target.measurement.signedVerticalDeviation),
+                color: .purple
+            )
+            .position(target.verticalLine.midpoint)
+        }
+    }
+
+    private func angleBadge(text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2.monospacedDigit().bold())
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(color, lineWidth: 1.5))
+            .offset(y: -18)
+    }
+}
+
+private struct DraftCornersOverlay: View {
+    let points: [CGPoint]
 
     var body: some View {
         Canvas { context, _ in
-            for rectangle in rectangles {
+            if let first = points.first {
                 var path = Path()
-                path.move(to: rectangle.topLeft)
-                path.addLine(to: rectangle.topRight)
-                path.addLine(to: rectangle.bottomRight)
-                path.addLine(to: rectangle.bottomLeft)
-                path.closeSubpath()
-
-                let isSelected = rectangle.id == selectedID
-                context.stroke(
-                    path,
-                    with: .color(isSelected ? .green : .yellow.opacity(0.75)),
-                    lineWidth: isSelected ? 3 : 1.5
-                )
+                path.move(to: first)
+                for point in points.dropFirst() { path.addLine(to: point) }
+                context.stroke(path, with: .color(.yellow), style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
             }
 
-            if let selectedLine {
-                var line = Path()
-                line.move(to: selectedLine.start)
-                line.addLine(to: selectedLine.end)
-                context.stroke(line, with: .color(.orange), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-
+            for (index, point) in points.enumerated() {
                 context.fill(
-                    Path(ellipseIn: CGRect(x: selectedLine.start.x - 6, y: selectedLine.start.y - 6, width: 12, height: 12)),
-                    with: .color(.orange)
+                    Path(ellipseIn: CGRect(x: point.x - 11, y: point.y - 11, width: 22, height: 22)),
+                    with: .color(.yellow)
                 )
-                context.fill(
-                    Path(ellipseIn: CGRect(x: selectedLine.end.x - 6, y: selectedLine.end.y - 6, width: 12, height: 12)),
-                    with: .color(.orange)
+                context.draw(
+                    Text("\(index + 1)").font(.caption2.bold()).foregroundStyle(.black),
+                    at: point
                 )
             }
         }
@@ -343,7 +446,7 @@ private struct ManualLevelLineOverlay: View {
                 y: center.y * geometry.size.height
             )
             let angleRadians = angleDegrees * .pi / 180
-            let lineLength = hypot(geometry.size.width, geometry.size.height) * 1.4
+            let lineLength = hypot(geometry.size.width, geometry.size.height) * 1.45
             let handleDistance = min(max(min(geometry.size.width, geometry.size.height) * 0.24, 72), 132)
             let rotationHandle = CGPoint(
                 x: actualCenter.x + CGFloat(cos(angleRadians)) * handleDistance,
@@ -383,7 +486,7 @@ private struct ManualLevelLineOverlay: View {
                             .onChanged { value in
                                 let dx = value.location.x - actualCenter.x
                                 let dy = value.location.y - actualCenter.y
-                                angleDegrees = normalizedAxisAngle(Double(atan2(dy, dx)) * 180 / Double.pi)
+                                angleDegrees = normalizedAxisAngle(Double(atan2(dy, dx)) * 180 / .pi)
                             }
                     )
             }
@@ -408,10 +511,10 @@ private struct ManualLevelLineOverlay: View {
 
 private struct LevelARViewContainer: UIViewRepresentable {
     @ObservedObject var model: LevelToolViewModel
-    let automaticMode: Bool
+    let mode: LevelToolMode
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(model: model, automaticMode: automaticMode)
+        Coordinator(model: model, mode: mode)
     }
 
     func makeUIView(context: Context) -> ARView {
@@ -425,7 +528,7 @@ private struct LevelARViewContainer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {
-        context.coordinator.automaticMode = automaticMode
+        context.coordinator.mode = mode
     }
 
     static func dismantleUIView(_ uiView: ARView, coordinator: Coordinator) {
@@ -436,16 +539,24 @@ private struct LevelARViewContainer: UIViewRepresentable {
     final class Coordinator: NSObject {
         let model: LevelToolViewModel
         weak var arView: ARView?
-        var automaticMode: Bool
+        var mode: LevelToolMode
 
-        init(model: LevelToolViewModel, automaticMode: Bool) {
+        init(model: LevelToolViewModel, mode: LevelToolMode) {
             self.model = model
-            self.automaticMode = automaticMode
+            self.mode = mode
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
-            guard automaticMode, let arView else { return }
-            model.handleTap(at: gesture.location(in: arView))
+            guard let arView else { return }
+            let point = gesture.location(in: arView)
+            switch mode {
+            case .automatic:
+                model.handleAutomaticTap(at: point)
+            case .fourPoints:
+                model.addFourPointCorner(at: point)
+            case .manualLine:
+                break
+            }
         }
     }
 }
