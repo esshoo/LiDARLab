@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1
+
+- إصلاح فشل Xcode 16.4 بسبب عدم توفر خيار `withSecurityScope` على iOS.
+- إنشاء Bookmark لمجلد Files باستخدام `minimalBookmark` المتوافق مع iOS.
+- استعادة Bookmark باستخدام `withoutUI` ثم بدء الوصول عبر `startAccessingSecurityScopedResource()`.
+- الإبقاء على ربط مجلد 3E وبنية الملفات وURL Scheme وجميع وظائف LiDAR دون تغيير.
+- تحديث الإصدار إلى `0.8.1` ورقم البناء إلى `10`.
+
 ## 0.8.0
 
 - اعتماد الاسم الظاهر `3ELiDAR` والمعرف `com.essam.3E.LiDARLab`.

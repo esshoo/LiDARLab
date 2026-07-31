@@ -105,7 +105,7 @@ final class LiDARLabStorage: ObservableObject {
 
         do {
             let bookmark = try selectedURL.bookmarkData(
-                options: [.withSecurityScope],
+                options: [.minimalBookmark],
                 includingResourceValuesForKeys: [.isDirectoryKey, .nameKey],
                 relativeTo: nil
             )
@@ -253,7 +253,7 @@ final class LiDARLabStorage: ObservableObject {
             var isStale = false
             let resolvedURL = try URL(
                 resolvingBookmarkData: bookmark,
-                options: [.withSecurityScope],
+                options: [.withoutUI],
                 relativeTo: nil,
                 bookmarkDataIsStale: &isStale
             )
@@ -281,7 +281,7 @@ final class LiDARLabStorage: ObservableObject {
 
                 if isStale {
                     let refreshedBookmark = try resolvedURL.bookmarkData(
-                        options: [.withSecurityScope],
+                        options: [.minimalBookmark],
                         includingResourceValuesForKeys: [.isDirectoryKey, .nameKey],
                         relativeTo: nil
                     )

@@ -1,4 +1,4 @@
-# Validation Notes — 0.8.0
+# Validation Notes — 0.8.1
 
 تم تنفيذ الفحوص التالية:
 
@@ -20,3 +20,11 @@
 - فحص سلامة ملفات ZIP بعد إنشائها.
 
 يتبقى تشغيل GitHub Actions باستخدام Xcode 16.4 وiOS SDK 18.5 للتأكد من Type-check والربط الكامل، ثم اختبار Security-Scoped Bookmark وفتح URL Scheme على جهاز iPhone أو iPad فعلي.
+
+## إصلاح Bookmark على iOS
+
+- أزيل `BookmarkCreationOptions.withSecurityScope` لأنه غير متاح في iOS SDK 18.5.
+- أزيل `BookmarkResolutionOptions.withSecurityScope` للسبب نفسه.
+- يستخدم الإنشاء `minimalBookmark` والاستعادة `withoutUI`.
+- يبقى `startAccessingSecurityScopedResource()` مطلوبًا بعد الاختيار وبعد الاستعادة.
+- لا توجد App Group Entitlements في المشروع.
