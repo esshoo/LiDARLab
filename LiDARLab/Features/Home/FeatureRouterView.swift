@@ -20,8 +20,12 @@ struct FeatureRouterView: View {
                 ThreePointAngleView()
             case .levelTool:
                 LevelToolView()
+            case .pointCloud:
+                PointCloudView()
             case .sceneMesh:
                 SceneMeshView()
+            case .surfaceClassification:
+                SurfaceClassificationView()
             case .planeDetection:
                 PlaneDetectionView()
             case .arPlayground:

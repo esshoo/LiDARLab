@@ -10,6 +10,7 @@ enum FeatureRequirement {
     case worldTracking
     case sceneDepth
     case sceneMesh
+    case sceneMeshClassification
 }
 
 enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
@@ -93,8 +94,8 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
 
     var phase: FeaturePhase {
         switch self {
-        case .depthCamera, .distanceMeasure, .angleMeasure, .levelTool, .sceneMesh, .planeDetection,
-             .arPlayground, .sensorTests, .deviceInfo:
+        case .depthCamera, .distanceMeasure, .angleMeasure, .levelTool, .pointCloud, .sceneMesh,
+             .surfaceClassification, .planeDetection, .arPlayground, .sensorTests, .deviceInfo:
             .ready
         default:
             .comingSoon
@@ -110,8 +111,10 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto, .roomScan,
              .sensorTests, .recordings, .exportCenter:
             .sceneDepth
-        case .sceneMesh, .surfaceClassification:
+        case .sceneMesh:
             .sceneMesh
+        case .surfaceClassification:
+            .sceneMeshClassification
         }
     }
 
@@ -125,15 +128,17 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
             capabilities.sceneDepthSupported
         case .sceneMesh:
             capabilities.meshSupported
+        case .sceneMeshClassification:
+            capabilities.meshClassificationSupported
         }
     }
 
     var plannedCapabilities: [String] {
         switch self {
         case .pointCloud:
-            ["عرض النقاط ثلاثية الأبعاد", "ألوان من الكاميرا أو حسب المسافة", "تصدير PLY وCSV"]
+            ["عرض حي أو تراكمي", "تلوين حسب المسافة أو الثقة", "كثافة وحجم نقاط قابلان للتغيير"]
         case .surfaceClassification:
-            ["تمييز الجدار والأرضية والسقف", "إظهار نوع واحد فقط", "إحصاءات التصنيف"]
+            ["تمييز الجدار والأرضية والسقف", "تصفية نوع واحد أو العرض الشبكي", "عدادات ونسبة التصنيف"]
         case .planeDetection:
             ["مستويات أفقية ورأسية", "حدود وأبعاد كل مستوى", "تثبيت علامات على السطح"]
         case .depthPhoto:
