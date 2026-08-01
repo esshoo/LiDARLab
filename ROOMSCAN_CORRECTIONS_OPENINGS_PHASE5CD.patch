@@ -1,0 +1,3024 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index a2a18e0..0687862 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,18 @@
++## 0.14.0
++
++- إضافة مسح جزء ناقص لغرفة مكتملة دون استبدال نتيجة RoomPlan الأصلية.
++- حفظ كل جزء إضافي داخل `Corrections/Room-XX/Correction-YYY` مع قبول أو رفض مستقل.
++- عرض الأجزاء المكملة بخطوط بنفسجية متقطعة في المخطط 2D وشفافية مستقلة في نموذج 3D.
++- إضافة محرر يدوي للأبواب والفتحات والنوافذ مرتبط بالحائط الفيزيائي المشترك.
++- دعم تحديد موضع العنصر على الحائط والعرض والارتفاع وارتفاع جلسة النافذة والغرفة المرتبطة.
++- إضافة إخفاء أو إعادة إظهار الأبواب والفتحات والنوافذ التي اكتشفها RoomPlan بصورة خاطئة دون تعديل JSON الأصلي.
++- حفظ تعديلات الفتحات داخل `Review/manual-openings.json`.
++- إضافة نموذج 3D تفاعلي باستخدام Apple SceneKit يعرض سماكات الحوائط والأجزاء المكملة والعناصر اليدوية وحالات الإخفاء.
++- الإبقاء على Apple Quick Look لعرض USDZ الأصلي بجانب نموذج المشروع المعدل.
++- تحديث مركز المراجعة لاختيار حائط محدد، وفتح إدارة الأبواب، وإضافة جزء ناقص، وعرض سجلات التصحيح.
++- إضافة نسخة احتياطية لملفات مرحلة 0.13.1 داخل `_backup/RoomScan_phase5`.
++- تحديث الإصدار إلى `0.14.0` ورقم البناء إلى `18`.
++
+ ## 0.13.1
+ 
+ - إصلاح فشل البناء الناتج عن تعريف `QuickLookPreview` مرتين.
+diff --git a/LiDARLab/Features/RoomScan/RoomScanCorrectionModels.swift b/LiDARLab/Features/RoomScan/RoomScanCorrectionModels.swift
+new file mode 100644
+index 0000000..57f4c10
+--- /dev/null
++++ b/LiDARLab/Features/RoomScan/RoomScanCorrectionModels.swift
+@@ -0,0 +1,168 @@
++import Foundation
++import RoomPlan
++import simd
++
++// MARK: - Partial correction scans
++
++enum RoomCorrectionDecision: String, Codable, Equatable {
++    case pending
++    case accepted
++    case rejected
++
++    var arabicTitle: String {
++        switch self {
++        case .pending: return "بانتظار المراجعة"
++        case .accepted: return "مقبول"
++        case .rejected: return "مرفوض"
++        }
++    }
++}
++
++struct RoomCorrectionRecord: Codable, Identifiable, Equatable {
++    let id: UUID
++    let roomIndex: Int
++    let correctionNumber: Int
++    let createdAt: Date
++    var decidedAt: Date?
++    var decision: RoomCorrectionDecision
++    let capturedRoomIdentifier: UUID
++    let metrics: RoomRevisionMetrics
++    let candidateRelativePath: String
++}
++
++struct RoomCorrectionDocument: Codable, Equatable {
++    let schemaVersion: Int
++    let updatedAt: Date
++    let corrections: [RoomCorrectionRecord]
++}
++
++struct PendingRoomCorrection: Identifiable {
++    let record: RoomCorrectionRecord
++    let candidateRoom: CapturedRoom
++
++    var id: UUID { record.id }
++}
++
++struct AcceptedRoomCorrectionLayer: Identifiable {
++    let record: RoomCorrectionRecord
++    let room: CapturedRoom
++
++    var id: UUID { record.id }
++    var roomIndex: Int { record.roomIndex }
++}
++
++// MARK: - App-owned doors, openings and windows
++
++enum ManualOpeningKind: String, Codable, CaseIterable, Identifiable {
++    case door
++    case opening
++    case window
++
++    var id: String { rawValue }
++
++    var arabicTitle: String {
++        switch self {
++        case .door: return "باب"
++        case .opening: return "فتحة"
++        case .window: return "نافذة"
++        }
++    }
++
++    var systemImage: String {
++        switch self {
++        case .door: return "door.left.hand.open"
++        case .opening: return "rectangle.dashed"
++        case .window: return "macwindow"
++        }
++    }
++}
++
++enum DetectedSurfaceKind: String, Codable, CaseIterable {
++    case door
++    case opening
++    case window
++
++    var arabicTitle: String {
++        switch self {
++        case .door: return "باب مكتشف"
++        case .opening: return "فتحة مكتشفة"
++        case .window: return "نافذة مكتشفة"
++        }
++    }
++}
++
++/// A user-confirmed architectural opening. It is deliberately stored outside
++/// CapturedRoom so the original RoomPlan result remains recoverable.
++struct ManualOpeningRecord: Codable, Identifiable, Equatable {
++    let id: UUID
++    let buildingWallID: UUID
++    let sourceRoomIndex: Int
++    let sourceWallIdentifier: UUID
++    var kind: ManualOpeningKind
++    var positionRatio: Double
++    var widthMeters: Double
++    var heightMeters: Double
++    var sillHeightMeters: Double
++    var connectsRoomIndex: Int?
++
++    /// World-space snapshot calculated from the selected physical wall.
++    var centerX: Float
++    var centerY: Float
++    var centerZ: Float
++    var tangentX: Float
++    var tangentZ: Float
++    var normalX: Float
++    var normalZ: Float
++
++    let createdAt: Date
++    var updatedAt: Date
++}
++
++struct SuppressedDetectedSurfaceRecord: Codable, Identifiable, Equatable {
++    let id: UUID
++    let roomIndex: Int
++    let surfaceIdentifier: UUID
++    let kind: DetectedSurfaceKind
++    let createdAt: Date
++}
++
++struct ManualOpeningDocument: Codable, Equatable {
++    let schemaVersion: Int
++    let updatedAt: Date
++    let manualOpenings: [ManualOpeningRecord]
++    let suppressedDetectedSurfaces: [SuppressedDetectedSurfaceRecord]
++}
++
++struct RoomWallSelection: Identifiable, Equatable {
++    var id: UUID { assignmentID }
++    let assignmentID: UUID
++    let roomIndex: Int
++    let wallNumber: Int
++    let wallIdentifier: UUID
++    let buildingWallID: UUID
++    let geometry: RoomWallGeometrySnapshot
++}
++
++struct DetectedOpeningDisplayItem: Identifiable, Equatable {
++    var id: UUID { surfaceIdentifier }
++    let roomIndex: Int
++    let surfaceIdentifier: UUID
++    let kind: DetectedSurfaceKind
++    let parentWallIdentifier: UUID?
++    let widthMeters: Float
++    let heightMeters: Float
++    let isSuppressed: Bool
++}
++
++struct ProjectOpeningOverlay: Identifiable, Equatable {
++    let id: UUID
++    let roomIndex: Int
++    let buildingWallID: UUID
++    let kind: ManualOpeningKind
++    let start: SIMD2<Float>
++    let end: SIMD2<Float>
++    let centerY: Float
++    let widthMeters: Float
++    let heightMeters: Float
++    let isManual: Bool
++}
+diff --git a/LiDARLab/Features/RoomScan/RoomScanOpeningEditors.swift b/LiDARLab/Features/RoomScan/RoomScanOpeningEditors.swift
+new file mode 100644
+index 0000000..08333b1
+--- /dev/null
++++ b/LiDARLab/Features/RoomScan/RoomScanOpeningEditors.swift
+@@ -0,0 +1,312 @@
++import SwiftUI
++
++struct RoomOpeningsManagerView: View {
++    @ObservedObject var model: RoomScanViewModel
++    let roomIndex: Int
++    let initialSelection: RoomWallSelection?
++
++    @Environment(\.dismiss) private var dismiss
++    @State private var selectedAssignmentID: UUID?
++    @State private var editorRequest: ManualOpeningEditorRequest?
++
++    init(
++        model: RoomScanViewModel,
++        roomIndex: Int,
++        initialSelection: RoomWallSelection? = nil
++    ) {
++        self.model = model
++        self.roomIndex = roomIndex
++        self.initialSelection = initialSelection
++        _selectedAssignmentID = State(initialValue: initialSelection?.assignmentID)
++    }
++
++    private var wallSelections: [RoomWallSelection] {
++        model.wallSelections(for: roomIndex)
++    }
++
++    private var selectedWall: RoomWallSelection? {
++        if let selectedAssignmentID,
++           let selection = wallSelections.first(where: { $0.assignmentID == selectedAssignmentID }) {
++            return selection
++        }
++        return initialSelection ?? wallSelections.first
++    }
++
++    var body: some View {
++        List {
++            Section("إضافة عنصر يدوي") {
++                if wallSelections.isEmpty {
++                    ContentUnavailableView(
++                        "لا توجد حوائط قابلة للتحرير",
++                        systemImage: "rectangle.slash",
++                        description: Text("أعد مسح الغرفة أو راجع بيانات الحوائط أولًا.")
++                    )
++                } else {
++                    Picker(
++                        "الحائط",
++                        selection: Binding(
++                            get: { selectedWall?.assignmentID ?? wallSelections[0].assignmentID },
++                            set: { selectedAssignmentID = $0 }
++                        )
++                    ) {
++                        ForEach(wallSelections) { selection in
++                            Text("الحائط \(selection.wallNumber)")
++                                .tag(selection.assignmentID)
++                        }
++                    }
++
++                    Button {
++                        if let selectedWall {
++                            editorRequest = ManualOpeningEditorRequest(
++                                selection: selectedWall,
++                                existing: nil
++                            )
++                        }
++                    } label: {
++                        Label("إضافة باب أو فتحة أو نافذة", systemImage: "plus.rectangle.on.rectangle")
++                    }
++                    .disabled(selectedWall == nil)
++                }
++            }
++
++            Section("العناصر اليدوية المشتركة") {
++                let records = model.manualOpenings(for: roomIndex)
++                if records.isEmpty {
++                    Text("لم تتم إضافة عناصر يدوية لهذه الغرفة.")
++                        .foregroundStyle(.secondary)
++                } else {
++                    ForEach(records) { record in
++                        Button {
++                            guard let selection = model.wallSelection(
++                                roomIndex: record.sourceRoomIndex,
++                                wallIdentifier: record.sourceWallIdentifier
++                            ) else { return }
++                            editorRequest = ManualOpeningEditorRequest(
++                                selection: selection,
++                                existing: record
++                            )
++                        } label: {
++                            HStack(spacing: 12) {
++                                Image(systemName: record.kind.systemImage)
++                                    .foregroundStyle(.cyan)
++                                VStack(alignment: .leading, spacing: 4) {
++                                    Text(record.kind.arabicTitle)
++                                        .font(.headline)
++                                    Text(
++                                        "العرض \(centimeters(record.widthMeters)) سم • الارتفاع \(centimeters(record.heightMeters)) سم"
++                                    )
++                                    .font(.caption)
++                                    .foregroundStyle(.secondary)
++                                    if let connected = record.connectsRoomIndex {
++                                        Text("يربط الغرفة \(record.sourceRoomIndex) بالغرفة \(connected)")
++                                            .font(.caption2)
++                                            .foregroundStyle(.secondary)
++                                    }
++                                }
++                                Spacer()
++                                Image(systemName: "chevron.left")
++                                    .foregroundStyle(.tertiary)
++                            }
++                        }
++                        .buttonStyle(.plain)
++                        .swipeActions {
++                            Button(role: .destructive) {
++                                model.deleteManualOpening(id: record.id)
++                            } label: {
++                                Label("حذف", systemImage: "trash")
++                            }
++                        }
++                    }
++                }
++            }
++
++            Section("نتائج RoomPlan المكتشفة") {
++                let items = model.detectedOpeningItems(for: roomIndex)
++                if items.isEmpty {
++                    Text("لم يكتشف RoomPlan أبوابًا أو فتحات أو نوافذ في هذه الغرفة.")
++                        .foregroundStyle(.secondary)
++                } else {
++                    ForEach(items) { item in
++                        Toggle(
++                            isOn: Binding(
++                                get: { !item.isSuppressed },
++                                set: { visible in
++                                    model.setDetectedSurfaceSuppressed(item, suppressed: !visible)
++                                }
++                            )
++                        ) {
++                            VStack(alignment: .leading, spacing: 4) {
++                                Text(item.kind.arabicTitle)
++                                    .font(.headline)
++                                Text(
++                                    "\(centimeters(Double(item.widthMeters))) × \(centimeters(Double(item.heightMeters))) سم"
++                                )
++                                .font(.caption)
++                                .foregroundStyle(.secondary)
++                                if let parent = item.parentWallIdentifier,
++                                   let wall = model.wallSelection(roomIndex: roomIndex, wallIdentifier: parent) {
++                                    Text("على الحائط \(wall.wallNumber)")
++                                        .font(.caption2)
++                                        .foregroundStyle(.secondary)
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++
++            Section {
++                Text(
++                    "الإخفاء والتعديل اليدوي يؤثران في مخطط المشروع ومعاينة SceneKit، بينما يبقى ملف RoomPlan الأصلي محفوظًا دون تعديل."
++                )
++                .font(.caption)
++                .foregroundStyle(.secondary)
++            }
++        }
++        .navigationTitle("أبواب وفتحات الغرفة \(roomIndex)")
++        .navigationBarTitleDisplayMode(.inline)
++        .toolbar {
++            ToolbarItem(placement: .confirmationAction) {
++                Button("تم") { dismiss() }
++            }
++        }
++        .sheet(item: $editorRequest) { request in
++            NavigationStack {
++                ManualOpeningEditorSheet(
++                    model: model,
++                    selection: request.selection,
++                    existing: request.existing
++                )
++            }
++        }
++        .onAppear {
++            if selectedAssignmentID == nil {
++                selectedAssignmentID = initialSelection?.assignmentID ?? wallSelections.first?.assignmentID
++            }
++        }
++    }
++
++    private func centimeters(_ meters: Double) -> String {
++        String(format: "%.0f", meters * 100)
++    }
++}
++
++private struct ManualOpeningEditorRequest: Identifiable {
++    let id = UUID()
++    let selection: RoomWallSelection
++    let existing: ManualOpeningRecord?
++}
++
++private struct ManualOpeningEditorSheet: View {
++    @ObservedObject var model: RoomScanViewModel
++    let selection: RoomWallSelection
++    let existing: ManualOpeningRecord?
++
++    @Environment(\.dismiss) private var dismiss
++    @State private var kind: ManualOpeningKind
++    @State private var positionPercent: Double
++    @State private var widthCentimeters: Double
++    @State private var heightCentimeters: Double
++    @State private var sillHeightCentimeters: Double
++    @State private var connectedRoomIndex: Int
++
++    init(
++        model: RoomScanViewModel,
++        selection: RoomWallSelection,
++        existing: ManualOpeningRecord?
++    ) {
++        self.model = model
++        self.selection = selection
++        self.existing = existing
++        _kind = State(initialValue: existing?.kind ?? .door)
++        _positionPercent = State(initialValue: (existing?.positionRatio ?? 0.5) * 100)
++        _widthCentimeters = State(initialValue: (existing?.widthMeters ?? 0.90) * 100)
++        _heightCentimeters = State(initialValue: (existing?.heightMeters ?? 2.10) * 100)
++        _sillHeightCentimeters = State(initialValue: (existing?.sillHeightMeters ?? 0.90) * 100)
++        _connectedRoomIndex = State(initialValue: existing?.connectsRoomIndex ?? 0)
++    }
++
++    var body: some View {
++        Form {
++            Section("نوع العنصر") {
++                Picker("النوع", selection: $kind) {
++                    ForEach(ManualOpeningKind.allCases) { item in
++                        Label(item.arabicTitle, systemImage: item.systemImage)
++                            .tag(item)
++                    }
++                }
++                .pickerStyle(.segmented)
++            }
++
++            Section("الموقع على الحائط \(selection.wallNumber)") {
++                Slider(value: $positionPercent, in: 0...100, step: 1)
++                LabeledContent("الموضع من بداية الحائط", value: "\(Int(positionPercent))٪")
++                Text("الموضع محفوظ في إحداثيات المبنى، لذلك يظهر العنصر نفسه على الحائط المشترك بين الغرف.")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
++            }
++
++            Section("الأبعاد") {
++                measurementField("العرض", value: $widthCentimeters, range: 20...500)
++                measurementField("الارتفاع", value: $heightCentimeters, range: 20...400)
++                if kind == .window {
++                    measurementField("ارتفاع جلسة النافذة", value: $sillHeightCentimeters, range: 0...300)
++                }
++            }
++
++            Section("الربط بين الغرف") {
++                Picker("الغرفة الأخرى", selection: $connectedRoomIndex) {
++                    Text("غير محدد").tag(0)
++                    ForEach(1...max(model.roomCount, 1), id: \.self) { room in
++                        if room != selection.roomIndex {
++                            Text("الغرفة \(room)").tag(room)
++                        }
++                    }
++                }
++                Text("عند اختيار غرفة أخرى، يُعامل الباب أو الفتحة كعنصر مشترك واحد بين الغرفتين.")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
++            }
++        }
++        .navigationTitle(existing == nil ? "إضافة عنصر" : "تعديل العنصر")
++        .navigationBarTitleDisplayMode(.inline)
++        .toolbar {
++            ToolbarItem(placement: .cancellationAction) {
++                Button("إلغاء") { dismiss() }
++            }
++            ToolbarItem(placement: .confirmationAction) {
++                Button("حفظ") {
++                    model.saveManualOpening(
++                        existingID: existing?.id,
++                        selection: selection,
++                        kind: kind,
++                        positionPercent: positionPercent,
++                        widthCentimeters: widthCentimeters,
++                        heightCentimeters: heightCentimeters,
++                        sillHeightCentimeters: kind == .window ? sillHeightCentimeters : 0,
++                        connectsRoomIndex: connectedRoomIndex == 0 ? nil : connectedRoomIndex
++                    )
++                    dismiss()
++                }
++                .fontWeight(.semibold)
++            }
++        }
++    }
++
++    private func measurementField(
++        _ title: String,
++        value: Binding<Double>,
++        range _: ClosedRange<Double>
++    ) -> some View {
++        HStack {
++            Text(title)
++            Spacer()
++            TextField(title, value: value, format: .number.precision(.fractionLength(0)))
++                .keyboardType(.decimalPad)
++                .multilineTextAlignment(.trailing)
++                .frame(width: 90)
++            Text("سم")
++                .foregroundStyle(.secondary)
++        }
++    }
++}
+diff --git a/LiDARLab/Features/RoomScan/RoomScanProject3DView.swift b/LiDARLab/Features/RoomScan/RoomScanProject3DView.swift
+new file mode 100644
+index 0000000..8a5d132
+--- /dev/null
++++ b/LiDARLab/Features/RoomScan/RoomScanProject3DView.swift
+@@ -0,0 +1,238 @@
++import RoomPlan
++import SceneKit
++import SwiftUI
++import UIKit
++import simd
++
++/// Interactive Apple SceneKit view of the app-owned building model.
++/// Unlike Quick Look, this layer can display supplemental scans, manual openings,
++/// wall thickness metadata, and hidden RoomPlan surfaces.
++struct RoomScanProject3DView: UIViewRepresentable {
++    let rooms: [CapturedRoom]
++    let corrections: [AcceptedRoomCorrectionLayer]
++    let wallAssignments: [RoomWallAssignment]
++    let wallRecords: [BuildingWallRecord]
++    let manualOpenings: [ManualOpeningRecord]
++    let suppressedSurfaceIdentifiers: Set<UUID>
++
++    func makeUIView(context: Context) -> SCNView {
++        let view = SCNView(frame: .zero)
++        view.allowsCameraControl = true
++        view.autoenablesDefaultLighting = true
++        view.antialiasingMode = .multisampling4X
++        view.backgroundColor = .secondarySystemBackground
++        view.scene = makeScene()
++        return view
++    }
++
++    func updateUIView(_ uiView: SCNView, context: Context) {
++        uiView.scene = makeScene()
++    }
++
++    private func makeScene() -> SCNScene {
++        let scene = SCNScene()
++        let modelRoot = SCNNode()
++        modelRoot.name = "3EProjectModel"
++        scene.rootNode.addChildNode(modelRoot)
++
++        let thicknessByWallID = Dictionary(uniqueKeysWithValues: wallRecords.map { ($0.id, $0.thicknessMeters) })
++        var assignmentByFace: [FaceKey: RoomWallAssignment] = [:]
++        for assignment in wallAssignments {
++            let key = FaceKey(roomIndex: assignment.roomIndex, wallIdentifier: assignment.wallIdentifier)
++            if assignmentByFace[key] == nil {
++                assignmentByFace[key] = assignment
++            }
++        }
++
++        for (offset, room) in rooms.enumerated() {
++            addRoom(
++                room,
++                roomIndex: offset + 1,
++                isCorrection: false,
++                to: modelRoot,
++                assignmentByFace: assignmentByFace,
++                thicknessByWallID: thicknessByWallID
++            )
++        }
++
++        for layer in corrections {
++            addRoom(
++                layer.room,
++                roomIndex: layer.roomIndex,
++                isCorrection: true,
++                to: modelRoot,
++                assignmentByFace: assignmentByFace,
++                thicknessByWallID: thicknessByWallID
++            )
++        }
++
++        for opening in manualOpenings {
++            modelRoot.addChildNode(manualOpeningNode(opening))
++        }
++
++        addReferenceFloor(to: scene.rootNode, modelRoot: modelRoot)
++        addCamera(to: scene.rootNode, modelRoot: modelRoot)
++        return scene
++    }
++
++    private func addRoom(
++        _ room: CapturedRoom,
++        roomIndex: Int,
++        isCorrection: Bool,
++        to root: SCNNode,
++        assignmentByFace: [FaceKey: RoomWallAssignment],
++        thicknessByWallID: [UUID: Double]
++    ) {
++        for wall in room.walls {
++            let key = FaceKey(roomIndex: roomIndex, wallIdentifier: wall.identifier)
++            let assignment = assignmentByFace[key]
++            let thickness = assignment.flatMap { thicknessByWallID[$0.buildingWallID] } ?? 0.12
++            root.addChildNode(
++                surfaceNode(
++                    wall,
++                    depth: max(thickness, 0.03),
++                    material: material(
++                        color: isCorrection ? .systemPurple : .systemGray,
++                        opacity: isCorrection ? 0.35 : 0.72
++                    )
++                )
++            )
++        }
++
++        addDetectedSurfaces(room.doors, color: .systemOrange, isCorrection: isCorrection, to: root)
++        addDetectedSurfaces(room.windows, color: .systemBlue, isCorrection: isCorrection, to: root)
++        addDetectedSurfaces(room.openings, color: .systemGreen, isCorrection: isCorrection, to: root)
++    }
++
++    private func addDetectedSurfaces(
++        _ surfaces: [CapturedRoom.Surface],
++        color: UIColor,
++        isCorrection: Bool,
++        to root: SCNNode
++    ) {
++        for surface in surfaces where !suppressedSurfaceIdentifiers.contains(surface.identifier) {
++            root.addChildNode(
++                surfaceNode(
++                    surface,
++                    depth: isCorrection ? 0.025 : 0.04,
++                    material: material(color: color, opacity: isCorrection ? 0.40 : 0.90)
++                )
++            )
++        }
++    }
++
++    private func surfaceNode(
++        _ surface: CapturedRoom.Surface,
++        depth: Double,
++        material: SCNMaterial
++    ) -> SCNNode {
++        let geometry = SCNBox(
++            width: CGFloat(max(surface.dimensions.x, 0.03)),
++            height: CGFloat(max(surface.dimensions.y, 0.03)),
++            length: CGFloat(max(depth, 0.01)),
++            chamferRadius: 0.005
++        )
++        geometry.materials = [material]
++        let node = SCNNode(geometry: geometry)
++        node.simdTransform = surface.transform
++        return node
++    }
++
++    private func manualOpeningNode(_ record: ManualOpeningRecord) -> SCNNode {
++        let geometry = SCNBox(
++            width: CGFloat(max(record.widthMeters, 0.05)),
++            height: CGFloat(max(record.heightMeters, 0.05)),
++            length: 0.06,
++            chamferRadius: 0.01
++        )
++        let color: UIColor
++        switch record.kind {
++        case .door: color = .systemRed
++        case .opening: color = .systemTeal
++        case .window: color = .systemCyan
++        }
++        geometry.materials = [material(color: color, opacity: 0.92)]
++
++        let tangent = simd_normalize(SIMD3<Float>(record.tangentX, 0, record.tangentZ))
++        let normal = simd_normalize(SIMD3<Float>(record.normalX, 0, record.normalZ))
++        var transform = matrix_identity_float4x4
++        transform.columns.0 = SIMD4<Float>(tangent.x, tangent.y, tangent.z, 0)
++        transform.columns.1 = SIMD4<Float>(0, 1, 0, 0)
++        transform.columns.2 = SIMD4<Float>(normal.x, normal.y, normal.z, 0)
++        transform.columns.3 = SIMD4<Float>(record.centerX, record.centerY, record.centerZ, 1)
++
++        let node = SCNNode(geometry: geometry)
++        node.simdTransform = transform
++        node.name = "Manual-\(record.kind.rawValue)-\(record.id.uuidString)"
++        return node
++    }
++
++    private func material(color: UIColor, opacity: CGFloat) -> SCNMaterial {
++        let material = SCNMaterial()
++        material.diffuse.contents = color
++        material.transparency = opacity
++        material.isDoubleSided = true
++        material.lightingModel = .physicallyBased
++        material.roughness.contents = 0.8
++        return material
++    }
++
++    private func addReferenceFloor(to root: SCNNode, modelRoot: SCNNode) {
++        guard let bounds = modelBounds(modelRoot) else { return }
++        let width = max(bounds.max.x - bounds.min.x, 2)
++        let depth = max(bounds.max.z - bounds.min.z, 2)
++        let floor = SCNFloor()
++        floor.reflectivity = 0
++        floor.firstMaterial = material(color: .tertiarySystemFill, opacity: 0.55)
++        let node = SCNNode(geometry: floor)
++        node.position = SCNVector3(
++            (bounds.min.x + bounds.max.x) / 2,
++            bounds.min.y - 0.02,
++            (bounds.min.z + bounds.max.z) / 2
++        )
++        node.scale = SCNVector3(width, 1, depth)
++        root.addChildNode(node)
++    }
++
++    private func addCamera(to root: SCNNode, modelRoot: SCNNode) {
++        guard let bounds = modelBounds(modelRoot) else { return }
++        let center = SIMD3<Float>(
++            (bounds.min.x + bounds.max.x) / 2,
++            (bounds.min.y + bounds.max.y) / 2,
++            (bounds.min.z + bounds.max.z) / 2
++        )
++        let horizontalExtent = max(
++            bounds.max.x - bounds.min.x,
++            bounds.max.z - bounds.min.z
++        )
++        let extent = max(max(horizontalExtent, bounds.max.y - bounds.min.y), 2)
++
++        let cameraNode = SCNNode()
++        cameraNode.camera = SCNCamera()
++        cameraNode.camera?.zNear = 0.01
++        cameraNode.camera?.zFar = Double(max(extent * 20, 100))
++        cameraNode.simdPosition = center + SIMD3<Float>(extent * 1.25, extent * 1.05, extent * 1.25)
++
++        let target = SCNNode()
++        target.simdPosition = center
++        root.addChildNode(target)
++        let constraint = SCNLookAtConstraint(target: target)
++        constraint.isGimbalLockEnabled = true
++        cameraNode.constraints = [constraint]
++        root.addChildNode(cameraNode)
++    }
++
++    private func modelBounds(_ node: SCNNode) -> (min: SIMD3<Float>, max: SIMD3<Float>)? {
++        let box = node.boundingBox
++        guard box.min.x.isFinite, box.max.x.isFinite else { return nil }
++        return (
++            SIMD3<Float>(box.min.x, box.min.y, box.min.z),
++            SIMD3<Float>(box.max.x, box.max.y, box.max.z)
++        )
++    }
++
++    private struct FaceKey: Hashable {
++        let roomIndex: Int
++        let wallIdentifier: UUID
++    }
++}
+diff --git a/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift b/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift
+index fe538e1..90fb900 100644
+--- a/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift
+@@ -3,650 +3,836 @@ import SwiftUI
+ import simd
+ 
+ struct RoomScanProjectReviewView: View {
+-  @ObservedObject var model: RoomScanViewModel
+-
+-  @Environment(\.dismiss) private var dismiss
+-  @State private var selectedTab: ReviewTab = .plan2D
+-  @State private var selectedRoomIndex: Int?
+-  @State private var showingWallEditor = false
+-  @State private var previewURL: URL?
+-  @State private var rescanConfirmationRoom: Int?
+-
+-  private enum ReviewTab: String, CaseIterable, Identifiable {
+-    case plan2D = "2D"
+-    case preview3D = "3D"
+-    case rooms = "الغرف"
+-
+-    var id: String { rawValue }
+-  }
+-
+-  var body: some View {
+-    NavigationStack {
+-      VStack(spacing: 12) {
+-        Picker("طريقة العرض", selection: $selectedTab) {
+-          ForEach(ReviewTab.allCases) { tab in
+-            Text(tab.rawValue).tag(tab)
+-          }
++    @ObservedObject var model: RoomScanViewModel
++
++    @Environment(\.dismiss) private var dismiss
++    @State private var selectedTab: ReviewTab = .plan2D
++    @State private var selectedRoomIndex: Int?
++    @State private var selectedWall: RoomWallSelection?
++    @State private var showingWallEditor = false
++    @State private var showingOpeningsManager = false
++    @State private var previewURL: URL?
++    @State private var rescanConfirmationRoom: Int?
++    @State private var correctionConfirmationRoom: Int?
++
++    private enum ReviewTab: String, CaseIterable, Identifiable {
++        case plan2D = "2D"
++        case preview3D = "3D"
++        case rooms = "الغرف"
++
++        var id: String { rawValue }
++    }
++
++    var body: some View {
++        NavigationStack {
++            VStack(spacing: 12) {
++                Picker("طريقة العرض", selection: $selectedTab) {
++                    ForEach(ReviewTab.allCases) { tab in
++                        Text(tab.rawValue).tag(tab)
++                    }
++                }
++                .pickerStyle(.segmented)
++                .padding(.horizontal)
++
++                if let pending = model.pendingRoomRevision {
++                    pendingRevisionCard(pending)
++                        .padding(.horizontal)
++                }
++
++                if let pending = model.pendingRoomCorrection {
++                    pendingCorrectionCard(pending)
++                        .padding(.horizontal)
++                }
++
++                Group {
++                    switch selectedTab {
++                    case .plan2D:
++                        planView
++                    case .preview3D:
++                        previewView
++                    case .rooms:
++                        roomListView
++                    }
++                }
++            }
++            .navigationTitle("مراجعة مشروع المسح")
++            .navigationBarTitleDisplayMode(.inline)
++            .toolbar {
++                ToolbarItem(placement: .confirmationAction) {
++                    Button("تم") { dismiss() }
++                }
++            }
++            .sheet(isPresented: $showingWallEditor) {
++                if let selectedRoomIndex {
++                    NavigationStack {
++                        RoomWallThicknessEditor(model: model, roomIndex: selectedRoomIndex)
++                    }
++                }
++            }
++            .sheet(isPresented: $showingOpeningsManager) {
++                if let selectedRoomIndex {
++                    NavigationStack {
++                        RoomOpeningsManagerView(
++                            model: model,
++                            roomIndex: selectedRoomIndex,
++                            initialSelection: selectedWall
++                        )
++                    }
++                }
++            }
++            .sheet(
++                item: Binding(
++                    get: { previewURL.map(PreviewItem.init) },
++                    set: { if $0 == nil { previewURL = nil } }
++                )
++            ) { item in
++                QuickLookPreview(url: item.url)
++                    .ignoresSafeArea()
++            }
++            .confirmationDialog(
++                "إعادة مسح الغرفة؟",
++                isPresented: Binding(
++                    get: { rescanConfirmationRoom != nil },
++                    set: { if !$0 { rescanConfirmationRoom = nil } }
++                ),
++                titleVisibility: .visible
++            ) {
++                if let roomIndex = rescanConfirmationRoom {
++                    Button("بدء إعادة مسح الغرفة \(roomIndex)") {
++                        rescanConfirmationRoom = nil
++                        model.beginRoomRescan(roomIndex: roomIndex)
++                        dismiss()
++                    }
++                }
++                Button("إلغاء", role: .cancel) { rescanConfirmationRoom = nil }
++            } message: {
++                Text("ستظل النسخة الحالية محفوظة، ولن تُستبدل إلا بعد اعتماد النتيجة الجديدة.")
++            }
++            .confirmationDialog(
++                "إضافة جزء ناقص؟",
++                isPresented: Binding(
++                    get: { correctionConfirmationRoom != nil },
++                    set: { if !$0 { correctionConfirmationRoom = nil } }
++                ),
++                titleVisibility: .visible
++            ) {
++                if let roomIndex = correctionConfirmationRoom {
++                    Button("مسح الجزء الناقص للغرفة \(roomIndex)") {
++                        correctionConfirmationRoom = nil
++                        model.beginMissingAreaScan(roomIndex: roomIndex)
++                        dismiss()
++                    }
++                }
++                Button("إلغاء", role: .cancel) { correctionConfirmationRoom = nil }
++            } message: {
++                Text("امسح المنطقة المفقودة فقط. ستُحفظ كطبقة مكملة ولن تستبدل الغرفة الأصلية.")
++            }
++            .onAppear {
++                if selectedRoomIndex == nil {
++                    selectedRoomIndex = model.roomReviewSummaries.first?.roomIndex
++                }
++            }
++            .onChange(of: selectedRoomIndex) { _, newValue in
++                if selectedWall?.roomIndex != newValue {
++                    selectedWall = nil
++                }
++            }
+         }
+-        .pickerStyle(.segmented)
+-        .padding(.horizontal)
++    }
+ 
+-        if let pending = model.pendingRoomRevision {
+-          pendingRevisionCard(pending)
++    private var planView: some View {
++        VStack(spacing: 10) {
++            RoomPlan2DCanvas(
++                rooms: model.capturedRooms,
++                corrections: model.acceptedRoomCorrections,
++                wallAssignments: model.roomWallAssignments,
++                manualOpenings: model.manualOpeningOverlays,
++                suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
++                selectedRoomIndex: $selectedRoomIndex,
++                selectedWall: $selectedWall
++            )
++            .frame(maxWidth: .infinity, maxHeight: .infinity)
++            .background(Color(uiColor: .secondarySystemBackground))
++            .clipShape(RoundedRectangle(cornerRadius: 18))
++            .overlay {
++                RoundedRectangle(cornerRadius: 18)
++                    .stroke(.quaternary)
++            }
+             .padding(.horizontal)
+-        }
+ 
+-        Group {
+-          switch selectedTab {
+-          case .plan2D:
+-            planView
+-          case .preview3D:
+-            previewView
+-          case .rooms:
+-            roomListView
+-          }
+-        }
+-      }
+-      .navigationTitle("مراجعة مشروع المسح")
+-      .navigationBarTitleDisplayMode(.inline)
+-      .toolbar {
+-        ToolbarItem(placement: .confirmationAction) {
+-          Button("تم") { dismiss() }
+-        }
+-      }
+-      .sheet(isPresented: $showingWallEditor) {
+-        if let selectedRoomIndex {
+-          NavigationStack {
+-            RoomWallThicknessEditor(model: model, roomIndex: selectedRoomIndex)
+-          }
+-        }
+-      }
+-      .sheet(
+-        item: Binding(
+-          get: { previewURL.map(PreviewItem.init) },
+-          set: { if $0 == nil { previewURL = nil } }
+-        )
+-      ) { item in
+-        QuickLookPreview(url: item.url)
+-          .ignoresSafeArea()
+-      }
+-      .confirmationDialog(
+-        "إعادة مسح الغرفة؟",
+-        isPresented: Binding(
+-          get: { rescanConfirmationRoom != nil },
+-          set: { if !$0 { rescanConfirmationRoom = nil } }
+-        ),
+-        titleVisibility: .visible
+-      ) {
+-        if let roomIndex = rescanConfirmationRoom {
+-          Button("بدء إعادة مسح الغرفة \(roomIndex)") {
+-            rescanConfirmationRoom = nil
+-            model.beginRoomRescan(roomIndex: roomIndex)
+-            dismiss()
+-          }
+-        }
+-        Button("إلغاء", role: .cancel) {
+-          rescanConfirmationRoom = nil
+-        }
+-      } message: {
+-        Text(
+-          "ستظل النسخة الحالية محفوظة. لن تُستبدل إلا بعد مقارنة النتيجة الجديدة واعتمادها يدويًا.")
+-      }
+-      .onAppear {
+-        if selectedRoomIndex == nil {
+-          selectedRoomIndex = model.roomReviewSummaries.first?.roomIndex
++            if let roomIndex = selectedRoomIndex,
++               let summary = model.roomReviewSummaries.first(where: { $0.roomIndex == roomIndex }) {
++                selectedRoomCard(summary)
++                    .padding(.horizontal)
++                    .padding(.bottom, 8)
++            }
+         }
+-      }
+     }
+-  }
+-
+-  private var planView: some View {
+-    VStack(spacing: 10) {
+-      RoomPlan2DCanvas(
+-        rooms: model.capturedRooms,
+-        selectedRoomIndex: $selectedRoomIndex
+-      )
+-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+-      .background(Color(uiColor: .secondarySystemBackground))
+-      .clipShape(RoundedRectangle(cornerRadius: 18))
+-      .overlay {
+-        RoundedRectangle(cornerRadius: 18)
+-          .stroke(.quaternary)
+-      }
+-      .padding(.horizontal)
+-
+-      if let roomIndex = selectedRoomIndex,
+-        let summary = model.roomReviewSummaries.first(where: { $0.roomIndex == roomIndex })
+-      {
+-        selectedRoomCard(summary)
+-          .padding(.horizontal)
+-          .padding(.bottom, 8)
+-      }
+-    }
+-  }
+ 
+-  private var previewView: some View {
+-    ScrollView {
+-      VStack(spacing: 16) {
+-        Image(systemName: "cube.transparent")
+-          .font(.system(size: 54))
+-          .foregroundStyle(.cyan)
+-          .padding(.top, 22)
++    private var previewView: some View {
++        ScrollView {
++            VStack(spacing: 16) {
++                VStack(alignment: .leading, spacing: 8) {
++                    Label("نموذج المشروع التفاعلي", systemImage: "cube.transparent")
++                        .font(.headline)
++                    Text("يعرض سماكات الحوائط، الأجزاء المكملة، العناصر اليدوية، والعناصر التي أخفيتها من نتيجة RoomPlan.")
++                        .font(.caption)
++                        .foregroundStyle(.secondary)
++                }
++                .frame(maxWidth: .infinity, alignment: .leading)
++                .padding(.horizontal)
++
++                RoomScanProject3DView(
++                    rooms: model.capturedRooms,
++                    corrections: model.acceptedRoomCorrections,
++                    wallAssignments: model.roomWallAssignments,
++                    wallRecords: model.buildingWallRecords,
++                    manualOpenings: model.manualOpeningRecords,
++                    suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers
++                )
++                .frame(height: 380)
++                .clipShape(RoundedRectangle(cornerRadius: 18))
++                .overlay {
++                    RoundedRectangle(cornerRadius: 18).stroke(.quaternary)
++                }
++                .padding(.horizontal)
++
++                Text("اسحب للدوران، قرّب بإصبعين، واضغط مرتين للتركيز.")
++                    .font(.caption2)
++                    .foregroundStyle(.secondary)
+ 
+-        Text("عرض Apple Quick Look")
+-          .font(.title3.bold())
++                Divider().padding(.horizontal)
+ 
+-        Text(
+-          "يستخدم التطبيق تصدير RoomPlan الأصلي بصيغة USDZ، ثم يفتحه في عارض Apple للتدوير والتكبير والمعاينة بالواقع المعزز."
+-        )
+-        .font(.callout)
+-        .foregroundStyle(.secondary)
+-        .multilineTextAlignment(.center)
+-        .padding(.horizontal)
+-
+-        Button {
+-          previewURL = model.prepareReviewUSDZ(roomIndex: nil)
+-        } label: {
+-          Label("عرض المبنى ثلاثي الأبعاد", systemImage: "building.2.crop.circle")
+-            .frame(maxWidth: .infinity)
+-        }
+-        .buttonStyle(.borderedProminent)
+-        .controlSize(.large)
+-        .padding(.horizontal)
+-
+-        Picker(
+-          "الغرفة",
+-          selection: Binding(
+-            get: { selectedRoomIndex ?? model.roomReviewSummaries.first?.roomIndex ?? 1 },
+-            set: { selectedRoomIndex = $0 }
+-          )
+-        ) {
+-          ForEach(model.roomReviewSummaries) { room in
+-            Text("الغرفة \(room.roomIndex)").tag(room.roomIndex)
+-          }
+-        }
+-        .pickerStyle(.menu)
+-
+-        if let selectedRoomIndex {
+-          Button {
+-            previewURL = model.prepareReviewUSDZ(roomIndex: selectedRoomIndex)
+-          } label: {
+-            Label("عرض الغرفة \(selectedRoomIndex) فقط", systemImage: "cube")
+-              .frame(maxWidth: .infinity)
+-          }
+-          .buttonStyle(.bordered)
+-          .controlSize(.large)
+-          .padding(.horizontal)
+-        }
++                Label("ملف RoomPlan الأصلي عبر Apple Quick Look", systemImage: "arkit")
++                    .font(.headline)
+ 
+-        Text(
+-          "التحرير الهندسي ليس جزءًا من Quick Look؛ لذلك تُنفذ تعديلات السماكة وإعادة المسح داخل طبقة المشروع الخاصة بالتطبيق، مع إبقاء بيانات RoomPlan الأصلية محفوظة."
+-        )
+-        .font(.caption)
+-        .foregroundStyle(.secondary)
+-        .multilineTextAlignment(.center)
+-        .padding()
+-      }
++                Button {
++                    previewURL = model.prepareReviewUSDZ(roomIndex: nil)
++                } label: {
++                    Label("عرض المبنى الأصلي ثلاثي الأبعاد", systemImage: "building.2.crop.circle")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++                .controlSize(.large)
++                .padding(.horizontal)
++
++                Picker(
++                    "الغرفة",
++                    selection: Binding(
++                        get: { selectedRoomIndex ?? model.roomReviewSummaries.first?.roomIndex ?? 1 },
++                        set: { selectedRoomIndex = $0 }
++                    )
++                ) {
++                    ForEach(model.roomReviewSummaries) { room in
++                        Text("الغرفة \(room.roomIndex)").tag(room.roomIndex)
++                    }
++                }
++                .pickerStyle(.menu)
++
++                if let selectedRoomIndex {
++                    Button {
++                        previewURL = model.prepareReviewUSDZ(roomIndex: selectedRoomIndex)
++                    } label: {
++                        Label("عرض ملف الغرفة \(selectedRoomIndex) الأصلي", systemImage: "cube")
++                            .frame(maxWidth: .infinity)
++                    }
++                    .buttonStyle(.bordered)
++                    .controlSize(.large)
++                    .padding(.horizontal)
++                }
++
++                Text("Quick Look يعرض ملف RoomPlan الخام. التعديلات اليدوية تظهر في نموذج المشروع التفاعلي أعلاه وتظل محفوظة في طبقة مستقلة.")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
++                    .multilineTextAlignment(.center)
++                    .padding()
++            }
++        }
+     }
+-  }
+-
+-  private var roomListView: some View {
+-    List {
+-      Section("ملخص المشروع") {
+-        LabeledContent("عدد الغرف", value: "\(model.roomCount)")
+-        LabeledContent("الحوائط الفعلية", value: "\(model.physicalWallCount)")
+-        LabeledContent("الحوائط المشتركة", value: "\(model.sharedPhysicalWallCount)")
+-        LabeledContent("مراجعات المسح", value: "\(model.roomRevisionRecords.count)")
+-      }
+-
+-      Section("الغرف") {
+-        ForEach(model.roomReviewSummaries) { summary in
+-          Button {
+-            selectedRoomIndex = summary.roomIndex
+-          } label: {
+-            VStack(alignment: .leading, spacing: 8) {
+-              HStack {
+-                Label("الغرفة \(summary.roomIndex)", systemImage: "square.dashed.inset.filled")
+-                  .font(.headline)
+-                Spacer()
+-                if summary.revisionCount > 0 {
+-                  Text("\(summary.revisionCount) مراجعة")
+-                    .font(.caption2.bold())
+-                    .padding(.horizontal, 8)
+-                    .padding(.vertical, 4)
+-                    .background(.thinMaterial, in: Capsule())
+-                }
+-              }
+-
+-              Text(
+-                "\(summary.metrics.wallCount) حائط • \(summary.metrics.doorCount) باب • \(summary.metrics.windowCount) نافذة • \(summary.sharedWallCount) مشترك"
+-              )
+-              .font(.caption)
+-              .foregroundStyle(.secondary)
+-            }
+-            .padding(.vertical, 4)
+-          }
+-          .buttonStyle(.plain)
+-          .swipeActions(edge: .leading, allowsFullSwipe: false) {
+-            if model.isBuildingFinished {
+-              Button {
+-                rescanConfirmationRoom = summary.roomIndex
+-              } label: {
+-                Label("إعادة المسح", systemImage: "viewfinder")
+-              }
+-              .tint(.orange)
+-            }
+-          }
++
++    private var roomListView: some View {
++        List {
++            Section("ملخص المشروع") {
++                LabeledContent("عدد الغرف", value: "\(model.roomCount)")
++                LabeledContent("الحوائط الفعلية", value: "\(model.physicalWallCount)")
++                LabeledContent("الحوائط المشتركة", value: "\(model.sharedPhysicalWallCount)")
++                LabeledContent("إعادات المسح", value: "\(model.roomRevisionRecords.count)")
++                LabeledContent("الأجزاء المكملة", value: "\(model.acceptedRoomCorrections.count)")
++                LabeledContent("العناصر اليدوية", value: "\(model.manualOpeningRecords.count)")
++            }
++
++            Section("الغرف") {
++                ForEach(model.roomReviewSummaries) { summary in
++                    Button {
++                        selectedRoomIndex = summary.roomIndex
++                        selectedTab = .plan2D
++                    } label: {
++                        VStack(alignment: .leading, spacing: 8) {
++                            HStack {
++                                Label("الغرفة \(summary.roomIndex)", systemImage: "square.dashed.inset.filled")
++                                    .font(.headline)
++                                Spacer()
++                                if summary.correctionCount > 0 {
++                                    Text("+\(summary.correctionCount) جزء")
++                                        .font(.caption2.bold())
++                                        .padding(.horizontal, 8)
++                                        .padding(.vertical, 4)
++                                        .background(.purple.opacity(0.16), in: Capsule())
++                                }
++                            }
++                            Text("\(summary.metrics.wallCount) حائط • \(summary.metrics.doorCount) باب • \(summary.metrics.windowCount) نافذة • \(summary.sharedWallCount) مشترك")
++                                .font(.caption)
++                                .foregroundStyle(.secondary)
++                        }
++                        .padding(.vertical, 4)
++                    }
++                    .buttonStyle(.plain)
++                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
++                        if model.isBuildingFinished {
++                            Button {
++                                correctionConfirmationRoom = summary.roomIndex
++                            } label: {
++                                Label("جزء ناقص", systemImage: "plus.viewfinder")
++                            }
++                            .tint(.purple)
++
++                            Button {
++                                rescanConfirmationRoom = summary.roomIndex
++                            } label: {
++                                Label("إعادة المسح", systemImage: "viewfinder")
++                            }
++                            .tint(.orange)
++                        }
++                    }
++                }
++            }
++
++            if !model.roomRevisionRecords.isEmpty {
++                Section("سجل إعادة المسح") {
++                    ForEach(model.roomRevisionRecords.sorted(by: { $0.createdAt > $1.createdAt })) { revision in
++                        HStack {
++                            VStack(alignment: .leading, spacing: 4) {
++                                Text("الغرفة \(revision.roomIndex) — مراجعة \(revision.revisionNumber)")
++                                    .font(.headline)
++                                Text(revision.createdAt.formatted(date: .abbreviated, time: .shortened))
++                                    .font(.caption2)
++                                    .foregroundStyle(.secondary)
++                            }
++                            Spacer()
++                            Text(revision.decision.arabicTitle)
++                                .font(.caption2.bold())
++                        }
++                    }
++                }
++            }
++
++            if !model.roomCorrectionRecords.isEmpty {
++                Section("سجل الأجزاء المكملة") {
++                    ForEach(model.roomCorrectionRecords.sorted(by: { $0.createdAt > $1.createdAt })) { correction in
++                        HStack {
++                            VStack(alignment: .leading, spacing: 4) {
++                                Text("الغرفة \(correction.roomIndex) — جزء \(correction.correctionNumber)")
++                                    .font(.headline)
++                                Text("\(correction.metrics.wallCount) حائط • \(correction.metrics.doorCount) باب")
++                                    .font(.caption2)
++                                    .foregroundStyle(.secondary)
++                            }
++                            Spacer()
++                            Text(correction.decision.arabicTitle)
++                                .font(.caption2.bold())
++                        }
++                    }
++                }
++            }
+         }
+-      }
+-
+-      if !model.roomRevisionRecords.isEmpty {
+-        Section("سجل المراجعات") {
+-          ForEach(model.roomRevisionRecords.sorted(by: { $0.createdAt > $1.createdAt })) {
+-            revision in
+-            VStack(alignment: .leading, spacing: 6) {
+-              HStack {
+-                Text("الغرفة \(revision.roomIndex) — مراجعة \(revision.revisionNumber)")
+-                  .font(.headline)
++    }
++
++    private func selectedRoomCard(_ summary: RoomReviewSummary) -> some View {
++        VStack(alignment: .leading, spacing: 10) {
++            HStack {
++                Text("الغرفة \(summary.roomIndex)")
++                    .font(.headline)
+                 Spacer()
+-                Text(revision.decision.arabicTitle)
+-                  .font(.caption2.bold())
+-                  .foregroundStyle(
+-                    revision.decision == .accepted
+-                      ? .green : revision.decision == .rejected ? .red : .orange)
+-              }
+-              Text(revision.createdAt.formatted(date: .abbreviated, time: .shortened))
+-                .font(.caption2)
+-                .foregroundStyle(.secondary)
++                if let selectedWall {
++                    Text("الحائط \(selectedWall.wallNumber)")
++                        .font(.caption.bold())
++                        .foregroundStyle(.cyan)
++                } else {
++                    Text("اضغط على حائط لتحريره")
++                        .font(.caption2)
++                        .foregroundStyle(.secondary)
++                }
++            }
++
++            HStack(spacing: 8) {
++                Button {
++                    showingWallEditor = true
++                } label: {
++                    Label("السماكات", systemImage: "ruler")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++
++                Button {
++                    showingOpeningsManager = true
++                } label: {
++                    Label("الأبواب", systemImage: "door.left.hand.open")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++                .tint(.cyan)
++            }
++
++            HStack(spacing: 8) {
++                Button {
++                    correctionConfirmationRoom = summary.roomIndex
++                } label: {
++                    Label("إضافة جزء ناقص", systemImage: "plus.viewfinder")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++                .tint(.purple)
++                .disabled(!model.isBuildingFinished)
++
++                Button {
++                    rescanConfirmationRoom = summary.roomIndex
++                } label: {
++                    Label("إعادة الغرفة", systemImage: "viewfinder")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++                .tint(.orange)
++                .disabled(!model.isBuildingFinished)
+             }
+-          }
+         }
+-      }
++        .padding(12)
++        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+     }
+-  }
+-
+-  private func selectedRoomCard(_ summary: RoomReviewSummary) -> some View {
+-    VStack(alignment: .leading, spacing: 10) {
+-      HStack {
+-        Text("الغرفة \(summary.roomIndex)")
+-          .font(.headline)
+-        Spacer()
+-        Text("\(summary.metrics.wallCount) حائط")
+-          .font(.caption.bold())
+-          .foregroundStyle(.secondary)
+-      }
+-
+-      HStack(spacing: 8) {
+-        Button {
+-          showingWallEditor = true
+-        } label: {
+-          Label("السماكات", systemImage: "ruler")
+-            .frame(maxWidth: .infinity)
+-        }
+-        .buttonStyle(.bordered)
+ 
+-        Button {
+-          previewURL = model.prepareReviewUSDZ(roomIndex: summary.roomIndex)
+-        } label: {
+-          Label("عرض 3D", systemImage: "cube")
+-            .frame(maxWidth: .infinity)
+-        }
+-        .buttonStyle(.bordered)
++    private func pendingRevisionCard(_ pending: PendingRoomRevision) -> some View {
++        VStack(alignment: .leading, spacing: 10) {
++            Label("نتيجة جديدة للغرفة \(pending.record.roomIndex)", systemImage: "arrow.triangle.2.circlepath.camera")
++                .font(.headline)
++
++            HStack(spacing: 12) {
++                comparisonColumn(title: "الحالية", metrics: pending.record.originalMetrics)
++                Image(systemName: "arrow.left.and.right").foregroundStyle(.secondary)
++                comparisonColumn(title: "الجديدة", metrics: pending.record.candidateMetrics)
++            }
+ 
+-        Button {
+-          rescanConfirmationRoom = summary.roomIndex
+-        } label: {
+-          Label("إعادة المسح", systemImage: "viewfinder")
+-            .frame(maxWidth: .infinity)
++            HStack(spacing: 10) {
++                Button(role: .destructive) {
++                    model.rejectPendingRoomRevision()
++                } label: {
++                    Label("رفض الجديدة", systemImage: "xmark").frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++
++                Button {
++                    model.acceptPendingRoomRevision()
++                } label: {
++                    Label("اعتماد الجديدة", systemImage: "checkmark.seal.fill").frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++            }
+         }
+-        .buttonStyle(.borderedProminent)
+-        .tint(.orange)
+-        .disabled(!model.isBuildingFinished)
+-      }
++        .padding(12)
++        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+     }
+-    .padding(12)
+-    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+-  }
+-
+-  private func pendingRevisionCard(_ pending: PendingRoomRevision) -> some View {
+-    VStack(alignment: .leading, spacing: 10) {
+-      Label(
+-        "نتيجة جديدة للغرفة \(pending.record.roomIndex)",
+-        systemImage: "arrow.triangle.2.circlepath.camera"
+-      )
+-      .font(.headline)
+-
+-      HStack(spacing: 12) {
+-        comparisonColumn(title: "الحالية", metrics: pending.record.originalMetrics)
+-        Image(systemName: "arrow.left.and.right")
+-          .foregroundStyle(.secondary)
+-        comparisonColumn(title: "الجديدة", metrics: pending.record.candidateMetrics)
+-      }
+-
+-      HStack(spacing: 10) {
+-        Button(role: .destructive) {
+-          model.rejectPendingRoomRevision()
+-        } label: {
+-          Label("رفض الجديدة", systemImage: "xmark")
+-            .frame(maxWidth: .infinity)
+-        }
+-        .buttonStyle(.bordered)
+ 
+-        Button {
+-          model.acceptPendingRoomRevision()
+-        } label: {
+-          Label("اعتماد الجديدة", systemImage: "checkmark.seal.fill")
+-            .frame(maxWidth: .infinity)
++    private func pendingCorrectionCard(_ pending: PendingRoomCorrection) -> some View {
++        VStack(alignment: .leading, spacing: 10) {
++            Label("جزء ناقص جديد للغرفة \(pending.record.roomIndex)", systemImage: "plus.viewfinder")
++                .font(.headline)
++            Text("\(pending.record.metrics.wallCount) حائط • \(pending.record.metrics.doorCount) باب • \(pending.record.metrics.openingCount) فتحة")
++                .font(.caption)
++                .foregroundStyle(.secondary)
++
++            HStack(spacing: 10) {
++                Button(role: .destructive) {
++                    model.rejectPendingRoomCorrection()
++                } label: {
++                    Label("رفض الجزء", systemImage: "xmark").frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++
++                Button {
++                    model.acceptPendingRoomCorrection()
++                } label: {
++                    Label("إضافته للمشروع", systemImage: "plus.square.on.square").frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++                .tint(.purple)
++            }
+         }
+-        .buttonStyle(.borderedProminent)
+-      }
+-    }
+-    .padding(12)
+-    .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+-    .overlay {
+-      RoundedRectangle(cornerRadius: 16)
+-        .stroke(.orange.opacity(0.45))
++        .padding(12)
++        .background(.purple.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+     }
+-  }
+-
+-  private func comparisonColumn(title: String, metrics: RoomRevisionMetrics) -> some View {
+-    VStack(alignment: .leading, spacing: 4) {
+-      Text(title)
+-        .font(.caption.bold())
+-      Text("حوائط: \(metrics.wallCount)")
+-      Text("أبواب: \(metrics.doorCount)")
+-      Text("نوافذ: \(metrics.windowCount)")
+-      Text("فتحات: \(metrics.openingCount)")
++
++    private func comparisonColumn(title: String, metrics: RoomRevisionMetrics) -> some View {
++        VStack(alignment: .leading, spacing: 4) {
++            Text(title).font(.caption.bold())
++            Text("حوائط: \(metrics.wallCount)")
++            Text("أبواب: \(metrics.doorCount)")
++            Text("نوافذ: \(metrics.windowCount)")
++            Text("فتحات: \(metrics.openingCount)")
++        }
++        .font(.caption2)
++        .frame(maxWidth: .infinity, alignment: .leading)
+     }
+-    .font(.caption2)
+-    .frame(maxWidth: .infinity, alignment: .leading)
+-  }
+ }
+ 
+ private struct PreviewItem: Identifiable {
+-  let url: URL
+-  var id: String { url.path }
++    let url: URL
++    var id: String { url.path }
+ }
+ 
+ private struct RoomPlan2DCanvas: View {
+-  let rooms: [CapturedRoom]
+-  @Binding var selectedRoomIndex: Int?
+-
+-  @State private var zoom: CGFloat = 1
+-  @State private var committedZoom: CGFloat = 1
+-  @State private var pan: CGSize = .zero
+-  @State private var committedPan: CGSize = .zero
+-
+-  private var snapshot: FloorPlanSnapshot {
+-    FloorPlanSnapshot(rooms: rooms)
+-  }
+-
+-  var body: some View {
+-    GeometryReader { proxy in
+-      Canvas { context, size in
+-        drawGrid(context: &context, size: size)
+-        drawPlan(context: &context, size: size)
+-      }
+-      .contentShape(Rectangle())
+-      .gesture(
+-        MagnificationGesture()
+-          .onChanged { value in
+-            zoom = min(max(committedZoom * value, 0.45), 8)
+-          }
+-          .onEnded { _ in
+-            committedZoom = zoom
+-          }
+-      )
+-      .simultaneousGesture(
+-        DragGesture(minimumDistance: 8)
+-          .onChanged { value in
+-            pan = CGSize(
+-              width: committedPan.width + value.translation.width,
+-              height: committedPan.height + value.translation.height
++    let rooms: [CapturedRoom]
++    let corrections: [AcceptedRoomCorrectionLayer]
++    let wallAssignments: [RoomWallAssignment]
++    let manualOpenings: [ProjectOpeningOverlay]
++    let suppressedSurfaceIdentifiers: Set<UUID>
++    @Binding var selectedRoomIndex: Int?
++    @Binding var selectedWall: RoomWallSelection?
++
++    @State private var zoom: CGFloat = 1
++    @State private var committedZoom: CGFloat = 1
++    @State private var pan: CGSize = .zero
++    @State private var committedPan: CGSize = .zero
++
++    private var snapshot: FloorPlanSnapshot {
++        FloorPlanSnapshot(
++            rooms: rooms,
++            corrections: corrections,
++            wallAssignments: wallAssignments,
++            manualOpenings: manualOpenings,
++            suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers
++        )
++    }
++
++    var body: some View {
++        GeometryReader { proxy in
++            Canvas { context, size in
++                drawGrid(context: &context, size: size)
++                drawPlan(context: &context, size: size)
++            }
++            .contentShape(Rectangle())
++            .gesture(
++                MagnificationGesture()
++                    .onChanged { value in zoom = min(max(committedZoom * value, 0.45), 8) }
++                    .onEnded { _ in committedZoom = zoom }
+             )
+-          }
+-          .onEnded { _ in
+-            committedPan = pan
+-          }
+-      )
+-      .simultaneousGesture(
+-        SpatialTapGesture()
+-          .onEnded { value in
+-            selectedRoomIndex = nearestRoom(to: value.location, size: proxy.size)
+-          }
+-      )
+-      .overlay(alignment: .topLeading) {
+-        VStack(alignment: .leading, spacing: 4) {
+-          Label("اسحب للتحريك • كبّر بإصبعين", systemImage: "hand.draw")
+-          Label("اضغط على حائط لاختيار الغرفة", systemImage: "cursorarrow.click")
++            .simultaneousGesture(
++                DragGesture(minimumDistance: 8)
++                    .onChanged { value in
++                        pan = CGSize(
++                            width: committedPan.width + value.translation.width,
++                            height: committedPan.height + value.translation.height
++                        )
++                    }
++                    .onEnded { _ in committedPan = pan }
++            )
++            .simultaneousGesture(
++                SpatialTapGesture().onEnded { value in
++                    if let hit = nearestWall(to: value.location, size: proxy.size) {
++                        selectedRoomIndex = hit.roomIndex
++                        selectedWall = hit.selection
++                    }
++                }
++            )
++            .overlay(alignment: .topLeading) {
++                VStack(alignment: .leading, spacing: 4) {
++                    Label("اسحب للتحريك • كبّر بإصبعين", systemImage: "hand.draw")
++                    Label("اضغط على حائط لاختياره", systemImage: "cursorarrow.click")
++                    Label("البنفسجي = جزء مكمل • الأحمر/السماوي = يدوي", systemImage: "paintpalette")
++                }
++                .font(.caption2)
++                .padding(8)
++                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
++                .padding(10)
++            }
++            .overlay(alignment: .bottomTrailing) {
++                Button {
++                    withAnimation {
++                        zoom = 1
++                        committedZoom = 1
++                        pan = .zero
++                        committedPan = .zero
++                    }
++                } label: {
++                    Image(systemName: "arrow.up.left.and.down.right.magnifyingglass").padding(10)
++                }
++                .buttonStyle(.borderedProminent)
++                .buttonBorderShape(.circle)
++                .padding(10)
++            }
+         }
+-        .font(.caption2)
+-        .padding(8)
+-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+-        .padding(10)
+-      }
+-      .overlay(alignment: .bottomTrailing) {
+-        Button {
+-          withAnimation {
+-            zoom = 1
+-            committedZoom = 1
+-            pan = .zero
+-            committedPan = .zero
+-          }
+-        } label: {
+-          Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
+-            .padding(10)
++        .frame(minHeight: 330)
++    }
++
++    private func drawGrid(context: inout GraphicsContext, size: CGSize) {
++        let spacing: CGFloat = 32
++        var path = Path()
++        var x: CGFloat = pan.width.truncatingRemainder(dividingBy: spacing)
++        while x < size.width {
++            path.move(to: CGPoint(x: x, y: 0))
++            path.addLine(to: CGPoint(x: x, y: size.height))
++            x += spacing
++        }
++        var y: CGFloat = pan.height.truncatingRemainder(dividingBy: spacing)
++        while y < size.height {
++            path.move(to: CGPoint(x: 0, y: y))
++            path.addLine(to: CGPoint(x: size.width, y: y))
++            y += spacing
+         }
+-        .buttonStyle(.borderedProminent)
+-        .buttonBorderShape(.circle)
+-        .padding(10)
+-      }
++        context.stroke(path, with: .color(.secondary.opacity(0.10)), lineWidth: 0.5)
+     }
+-    .frame(minHeight: 330)
+-  }
+-
+-  private func drawGrid(context: inout GraphicsContext, size: CGSize) {
+-    let spacing: CGFloat = 32
+-    var path = Path()
+-    var x: CGFloat = pan.width.truncatingRemainder(dividingBy: spacing)
+-    while x < size.width {
+-      path.move(to: CGPoint(x: x, y: 0))
+-      path.addLine(to: CGPoint(x: x, y: size.height))
+-      x += spacing
++
++    private func drawPlan(context: inout GraphicsContext, size: CGSize) {
++        guard !snapshot.segments.isEmpty else {
++            context.draw(
++                Text("لا توجد غرف مثبتة لعرضها").font(.headline).foregroundStyle(.secondary),
++                at: CGPoint(x: size.width / 2, y: size.height / 2)
++            )
++            return
++        }
++
++        for segment in snapshot.segments {
++            let start = screenPoint(for: segment.start, size: size)
++            let end = screenPoint(for: segment.end, size: size)
++            var path = Path()
++            path.move(to: start)
++            path.addLine(to: end)
++
++            let selected = segment.wallIdentifier == selectedWall?.wallIdentifier
++                && segment.roomIndex == selectedWall?.roomIndex
++            let color: Color
++            let width: CGFloat
++            var stroke = StrokeStyle(lineWidth: 3, lineCap: .round)
++
++            switch segment.kind {
++            case .wall:
++                if segment.source == .correction {
++                    color = .purple
++                    width = 3
++                    stroke.dash = [7, 5]
++                } else {
++                    color = selected ? .cyan : .primary
++                    width = selected ? 6 : 3
++                }
++            case .door:
++                color = segment.source == .manual ? .red : .orange
++                width = segment.source == .manual ? 7 : 5
++            case .window:
++                color = segment.source == .manual ? .cyan : .blue
++                width = 5
++            case .opening:
++                color = segment.source == .manual ? .teal : .green
++                width = 5
++            }
++            stroke.lineWidth = width
++            context.stroke(path, with: .color(color), style: stroke)
++        }
++
++        for label in snapshot.labels {
++            let point = screenPoint(for: label.position, size: size)
++            let selected = label.roomIndex == selectedRoomIndex
++            context.draw(
++                Text("غرفة \(label.roomIndex)")
++                    .font(.caption.bold())
++                    .foregroundStyle(selected ? Color.cyan : Color.primary),
++                at: point
++            )
++        }
+     }
+-    var y: CGFloat = pan.height.truncatingRemainder(dividingBy: spacing)
+-    while y < size.height {
+-      path.move(to: CGPoint(x: 0, y: y))
+-      path.addLine(to: CGPoint(x: size.width, y: y))
+-      y += spacing
++
++    private func nearestWall(to point: CGPoint, size: CGSize) -> (roomIndex: Int, selection: RoomWallSelection?)? {
++        var best: (segment: FloorPlanSnapshot.Segment, distance: CGFloat)?
++        for segment in snapshot.segments where segment.kind == .wall && segment.source == .roomPlan {
++            let start = screenPoint(for: segment.start, size: size)
++            let end = screenPoint(for: segment.end, size: size)
++            let distance = distanceFromPoint(point, toSegmentFrom: start, to: end)
++            if best == nil || distance < best!.distance {
++                best = (segment, distance)
++            }
++        }
++        guard let best, best.distance <= 30 else { return nil }
++        return (best.segment.roomIndex, best.segment.selection)
+     }
+-    context.stroke(path, with: .color(.secondary.opacity(0.10)), lineWidth: 0.5)
+-  }
+-
+-  private func drawPlan(context: inout GraphicsContext, size: CGSize) {
+-    guard !snapshot.segments.isEmpty else {
+-      context.draw(
+-        Text("لا توجد غرف مثبتة لعرضها").font(.headline).foregroundStyle(.secondary),
+-        at: CGPoint(x: size.width / 2, y: size.height / 2)
+-      )
+-      return
++
++    private func screenPoint(for world: SIMD2<Float>, size: CGSize) -> CGPoint {
++        let bounds = snapshot.bounds
++        let width = max(CGFloat(bounds.maxX - bounds.minX), 0.5)
++        let height = max(CGFloat(bounds.maxY - bounds.minY), 0.5)
++        let baseScale = min((size.width - 50) / width, (size.height - 50) / height)
++        let centerX = CGFloat(bounds.minX + bounds.maxX) / 2
++        let centerY = CGFloat(bounds.minY + bounds.maxY) / 2
++        return CGPoint(
++            x: size.width / 2 + (CGFloat(world.x) - centerX) * baseScale * zoom + pan.width,
++            y: size.height / 2 - (CGFloat(world.y) - centerY) * baseScale * zoom + pan.height
++        )
+     }
+ 
+-    for segment in snapshot.segments {
+-      let start = screenPoint(for: segment.start, size: size)
+-      let end = screenPoint(for: segment.end, size: size)
+-      var path = Path()
+-      path.move(to: start)
+-      path.addLine(to: end)
+-
+-      let selected = segment.roomIndex == selectedRoomIndex
+-      let style: Color
+-      let width: CGFloat
+-      switch segment.kind {
+-      case .wall:
+-        style = selected ? .cyan : .primary
+-        width = selected ? 5 : 3
+-      case .door:
+-        style = .orange
+-        width = 5
+-      case .window:
+-        style = .blue
+-        width = 4
+-      case .opening:
+-        style = .green
+-        width = 4
+-      }
+-      context.stroke(
+-        path, with: .color(style), style: StrokeStyle(lineWidth: width, lineCap: .round))
++    private func distanceFromPoint(_ point: CGPoint, toSegmentFrom start: CGPoint, to end: CGPoint) -> CGFloat {
++        let dx = end.x - start.x
++        let dy = end.y - start.y
++        let lengthSquared = dx * dx + dy * dy
++        guard lengthSquared > 0.0001 else { return hypot(point.x - start.x, point.y - start.y) }
++        let t = min(max(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0), 1)
++        let projection = CGPoint(x: start.x + t * dx, y: start.y + t * dy)
++        return hypot(point.x - projection.x, point.y - projection.y)
+     }
++}
+ 
+-    for label in snapshot.labels {
+-      let point = screenPoint(for: label.position, size: size)
+-      let selected = label.roomIndex == selectedRoomIndex
+-      context.draw(
+-        Text("غرفة \(label.roomIndex)")
+-          .font(.caption.bold())
+-          .foregroundStyle(selected ? Color.cyan : Color.primary),
+-        at: point
+-      )
++private struct FloorPlanSnapshot {
++    enum SegmentKind: Equatable { case wall, door, window, opening }
++    enum SegmentSource: Equatable { case roomPlan, correction, manual }
++
++    struct Segment: Identifiable {
++        let id: String
++        let roomIndex: Int
++        let kind: SegmentKind
++        let source: SegmentSource
++        let start: SIMD2<Float>
++        let end: SIMD2<Float>
++        let wallIdentifier: UUID?
++        let selection: RoomWallSelection?
+     }
+-  }
+-
+-  private func nearestRoom(to point: CGPoint, size: CGSize) -> Int? {
+-    var best: (room: Int, distance: CGFloat)?
+-    for segment in snapshot.segments where segment.kind == .wall {
+-      let start = screenPoint(for: segment.start, size: size)
+-      let end = screenPoint(for: segment.end, size: size)
+-      let distance = distanceFromPoint(point, toSegmentFrom: start, to: end)
+-      if best == nil || distance < best!.distance {
+-        best = (segment.roomIndex, distance)
+-      }
++
++    struct Label {
++        let roomIndex: Int
++        let position: SIMD2<Float>
+     }
+-    guard let best, best.distance <= 28 else { return selectedRoomIndex }
+-    return best.room
+-  }
+-
+-  private func screenPoint(for world: SIMD2<Float>, size: CGSize) -> CGPoint {
+-    let bounds = snapshot.bounds
+-    let width = max(CGFloat(bounds.maxX - bounds.minX), 0.5)
+-    let height = max(CGFloat(bounds.maxY - bounds.minY), 0.5)
+-    let baseScale = min((size.width - 50) / width, (size.height - 50) / height)
+-    let centerX = CGFloat(bounds.minX + bounds.maxX) / 2
+-    let centerY = CGFloat(bounds.minY + bounds.maxY) / 2
+-    return CGPoint(
+-      x: size.width / 2 + (CGFloat(world.x) - centerX) * baseScale * zoom + pan.width,
+-      y: size.height / 2 - (CGFloat(world.y) - centerY) * baseScale * zoom + pan.height
+-    )
+-  }
+-
+-  private func distanceFromPoint(_ point: CGPoint, toSegmentFrom start: CGPoint, to end: CGPoint)
+-    -> CGFloat
+-  {
+-    let dx = end.x - start.x
+-    let dy = end.y - start.y
+-    let lengthSquared = dx * dx + dy * dy
+-    guard lengthSquared > 0.0001 else {
+-      return hypot(point.x - start.x, point.y - start.y)
++
++    struct Bounds {
++        var minX: Float
++        var minY: Float
++        var maxX: Float
++        var maxY: Float
+     }
+-    let t = min(max(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0), 1)
+-    let projection = CGPoint(x: start.x + t * dx, y: start.y + t * dy)
+-    return hypot(point.x - projection.x, point.y - projection.y)
+-  }
+-}
+ 
+-private struct FloorPlanSnapshot {
+-  enum SegmentKind: Equatable {
+-    case wall
+-    case door
+-    case window
+-    case opening
+-  }
+-
+-  struct Segment: Identifiable {
+-    let id: String
+-    let roomIndex: Int
+-    let kind: SegmentKind
+-    let start: SIMD2<Float>
+-    let end: SIMD2<Float>
+-  }
+-
+-  struct Label {
+-    let roomIndex: Int
+-    let position: SIMD2<Float>
+-  }
+-
+-  struct Bounds {
+-    var minX: Float
+-    var minY: Float
+-    var maxX: Float
+-    var maxY: Float
+-  }
+-
+-  let segments: [Segment]
+-  let labels: [Label]
+-  let bounds: Bounds
+-
+-  init(rooms: [CapturedRoom]) {
+-    var newSegments: [Segment] = []
+-    var newLabels: [Label] = []
+-
+-    for (offset, room) in rooms.enumerated() {
+-      let roomIndex = offset + 1
+-      var wallCenters: [SIMD2<Float>] = []
+-
+-      func append(_ surfaces: [CapturedRoom.Surface], kind: SegmentKind) {
+-        for surface in surfaces {
+-          let transform = surface.transform
+-          let center = SIMD2<Float>(transform.columns.3.x, transform.columns.3.z)
+-          var tangent = SIMD2<Float>(transform.columns.0.x, transform.columns.0.z)
+-          let tangentLength = simd_length(tangent)
+-          tangent = tangentLength > 0.0001 ? tangent / tangentLength : SIMD2<Float>(1, 0)
+-          let halfWidth = max(surface.dimensions.x, 0.05) / 2
+-          let start = center - tangent * halfWidth
+-          let end = center + tangent * halfWidth
+-          newSegments.append(
+-            Segment(
+-              id: "\(roomIndex)-\(kind)-\(surface.identifier.uuidString)",
+-              roomIndex: roomIndex,
+-              kind: kind,
+-              start: start,
+-              end: end
+-            )
+-          )
+-          if kind == .wall {
+-            wallCenters.append(center)
+-          }
++    let segments: [Segment]
++    let labels: [Label]
++    let bounds: Bounds
++
++    init(
++        rooms: [CapturedRoom],
++        corrections: [AcceptedRoomCorrectionLayer],
++        wallAssignments: [RoomWallAssignment],
++        manualOpenings: [ProjectOpeningOverlay],
++        suppressedSurfaceIdentifiers: Set<UUID>
++    ) {
++        var newSegments: [Segment] = []
++        var newLabels: [Label] = []
++        var assignmentByKey: [WallKey: RoomWallAssignment] = [:]
++        for assignment in wallAssignments {
++            let key = WallKey(roomIndex: assignment.roomIndex, wallIdentifier: assignment.wallIdentifier)
++            if assignmentByKey[key] == nil {
++                assignmentByKey[key] = assignment
++            }
++        }
++
++        func appendRoom(_ room: CapturedRoom, roomIndex: Int, source: SegmentSource, addLabel: Bool) {
++            var wallCenters: [SIMD2<Float>] = []
++
++            func append(_ surfaces: [CapturedRoom.Surface], kind: SegmentKind) {
++                for surface in surfaces where !suppressedSurfaceIdentifiers.contains(surface.identifier) {
++                    let transform = surface.transform
++                    let center = SIMD2<Float>(transform.columns.3.x, transform.columns.3.z)
++                    var tangent = SIMD2<Float>(transform.columns.0.x, transform.columns.0.z)
++                    let tangentLength = simd_length(tangent)
++                    tangent = tangentLength > 0.0001 ? tangent / tangentLength : SIMD2<Float>(1, 0)
++                    let halfWidth = max(surface.dimensions.x, 0.05) / 2
++                    let assignment = kind == .wall
++                        ? assignmentByKey[WallKey(roomIndex: roomIndex, wallIdentifier: surface.identifier)]
++                        : nil
++                    let selection = assignment.map {
++                        RoomWallSelection(
++                            assignmentID: $0.id,
++                            roomIndex: $0.roomIndex,
++                            wallNumber: $0.wallNumber,
++                            wallIdentifier: $0.wallIdentifier,
++                            buildingWallID: $0.buildingWallID,
++                            geometry: $0.geometry
++                        )
++                    }
++                    newSegments.append(
++                        Segment(
++                            id: "\(roomIndex)-\(source)-\(kind)-\(surface.identifier.uuidString)",
++                            roomIndex: roomIndex,
++                            kind: kind,
++                            source: source,
++                            start: center - tangent * halfWidth,
++                            end: center + tangent * halfWidth,
++                            wallIdentifier: kind == .wall ? surface.identifier : nil,
++                            selection: selection
++                        )
++                    )
++                    if kind == .wall { wallCenters.append(center) }
++                }
++            }
++
++            append(room.walls, kind: .wall)
++            append(room.doors, kind: .door)
++            append(room.windows, kind: .window)
++            append(room.openings, kind: .opening)
++
++            if addLabel, !wallCenters.isEmpty {
++                let sum = wallCenters.reduce(SIMD2<Float>(repeating: 0), +)
++                newLabels.append(Label(roomIndex: roomIndex, position: sum / Float(wallCenters.count)))
++            }
+         }
+-      }
+ 
+-      append(room.walls, kind: .wall)
+-      append(room.doors, kind: .door)
+-      append(room.windows, kind: .window)
+-      append(room.openings, kind: .opening)
++        for (offset, room) in rooms.enumerated() {
++            appendRoom(room, roomIndex: offset + 1, source: .roomPlan, addLabel: true)
++        }
++        for correction in corrections {
++            appendRoom(correction.room, roomIndex: correction.roomIndex, source: .correction, addLabel: false)
++        }
++        for opening in manualOpenings {
++            let kind: SegmentKind
++            switch opening.kind {
++            case .door: kind = .door
++            case .opening: kind = .opening
++            case .window: kind = .window
++            }
++            newSegments.append(
++                Segment(
++                    id: "manual-\(opening.id.uuidString)",
++                    roomIndex: opening.roomIndex,
++                    kind: kind,
++                    source: .manual,
++                    start: opening.start,
++                    end: opening.end,
++                    wallIdentifier: nil,
++                    selection: nil
++                )
++            )
++        }
+ 
+-      if !wallCenters.isEmpty {
+-        let sum = wallCenters.reduce(SIMD2<Float>(repeating: 0), +)
+-        newLabels.append(Label(roomIndex: roomIndex, position: sum / Float(wallCenters.count)))
+-      }
++        segments = newSegments
++        labels = newLabels
++
++        if let first = newSegments.first {
++            var minX = min(first.start.x, first.end.x)
++            var maxX = max(first.start.x, first.end.x)
++            var minY = min(first.start.y, first.end.y)
++            var maxY = max(first.start.y, first.end.y)
++            for segment in newSegments.dropFirst() {
++                minX = min(minX, min(segment.start.x, segment.end.x))
++                maxX = max(maxX, max(segment.start.x, segment.end.x))
++                minY = min(minY, min(segment.start.y, segment.end.y))
++                maxY = max(maxY, max(segment.start.y, segment.end.y))
++            }
++            bounds = Bounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY)
++        } else {
++            bounds = Bounds(minX: -1, minY: -1, maxX: 1, maxY: 1)
++        }
+     }
+ 
+-    segments = newSegments
+-    labels = newLabels
+-
+-    if let first = newSegments.first {
+-      var minX = min(first.start.x, first.end.x)
+-      var maxX = max(first.start.x, first.end.x)
+-      var minY = min(first.start.y, first.end.y)
+-      var maxY = max(first.start.y, first.end.y)
+-      for segment in newSegments.dropFirst() {
+-        minX = min(minX, min(segment.start.x, segment.end.x))
+-        maxX = max(maxX, max(segment.start.x, segment.end.x))
+-        minY = min(minY, min(segment.start.y, segment.end.y))
+-        maxY = max(maxY, max(segment.start.y, segment.end.y))
+-      }
+-      bounds = Bounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY)
+-    } else {
+-      bounds = Bounds(minX: -1, minY: -1, maxX: 1, maxY: 1)
++    private struct WallKey: Hashable {
++        let roomIndex: Int
++        let wallIdentifier: UUID
+     }
+-  }
+ }
+diff --git a/LiDARLab/Features/RoomScan/RoomScanReviewModels.swift b/LiDARLab/Features/RoomScan/RoomScanReviewModels.swift
+index 35b6757..b6aefa5 100644
+--- a/LiDARLab/Features/RoomScan/RoomScanReviewModels.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanReviewModels.swift
+@@ -71,5 +71,6 @@ struct RoomReviewSummary: Identifiable, Equatable {
+   let roomIdentifier: UUID
+   let metrics: RoomRevisionMetrics
+   let revisionCount: Int
++  let correctionCount: Int
+   let sharedWallCount: Int
+ }
+diff --git a/LiDARLab/Features/RoomScan/RoomScanView.swift b/LiDARLab/Features/RoomScan/RoomScanView.swift
+index a126fff..a16b385 100644
+--- a/LiDARLab/Features/RoomScan/RoomScanView.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanView.swift
+@@ -85,9 +85,10 @@ struct RoomScanView: View {
+             RoomScanProjectReviewView(model: model)
+         }
+         .onChange(of: model.pendingRoomRevision?.id) { _, revisionID in
+-            if revisionID != nil {
+-                showingReviewCenter = true
+-            }
++            if revisionID != nil { showingReviewCenter = true }
++        }
++        .onChange(of: model.pendingRoomCorrection?.id) { _, correctionID in
++            if correctionID != nil { showingReviewCenter = true }
+         }
+         .sheet(item: Binding(
+             get: { model.recoverableProject },
+@@ -136,14 +137,14 @@ struct RoomScanView: View {
+ 
+             if model.isScanning {
+                 VStack(alignment: .leading, spacing: 5) {
+-                    Label(
+-                        "الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.",
+-                        systemImage: "door.left.hand.closed"
+-                    )
+-                    Label(
+-                        "الحائط المشترك سيأخذ نفس السماكة المسجلة للغرفة السابقة.",
+-                        systemImage: "link"
+-                    )
++                    if model.isRoomRescanActive {
++                        Label("إعادة مسح الغرفة \(model.activeRoomNumber): النسخة الأصلية لن تتغير قبل الاعتماد.", systemImage: "arrow.triangle.2.circlepath.camera")
++                    } else if model.isRoomCorrectionScanActive {
++                        Label("امسح الجزء الناقص فقط من الغرفة \(model.activeRoomNumber)، ثم أنهِه للمراجعة.", systemImage: "plus.viewfinder")
++                    } else {
++                        Label("الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.", systemImage: "door.left.hand.closed")
++                        Label("الحائط المشترك سيأخذ نفس السماكة المسجلة للغرفة السابقة.", systemImage: "link")
++                    }
+                 }
+                 .font(.caption)
+                 .foregroundStyle(.yellow)
+@@ -221,13 +222,17 @@ struct RoomScanView: View {
+                     showingReviewCenter = true
+                 } label: {
+                     Label(
+-                        model.pendingRoomRevision == nil ? "فتح مركز المراجعة 2D و3D" : "مراجعة نتيجة إعادة المسح",
+-                        systemImage: model.pendingRoomRevision == nil ? "square.3.layers.3d" : "exclamationmark.arrow.triangle.2.circlepath"
++                        model.pendingRoomRevision == nil && model.pendingRoomCorrection == nil
++                            ? "فتح مركز المراجعة 2D و3D"
++                            : "مراجعة نتيجة المسح الجديدة",
++                        systemImage: model.pendingRoomRevision == nil && model.pendingRoomCorrection == nil
++                            ? "square.3.layers.3d"
++                            : "exclamationmark.arrow.triangle.2.circlepath"
+                     )
+                     .frame(maxWidth: .infinity)
+                 }
+                 .buttonStyle(.borderedProminent)
+-                .tint(model.pendingRoomRevision == nil ? .cyan : .orange)
++                .tint(model.pendingRoomRevision == nil && model.pendingRoomCorrection == nil ? .cyan : .orange)
+             }
+ 
+             if model.capturedRoom != nil, !model.isScanning, !model.isPaused, !model.isProcessing {
+@@ -433,7 +438,26 @@ struct RoomScanView: View {
+ 
+     @ViewBuilder
+     private var activeScanControls: some View {
+-        if model.isRoomRescanActive {
++        if model.isRoomCorrectionScanActive {
++            Button(role: .cancel) {
++                model.cancelRoomCorrectionScan()
++            } label: {
++                Label("إلغاء الجزء", systemImage: "xmark.circle")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.bordered)
++            .controlSize(.large)
++
++            Button {
++                model.finishCurrentRoom()
++            } label: {
++                Label("إنهاء الجزء للمراجعة", systemImage: "plus.viewfinder")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.borderedProminent)
++            .tint(.purple)
++            .controlSize(.large)
++        } else if model.isRoomRescanActive {
+             Button(role: .cancel) {
+                 model.cancelRoomRescan()
+             } label: {
+diff --git a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
+index 87520a4..8c6840b 100644
+--- a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
+@@ -87,6 +87,17 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+     @Published private(set) var pendingRoomRevision: PendingRoomRevision?
+     @Published private(set) var isRoomRescanActive = false
+ 
++    /// Phase 5C: accepted supplemental scans that complete a missing portion without
++    /// replacing the primary CapturedRoom result.
++    @Published private(set) var roomCorrectionRecords: [RoomCorrectionRecord] = []
++    @Published private(set) var pendingRoomCorrection: PendingRoomCorrection?
++    @Published private(set) var acceptedRoomCorrections: [AcceptedRoomCorrectionLayer] = []
++    @Published private(set) var isRoomCorrectionScanActive = false
++
++    /// Phase 5D: app-owned openings and suppressions layered over immutable RoomPlan data.
++    @Published private(set) var manualOpeningRecords: [ManualOpeningRecord] = []
++    @Published private(set) var suppressedDetectedSurfaces: [SuppressedDetectedSurfaceRecord] = []
++
+     private weak var captureView: RoomCaptureView?
+     private var pendingStartRequest: PendingStartRequest?
+     private var shouldAcceptNextProcessedRoom = false
+@@ -102,6 +113,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+     private var didCheckForRecoverableProject = false
+     private var relocalizationNormalFrameCount = 0
+     private var roomRescanTargetIndex: Int?
++    private var roomCorrectionTargetIndex: Int?
+     private var buildingWasFinishedBeforeRescan = false
+     private let imageContext = CIContext(options: nil)
+ 
+@@ -188,7 +200,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+     }
+ 
+     var canPauseCurrentRoom: Bool {
+-        isScanning && !isProcessing && !isRoomRescanActive
++        isScanning && !isProcessing && !isRoomRescanActive && !isRoomCorrectionScanActive
+     }
+ 
+     var canResumePausedRoom: Bool {
+@@ -217,6 +229,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+                 roomIdentifier: room.identifier,
+                 metrics: RoomRevisionMetrics(room: room),
+                 revisionCount: roomRevisionRecords.filter { $0.roomIndex == roomIndex }.count,
++                correctionCount: roomCorrectionRecords.filter { $0.roomIndex == roomIndex && $0.decision == .accepted }.count,
+                 sharedWallCount: wallItems(for: roomIndex).filter(\.isShared).count
+             )
+         }
+@@ -359,9 +372,13 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         isProcessing = true
+         shouldAcceptNextProcessedRoom = true
+         pendingStopAction = .finalizeRoom
+-        statusMessage = isRoomRescanActive
+-            ? "جارٍ معالجة إعادة مسح الغرفة رقم \(activeRoomNumber) للمقارنة…"
+-            : "جارٍ حفظ نقطة الرجوع ثم تثبيت الغرفة رقم \(activeRoomNumber)…"
++        if isRoomRescanActive {
++            statusMessage = "جارٍ معالجة إعادة مسح الغرفة رقم \(activeRoomNumber) للمقارنة…"
++        } else if isRoomCorrectionScanActive {
++            statusMessage = "جارٍ معالجة الجزء الناقص للغرفة رقم \(activeRoomNumber) للمراجعة…"
++        } else {
++            statusMessage = "جارٍ حفظ نقطة الرجوع ثم تثبيت الغرفة رقم \(activeRoomNumber)…"
++        }
+         saveWorldMapCheckpoint(reason: "room-finalization") { [weak self] in
+             guard let self else { return }
+             self.captureView?.captureSession.stop(pauseARSession: false)
+@@ -573,10 +590,9 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+             errorMessage = "أنهِ المبنى أولًا قبل إعادة مسح غرفة محفوظة."
+             return
+         }
+-        guard !isScanning, !isPaused, !isProcessing, pendingRoomRevision == nil else {
+-            errorMessage = pendingRoomRevision == nil
+-                ? "أنهِ العملية الحالية أولًا."
+-                : "راجع نتيجة إعادة المسح الحالية قبل بدء مراجعة جديدة."
++        guard !isScanning, !isPaused, !isProcessing,
++              pendingRoomRevision == nil, pendingRoomCorrection == nil else {
++            errorMessage = "أنهِ أو راجع العملية الحالية قبل بدء إعادة مسح جديدة."
+             return
+         }
+         guard let captureView else {
+@@ -599,6 +615,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         buildingWasFinishedBeforeRescan = isBuildingFinished
+         isBuildingFinished = false
+         isRoomRescanActive = true
++        isRoomCorrectionScanActive = false
+         roomRescanTargetIndex = roomIndex
+         activeRoomNumber = roomIndex
+         activeRoomFragmentCount = 0
+@@ -839,6 +856,427 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         )
+     }
+ 
++
++    // MARK: - Phase 5C missing-area correction scans
++
++    func beginMissingAreaScan(roomIndex: Int) {
++        guard RoomCaptureSession.isSupported else {
++            errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
++            return
++        }
++        guard roomIndex > 0, roomIndex <= capturedRooms.count else {
++            errorMessage = "رقم الغرفة غير صالح."
++            return
++        }
++        guard isBuildingFinished else {
++            errorMessage = "أنهِ المبنى أولًا قبل إضافة جزء ناقص."
++            return
++        }
++        guard !isScanning, !isPaused, !isProcessing,
++              pendingRoomRevision == nil, pendingRoomCorrection == nil else {
++            errorMessage = "أنهِ أو راجع العملية الحالية أولًا."
++            return
++        }
++        guard let captureView else {
++            errorMessage = "عارض RoomPlan غير جاهز بعد."
++            return
++        }
++
++        if sharedARSession.currentFrame == nil, let recoveredWorldMapURL {
++            activeRoomNumber = 0
++            recoveredProjectRequiresRelocalization = true
++            beginRelocalization(using: recoveredWorldMapURL)
++            errorMessage = "طابق مكان المشروع المحفوظ أولًا، ثم ابدأ إضافة الجزء الناقص."
++            return
++        }
++        guard !recoveredProjectRequiresRelocalization else {
++            errorMessage = "أعد تحديد موقع المشروع قبل إضافة جزء ناقص."
++            return
++        }
++
++        buildingWasFinishedBeforeRescan = isBuildingFinished
++        isBuildingFinished = false
++        isRoomCorrectionScanActive = true
++        roomCorrectionTargetIndex = roomIndex
++        activeRoomNumber = roomIndex
++        activeRoomFragmentCount = 0
++        activeRoomDefaultThicknessMeters = roomWallConfigurations
++            .first(where: { $0.roomIndex == roomIndex })?.defaultThicknessMeters
++            ?? buildingDefaultWallThicknessMeters
++        shouldAcceptNextProcessedRoom = false
++        pendingStopAction = nil
++        latestExport = nil
++        statusMessage = "إضافة جزء ناقص للغرفة \(roomIndex): امسح المنطقة المفقودة فقط، ثم اضغط إنهاء للمراجعة."
++
++        captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
++        isScanning = true
++        persistSessionCheckpoint()
++    }
++
++    func cancelRoomCorrectionScan() {
++        guard isRoomCorrectionScanActive else { return }
++        shouldAcceptNextProcessedRoom = false
++        pendingStopAction = nil
++        captureView?.captureSession.stop(pauseARSession: true)
++        sharedARSession.pause()
++        isScanning = false
++        isProcessing = false
++        isPaused = false
++        isRoomCorrectionScanActive = false
++        roomCorrectionTargetIndex = nil
++        activeRoomNumber = 0
++        activeRoomFragmentCount = 0
++        isBuildingFinished = buildingWasFinishedBeforeRescan
++        statusMessage = "تم إلغاء مسح الجزء الناقص دون تغيير المشروع."
++        persistSessionCheckpoint()
++        writeManifest()
++    }
++
++    func acceptPendingRoomCorrection() {
++        guard let pending = pendingRoomCorrection else { return }
++        updateCorrectionDecision(id: pending.id, decision: .accepted)
++        guard let acceptedRecord = roomCorrectionRecords.first(where: { $0.id == pending.id }) else { return }
++        acceptedRoomCorrections.removeAll { $0.id == acceptedRecord.id }
++        acceptedRoomCorrections.append(
++            AcceptedRoomCorrectionLayer(record: acceptedRecord, room: pending.candidateRoom)
++        )
++        pendingRoomCorrection = nil
++        isBuildingFinished = true
++        statusMessage = "تم اعتماد الجزء الناقص للغرفة \(acceptedRecord.roomIndex) كطبقة مكملة دون استبدال المسح الأصلي."
++        persistRoomCorrectionDocument()
++        persistSessionCheckpoint()
++        writeManifest()
++        UINotificationFeedbackGenerator().notificationOccurred(.success)
++    }
++
++    func rejectPendingRoomCorrection() {
++        guard let pending = pendingRoomCorrection else { return }
++        updateCorrectionDecision(id: pending.id, decision: .rejected)
++        pendingRoomCorrection = nil
++        isBuildingFinished = true
++        statusMessage = "تم رفض الجزء الإضافي للغرفة \(pending.record.roomIndex)، وبقي المشروع دون تغيير."
++        persistRoomCorrectionDocument()
++        persistSessionCheckpoint()
++        writeManifest()
++    }
++
++    private func completeRoomCorrection(with candidate: CapturedRoom) {
++        guard let roomIndex = roomCorrectionTargetIndex,
++              roomIndex > 0, roomIndex <= capturedRooms.count else {
++            cancelRoomCorrectionScan()
++            return
++        }
++
++        let correctionNumber = (roomCorrectionRecords
++            .filter { $0.roomIndex == roomIndex }
++            .map(\.correctionNumber)
++            .max() ?? 0) + 1
++        let relativePath = String(
++            format: "Corrections/Room-%02d/Correction-%03d/candidate.json",
++            roomIndex,
++            correctionNumber
++        )
++        let record = RoomCorrectionRecord(
++            id: UUID(),
++            roomIndex: roomIndex,
++            correctionNumber: correctionNumber,
++            createdAt: Date(),
++            decidedAt: nil,
++            decision: .pending,
++            capturedRoomIdentifier: candidate.identifier,
++            metrics: RoomRevisionMetrics(room: candidate),
++            candidateRelativePath: relativePath
++        )
++
++        persistRoomCorrectionFile(record: record, room: candidate)
++        roomCorrectionRecords.append(record)
++        pendingRoomCorrection = PendingRoomCorrection(record: record, candidateRoom: candidate)
++        persistRoomCorrectionDocument()
++
++        sharedARSession.pause()
++        isScanning = false
++        isProcessing = false
++        isPaused = false
++        isRoomCorrectionScanActive = false
++        roomCorrectionTargetIndex = nil
++        activeRoomNumber = 0
++        activeRoomFragmentCount = 0
++        isBuildingFinished = true
++        statusMessage = "اكتمل مسح الجزء الناقص للغرفة \(roomIndex). افتح مركز المراجعة لاعتماده أو رفضه."
++        persistSessionCheckpoint()
++        writeManifest()
++        UINotificationFeedbackGenerator().notificationOccurred(.warning)
++    }
++
++    private func updateCorrectionDecision(id: UUID, decision: RoomCorrectionDecision) {
++        guard let index = roomCorrectionRecords.firstIndex(where: { $0.id == id }) else { return }
++        roomCorrectionRecords[index].decision = decision
++        roomCorrectionRecords[index].decidedAt = Date()
++    }
++
++    private func persistRoomCorrectionFile(record: RoomCorrectionRecord, room: CapturedRoom) {
++        guard let buildingFolderURL else { return }
++        do {
++            let url = buildingFolderURL.appendingPathComponent(record.candidateRelativePath)
++            try FileManager.default.createDirectory(
++                at: url.deletingLastPathComponent(),
++                withIntermediateDirectories: true
++            )
++            try configuredEncoder().encode(room).write(to: url, options: .atomic)
++        } catch {
++            errorMessage = "تعذر حفظ الجزء الإضافي: \(error.localizedDescription)"
++        }
++    }
++
++    private func persistRoomCorrectionDocument() {
++        guard let buildingFolderURL else { return }
++        do {
++            let folder = buildingFolderURL.appendingPathComponent("Corrections", isDirectory: true)
++            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
++            let document = RoomCorrectionDocument(
++                schemaVersion: 1,
++                updatedAt: Date(),
++                corrections: roomCorrectionRecords
++            )
++            try configuredEncoder().encode(document)
++                .write(to: folder.appendingPathComponent("room-corrections.json"), options: .atomic)
++        } catch {
++            errorMessage = "تعذر تحديث سجل الأجزاء الإضافية: \(error.localizedDescription)"
++        }
++    }
++
++    private func loadRoomCorrectionHistory(from folder: URL) {
++        let url = folder
++            .appendingPathComponent("Corrections", isDirectory: true)
++            .appendingPathComponent("room-corrections.json")
++        guard let data = try? Data(contentsOf: url),
++              let document = try? configuredDecoder().decode(RoomCorrectionDocument.self, from: data) else {
++            return
++        }
++
++        roomCorrectionRecords = document.corrections
++        acceptedRoomCorrections = []
++        pendingRoomCorrection = nil
++
++        for record in document.corrections.sorted(by: { $0.createdAt < $1.createdAt }) {
++            let roomURL = folder.appendingPathComponent(record.candidateRelativePath)
++            guard let roomData = try? Data(contentsOf: roomURL),
++                  let room = try? configuredDecoder().decode(CapturedRoom.self, from: roomData) else {
++                continue
++            }
++            switch record.decision {
++            case .accepted:
++                acceptedRoomCorrections.append(AcceptedRoomCorrectionLayer(record: record, room: room))
++            case .pending:
++                if pendingRoomCorrection == nil || record.createdAt > pendingRoomCorrection!.record.createdAt {
++                    pendingRoomCorrection = PendingRoomCorrection(record: record, candidateRoom: room)
++                }
++            case .rejected:
++                break
++            }
++        }
++    }
++
++    // MARK: - Phase 5D manual openings and detected-surface overrides
++
++    func wallSelection(roomIndex: Int, wallIdentifier: UUID) -> RoomWallSelection? {
++        guard let assignment = roomWallAssignments.first(where: {
++            $0.roomIndex == roomIndex && $0.wallIdentifier == wallIdentifier
++        }) else { return nil }
++        return RoomWallSelection(
++            assignmentID: assignment.id,
++            roomIndex: assignment.roomIndex,
++            wallNumber: assignment.wallNumber,
++            wallIdentifier: assignment.wallIdentifier,
++            buildingWallID: assignment.buildingWallID,
++            geometry: assignment.geometry
++        )
++    }
++
++    func wallSelections(for roomIndex: Int) -> [RoomWallSelection] {
++        roomWallAssignments
++            .filter { $0.roomIndex == roomIndex }
++            .sorted { $0.wallNumber < $1.wallNumber }
++            .map {
++                RoomWallSelection(
++                    assignmentID: $0.id,
++                    roomIndex: $0.roomIndex,
++                    wallNumber: $0.wallNumber,
++                    wallIdentifier: $0.wallIdentifier,
++                    buildingWallID: $0.buildingWallID,
++                    geometry: $0.geometry
++                )
++            }
++    }
++
++    func manualOpenings(for roomIndex: Int) -> [ManualOpeningRecord] {
++        let wallIDs = Set(roomWallAssignments.filter { $0.roomIndex == roomIndex }.map(\.buildingWallID))
++        return manualOpeningRecords
++            .filter { wallIDs.contains($0.buildingWallID) }
++            .sorted { $0.createdAt < $1.createdAt }
++    }
++
++    var manualOpeningOverlays: [ProjectOpeningOverlay] {
++        manualOpeningRecords.map { record in
++            let tangent = normalized2D(SIMD2<Float>(record.tangentX, record.tangentZ))
++            let center = SIMD2<Float>(record.centerX, record.centerZ)
++            let halfWidth = Float(record.widthMeters) / 2
++            return ProjectOpeningOverlay(
++                id: record.id,
++                roomIndex: record.sourceRoomIndex,
++                buildingWallID: record.buildingWallID,
++                kind: record.kind,
++                start: center - tangent * halfWidth,
++                end: center + tangent * halfWidth,
++                centerY: record.centerY,
++                widthMeters: Float(record.widthMeters),
++                heightMeters: Float(record.heightMeters),
++                isManual: true
++            )
++        }
++    }
++
++    var suppressedSurfaceIdentifiers: Set<UUID> {
++        Set(suppressedDetectedSurfaces.map(\.surfaceIdentifier))
++    }
++
++    func detectedOpeningItems(for roomIndex: Int) -> [DetectedOpeningDisplayItem] {
++        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return [] }
++        let room = capturedRooms[roomIndex - 1]
++        let suppressed = suppressedSurfaceIdentifiers
++        var items: [DetectedOpeningDisplayItem] = []
++
++        func append(_ surfaces: [CapturedRoom.Surface], kind: DetectedSurfaceKind) {
++            items.append(contentsOf: surfaces.map {
++                DetectedOpeningDisplayItem(
++                    roomIndex: roomIndex,
++                    surfaceIdentifier: $0.identifier,
++                    kind: kind,
++                    parentWallIdentifier: $0.parentIdentifier,
++                    widthMeters: $0.dimensions.x,
++                    heightMeters: $0.dimensions.y,
++                    isSuppressed: suppressed.contains($0.identifier)
++                )
++            })
++        }
++
++        append(room.doors, kind: .door)
++        append(room.openings, kind: .opening)
++        append(room.windows, kind: .window)
++        return items
++    }
++
++    func setDetectedSurfaceSuppressed(_ item: DetectedOpeningDisplayItem, suppressed: Bool) {
++        suppressedDetectedSurfaces.removeAll { $0.surfaceIdentifier == item.surfaceIdentifier }
++        if suppressed {
++            suppressedDetectedSurfaces.append(
++                SuppressedDetectedSurfaceRecord(
++                    id: UUID(),
++                    roomIndex: item.roomIndex,
++                    surfaceIdentifier: item.surfaceIdentifier,
++                    kind: item.kind,
++                    createdAt: Date()
++                )
++            )
++        }
++        persistManualOpeningDocument()
++    }
++
++    @discardableResult
++    func saveManualOpening(
++        existingID: UUID? = nil,
++        selection: RoomWallSelection,
++        kind: ManualOpeningKind,
++        positionPercent: Double,
++        widthCentimeters: Double,
++        heightCentimeters: Double,
++        sillHeightCentimeters: Double,
++        connectsRoomIndex: Int?
++    ) -> UUID {
++        let geometry = selection.geometry
++        let tangent = normalized2D(SIMD2<Float>(geometry.tangentX, geometry.tangentZ))
++        let normal = normalized2D(SIMD2<Float>(geometry.normalX, geometry.normalZ))
++        let ratio = min(max(positionPercent / 100.0, 0), 1)
++        let width = min(max(widthCentimeters / 100.0, 0.20), Double(geometry.widthMeters))
++        let height = min(max(heightCentimeters / 100.0, 0.20), Double(geometry.heightMeters))
++        let sill = kind == .window
++            ? min(max(sillHeightCentimeters / 100.0, 0), max(Double(geometry.heightMeters) - height, 0))
++            : 0
++        let horizontalOffset = Float((ratio - 0.5) * Double(geometry.widthMeters))
++        let center2D = SIMD2<Float>(geometry.centerX, geometry.centerZ) + tangent * horizontalOffset
++        let wallBottomY = Double(geometry.centerY) - Double(geometry.heightMeters) / 2.0
++        let centerY = Float(wallBottomY + sill + height / 2.0)
++        let now = Date()
++        let id = existingID ?? UUID()
++        let createdAt = existingID.flatMap { existing in
++            manualOpeningRecords.first(where: { $0.id == existing })?.createdAt
++        } ?? now
++        let record = ManualOpeningRecord(
++            id: id,
++            buildingWallID: selection.buildingWallID,
++            sourceRoomIndex: selection.roomIndex,
++            sourceWallIdentifier: selection.wallIdentifier,
++            kind: kind,
++            positionRatio: ratio,
++            widthMeters: width,
++            heightMeters: height,
++            sillHeightMeters: sill,
++            connectsRoomIndex: connectsRoomIndex == selection.roomIndex ? nil : connectsRoomIndex,
++            centerX: center2D.x,
++            centerY: centerY,
++            centerZ: center2D.y,
++            tangentX: tangent.x,
++            tangentZ: tangent.y,
++            normalX: normal.x,
++            normalZ: normal.y,
++            createdAt: createdAt,
++            updatedAt: now
++        )
++
++        if let index = manualOpeningRecords.firstIndex(where: { $0.id == id }) {
++            manualOpeningRecords[index] = record
++        } else {
++            manualOpeningRecords.append(record)
++        }
++        persistManualOpeningDocument()
++        return id
++    }
++
++    func deleteManualOpening(id: UUID) {
++        manualOpeningRecords.removeAll { $0.id == id }
++        persistManualOpeningDocument()
++    }
++
++    private func persistManualOpeningDocument() {
++        guard let buildingFolderURL else { return }
++        do {
++            let reviewFolder = buildingFolderURL.appendingPathComponent("Review", isDirectory: true)
++            try FileManager.default.createDirectory(at: reviewFolder, withIntermediateDirectories: true)
++            let document = ManualOpeningDocument(
++                schemaVersion: 1,
++                updatedAt: Date(),
++                manualOpenings: manualOpeningRecords,
++                suppressedDetectedSurfaces: suppressedDetectedSurfaces
++            )
++            try configuredEncoder().encode(document)
++                .write(to: reviewFolder.appendingPathComponent("manual-openings.json"), options: .atomic)
++        } catch {
++            errorMessage = "تعذر حفظ تعديلات الأبواب والفتحات: \(error.localizedDescription)"
++        }
++    }
++
++    private func loadManualOpeningDocument(from folder: URL) {
++        let url = folder
++            .appendingPathComponent("Review", isDirectory: true)
++            .appendingPathComponent("manual-openings.json")
++        guard let data = try? Data(contentsOf: url),
++              let document = try? configuredDecoder().decode(ManualOpeningDocument.self, from: data) else {
++            return
++        }
++        manualOpeningRecords = document.manualOpenings
++        suppressedDetectedSurfaces = document.suppressedDetectedSurfaces
++    }
++
+     func clearError() {
+         errorMessage = nil
+     }
+@@ -971,6 +1409,8 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+     func handleAppBecameInactive() {
+         if isRoomRescanActive {
+             cancelRoomRescan()
++        } else if isRoomCorrectionScanActive {
++            cancelRoomCorrectionScan()
+         } else if isScanning {
+             requestPauseCurrentRoom(reason: .appInterruption)
+         } else if isRelocalizing {
+@@ -1086,6 +1526,8 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+                 capturedStructure = structure
+             }
+             loadRoomRevisionHistory(from: folder)
++            loadRoomCorrectionHistory(from: folder)
++            loadManualOpeningDocument(from: folder)
+ 
+             activeRoomNumber = checkpoint.activeRoomNumber
+             activeRoomFragmentCount = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count
+@@ -1419,9 +1861,21 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+             pendingStopAction = nil
+             isProcessing = false
+             sharedARSession.pause()
+-            isPaused = activeRoomNumber > 0
++            isPaused = activeRoomNumber > 0 && !isRoomRescanActive && !isRoomCorrectionScanActive
++            if isRoomRescanActive {
++                isRoomRescanActive = false
++                roomRescanTargetIndex = nil
++                activeRoomNumber = 0
++                isBuildingFinished = buildingWasFinishedBeforeRescan
++            }
++            if isRoomCorrectionScanActive {
++                isRoomCorrectionScanActive = false
++                roomCorrectionTargetIndex = nil
++                activeRoomNumber = 0
++                isBuildingFinished = buildingWasFinishedBeforeRescan
++            }
+             errorMessage = error.localizedDescription
+-            statusMessage = "تعذر حفظ الجزء الحالي. يمكنك محاولة استكمال الغرفة من نفس المكان."
++            statusMessage = "تعذر حفظ نتيجة المسح الحالية. حاول من جديد من نفس المكان."
+             persistSessionCheckpoint()
+             writeManifest()
+             return false
+@@ -1429,8 +1883,14 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+ 
+         isScanning = false
+         isProcessing = true
+-        let fragmentNumber = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count + 1
+-        statusMessage = "جارٍ إنشاء نتيجة الجزء \(fragmentNumber) من الغرفة رقم \(activeRoomNumber)…"
++        if isRoomRescanActive {
++            statusMessage = "جارٍ معالجة إعادة مسح الغرفة رقم \(activeRoomNumber)…"
++        } else if isRoomCorrectionScanActive {
++            statusMessage = "جارٍ معالجة الجزء الناقص للغرفة رقم \(activeRoomNumber)…"
++        } else {
++            let fragmentNumber = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count + 1
++            statusMessage = "جارٍ إنشاء نتيجة الجزء \(fragmentNumber) من الغرفة رقم \(activeRoomNumber)…"
++        }
+         return true
+     }
+ 
+@@ -1443,13 +1903,19 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         if let error {
+             let failedRoomNumber = activeRoomNumber
+             sharedARSession.pause()
+-            isPaused = activeRoomNumber > 0 && !isRoomRescanActive
++            isPaused = activeRoomNumber > 0 && !isRoomRescanActive && !isRoomCorrectionScanActive
+             if isRoomRescanActive {
+                 isRoomRescanActive = false
+                 roomRescanTargetIndex = nil
+                 activeRoomNumber = 0
+                 isBuildingFinished = buildingWasFinishedBeforeRescan
+             }
++            if isRoomCorrectionScanActive {
++                isRoomCorrectionScanActive = false
++                roomCorrectionTargetIndex = nil
++                activeRoomNumber = 0
++                isBuildingFinished = buildingWasFinishedBeforeRescan
++            }
+             errorMessage = error.localizedDescription
+             statusMessage = "تعذر معالجة الجزء الحالي من الغرفة رقم \(failedRoomNumber). يمكنك المحاولة من جديد."
+             persistSessionCheckpoint()
+@@ -1461,6 +1927,10 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+             completeRoomRescan(with: processedResult)
+             return
+         }
++        if isRoomCorrectionScanActive, stopAction == .finalizeRoom {
++            completeRoomCorrection(with: processedResult)
++            return
++        }
+ 
+         let roomIndex = activeRoomNumber
+         let fragmentIndex = fragmentMetadata.filter { $0.roomIndex == roomIndex }.count + 1
+@@ -1930,6 +2400,13 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         pendingRoomRevision = nil
+         isRoomRescanActive = false
+         roomRescanTargetIndex = nil
++        roomCorrectionRecords = []
++        pendingRoomCorrection = nil
++        acceptedRoomCorrections = []
++        isRoomCorrectionScanActive = false
++        roomCorrectionTargetIndex = nil
++        manualOpeningRecords = []
++        suppressedDetectedSurfaces = []
+         buildingWasFinishedBeforeRescan = false
+         shouldAcceptNextProcessedRoom = false
+         pendingStopAction = nil
+@@ -1949,6 +2426,8 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+             )
+             buildingFolderURL = folder
+             persistWallMetadata()
++            persistRoomCorrectionDocument()
++            persistManualOpeningDocument()
+             persistSessionCheckpoint()
+             writeManifest()
+         } catch {
+diff --git a/ROOMSCAN_CORRECTIONS_OPENINGS_PHASE5CD.md b/ROOMSCAN_CORRECTIONS_OPENINGS_PHASE5CD.md
+new file mode 100644
+index 0000000..72a60ab
+--- /dev/null
++++ b/ROOMSCAN_CORRECTIONS_OPENINGS_PHASE5CD.md
+@@ -0,0 +1,43 @@
++# RoomScan Phase 5C/5D — Missing Areas and Manual Openings
++
++## 5C: إضافة جزء ناقص
++
++- يختار المستخدم غرفة مكتملة من مركز المراجعة.
++- يبدأ RoomPlan جلسة قصيرة مرتبطة بالمشروع المكاني الحالي.
++- النتيجة لا تستبدل `FrozenRooms/Room-XX/room.json`.
++- تحفظ كطبقة مستقلة داخل `Corrections`، ثم يقبلها المستخدم أو يرفضها.
++- الطبقات المقبولة تظهر في مخطط 2D ونموذج SceneKit 3D.
++- يظل ملف RoomPlan الأصلي هو المصدر القابل للاستعادة.
++
++```text
++Corrections/
++├── room-corrections.json
++└── Room-01/
++    └── Correction-001/
++        └── candidate.json
++```
++
++## 5D: الأبواب والفتحات والنوافذ اليدوية
++
++- يمكن اختيار حائط من مخطط 2D ثم إضافة باب أو فتحة أو نافذة.
++- العنصر مرتبط بـ `buildingWallID`، لذلك يظل عنصرًا واحدًا على الحائط المشترك بين غرفتين.
++- يحفظ التطبيق موضع العنصر في إحداثيات العالم، وأبعاده، والغرفة الأخرى التي يربطها.
++- يمكن تعديل العناصر اليدوية أو حذفها.
++- يمكن إخفاء نتيجة RoomPlan الخاطئة وإعادتها لاحقًا.
++
++```text
++Review/
++└── manual-openings.json
++```
++
++## العرض ثلاثي الأبعاد
++
++- Quick Look يعرض USDZ الأصلي الصادر من RoomPlan.
++- نموذج SceneKit يعرض طبقة المشروع المعدلة: سماكات الحوائط، التصحيحات، العناصر اليدوية، والإخفاءات.
++- الفتحات اليدوية معروضة كعناصر مراجعة فوق الحائط، ولا يتم قطع Mesh الحائط فعليًا في هذه المرحلة.
++
++## حدود المرحلة
++
++- الجزء المكمل محفوظ كطبقة إضافية، ولا توجد خوارزمية Boolean لدمجه داخل `CapturedRoom` غير القابل للتحرير.
++- SceneKit يعرض العنصر اليدوي على الحائط، لكنه لا ينفذ ثقبًا هندسيًا داخل صندوق الحائط بعد.
++- استكمال المسح بعد إغلاق التطبيق يعتمد على نجاح إعادة تحديد الموقع بواسطة `ARWorldMap` المحفوظة.
+diff --git a/VALIDATION.md b/VALIDATION.md
+index 4987dc2..af49628 100644
+--- a/VALIDATION.md
++++ b/VALIDATION.md
+@@ -58,3 +58,30 @@
+ - Removed duplicate top-level `QuickLookPreview` declaration from `ThreeEURLRouter.swift`.
+ - Kept the shared implementation in `LiDARLab/Shared/QuickLookPreview.swift`.
+ - Parsed all Swift source files with `swiftc -frontend -parse`.
++
++## Phase 5C/5D — 0.14.0
++
++- تحليل Syntax لجميع ملفات Swift، بما فيها ملفات التصحيح والفتحات وSceneKit الجديدة.
++- التحقق من صحة `project.yml` و`Info.plist` وكل ملفات JSON داخل المشروع.
++- التحقق من وجود تعريف واحد فقط لـ `QuickLookPreview`.
++- التحقق من بقاء Bundle ID وURL Scheme والتوقيع دون تغيير.
++- التحقق من حفظ الأجزاء المكملة كملفات مستقلة وعدم استبدال `room.json` الأصلي.
++- التحقق من حالات قبول ورفض الجزء المكمل وتحميلها بعد فتح المشروع.
++- التحقق من حفظ العناصر اليدوية وحالات إخفاء نتائج RoomPlan في ملف مستقل.
++- التحقق من ارتباط العنصر اليدوي بـ `buildingWallID` وإحداثيات عالمية ثابتة.
++- التحقق من عرض التصحيحات والعناصر اليدوية في 2D وSceneKit 3D.
++- التحقق من استمرار Quick Look كعارض للـ USDZ الأصلي.
++- التحقق من إضافة نسخة احتياطية لملفات 0.13.1 داخل `_backup/RoomScan_phase5`.
++
++### الاختبارات المطلوبة على جهاز LiDAR
++
++1. بناء النسخة عبر GitHub Actions باستخدام Xcode 16.4 أو أحدث.
++2. فتح مشروع مكتمل، اختيار غرفة، ثم مسح جزء ناقص واعتماده.
++3. التأكد من ظهور الجزء المكمل بخط بنفسجي في 2D وبشفافية في 3D.
++4. اختيار حائط وإضافة باب يدوي وربطه بالغرفة المجاورة.
++5. تعديل الباب ثم حذفه والتأكد من تحديث `manual-openings.json`.
++6. إخفاء باب اكتشفه RoomPlan ثم إعادة إظهاره.
++7. إغلاق التطبيق وإعادة فتح أحدث مشروع والتأكد من عودة التصحيحات والعناصر اليدوية.
++8. إعادة مسح غرفة تحتوي عناصر يدوية والتحقق من العناصر التي تحتاج إعادة ربط يدويًا.
++
++لا تتوفر Apple iOS SDKs داخل بيئة التنفيذ الحالية، لذلك لم يتم تنفيذ Type-check أو Link كامل ضد RoomPlan وSceneKit؛ تم تنفيذ فحص Syntax وبنية الملفات فقط.
+diff --git a/project.yml b/project.yml
+index e7ec04b..b7ae596 100644
+--- a/project.yml
++++ b/project.yml
+@@ -9,8 +9,8 @@ options:
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.13.1"
+-    CURRENT_PROJECT_VERSION: "17"
++    MARKETING_VERSION: "0.14.0"
++    CURRENT_PROJECT_VERSION: "18"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar

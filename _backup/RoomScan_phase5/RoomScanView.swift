@@ -85,10 +85,9 @@ struct RoomScanView: View {
             RoomScanProjectReviewView(model: model)
         }
         .onChange(of: model.pendingRoomRevision?.id) { _, revisionID in
-            if revisionID != nil { showingReviewCenter = true }
-        }
-        .onChange(of: model.pendingRoomCorrection?.id) { _, correctionID in
-            if correctionID != nil { showingReviewCenter = true }
+            if revisionID != nil {
+                showingReviewCenter = true
+            }
         }
         .sheet(item: Binding(
             get: { model.recoverableProject },
@@ -137,14 +136,14 @@ struct RoomScanView: View {
 
             if model.isScanning {
                 VStack(alignment: .leading, spacing: 5) {
-                    if model.isRoomRescanActive {
-                        Label("إعادة مسح الغرفة \(model.activeRoomNumber): النسخة الأصلية لن تتغير قبل الاعتماد.", systemImage: "arrow.triangle.2.circlepath.camera")
-                    } else if model.isRoomCorrectionScanActive {
-                        Label("امسح الجزء الناقص فقط من الغرفة \(model.activeRoomNumber)، ثم أنهِه للمراجعة.", systemImage: "plus.viewfinder")
-                    } else {
-                        Label("الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.", systemImage: "door.left.hand.closed")
-                        Label("الحائط المشترك سيأخذ نفس السماكة المسجلة للغرفة السابقة.", systemImage: "link")
-                    }
+                    Label(
+                        "الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.",
+                        systemImage: "door.left.hand.closed"
+                    )
+                    Label(
+                        "الحائط المشترك سيأخذ نفس السماكة المسجلة للغرفة السابقة.",
+                        systemImage: "link"
+                    )
                 }
                 .font(.caption)
                 .foregroundStyle(.yellow)
@@ -222,17 +221,13 @@ struct RoomScanView: View {
                     showingReviewCenter = true
                 } label: {
                     Label(
-                        model.pendingRoomRevision == nil && model.pendingRoomCorrection == nil
-                            ? "فتح مركز المراجعة 2D و3D"
-                            : "مراجعة نتيجة المسح الجديدة",
-                        systemImage: model.pendingRoomRevision == nil && model.pendingRoomCorrection == nil
-                            ? "square.3.layers.3d"
-                            : "exclamationmark.arrow.triangle.2.circlepath"
+                        model.pendingRoomRevision == nil ? "فتح مركز المراجعة 2D و3D" : "مراجعة نتيجة إعادة المسح",
+                        systemImage: model.pendingRoomRevision == nil ? "square.3.layers.3d" : "exclamationmark.arrow.triangle.2.circlepath"
                     )
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(model.pendingRoomRevision == nil && model.pendingRoomCorrection == nil ? .cyan : .orange)
+                .tint(model.pendingRoomRevision == nil ? .cyan : .orange)
             }
 
             if model.capturedRoom != nil, !model.isScanning, !model.isPaused, !model.isProcessing {
@@ -438,26 +433,7 @@ struct RoomScanView: View {
 
     @ViewBuilder
     private var activeScanControls: some View {
-        if model.isRoomCorrectionScanActive {
-            Button(role: .cancel) {
-                model.cancelRoomCorrectionScan()
-            } label: {
-                Label("إلغاء الجزء", systemImage: "xmark.circle")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-
-            Button {
-                model.finishCurrentRoom()
-            } label: {
-                Label("إنهاء الجزء للمراجعة", systemImage: "plus.viewfinder")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.purple)
-            .controlSize(.large)
-        } else if model.isRoomRescanActive {
+        if model.isRoomRescanActive {
             Button(role: .cancel) {
                 model.cancelRoomRescan()
             } label: {

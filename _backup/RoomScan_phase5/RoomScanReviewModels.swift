@@ -71,6 +71,5 @@ struct RoomReviewSummary: Identifiable, Equatable {
   let roomIdentifier: UUID
   let metrics: RoomRevisionMetrics
   let revisionCount: Int
-  let correctionCount: Int
   let sharedWallCount: Int
 }

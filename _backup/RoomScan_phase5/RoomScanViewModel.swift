@@ -87,17 +87,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     @Published private(set) var pendingRoomRevision: PendingRoomRevision?
     @Published private(set) var isRoomRescanActive = false
 
-    /// Phase 5C: accepted supplemental scans that complete a missing portion without
-    /// replacing the primary CapturedRoom result.
-    @Published private(set) var roomCorrectionRecords: [RoomCorrectionRecord] = []
-    @Published private(set) var pendingRoomCorrection: PendingRoomCorrection?
-    @Published private(set) var acceptedRoomCorrections: [AcceptedRoomCorrectionLayer] = []
-    @Published private(set) var isRoomCorrectionScanActive = false
-
-    /// Phase 5D: app-owned openings and suppressions layered over immutable RoomPlan data.
-    @Published private(set) var manualOpeningRecords: [ManualOpeningRecord] = []
-    @Published private(set) var suppressedDetectedSurfaces: [SuppressedDetectedSurfaceRecord] = []
-
     private weak var captureView: RoomCaptureView?
     private var pendingStartRequest: PendingStartRequest?
     private var shouldAcceptNextProcessedRoom = false
@@ -113,7 +102,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     private var didCheckForRecoverableProject = false
     private var relocalizationNormalFrameCount = 0
     private var roomRescanTargetIndex: Int?
-    private var roomCorrectionTargetIndex: Int?
     private var buildingWasFinishedBeforeRescan = false
     private let imageContext = CIContext(options: nil)
 
@@ -200,7 +188,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     }
 
     var canPauseCurrentRoom: Bool {
-        isScanning && !isProcessing && !isRoomRescanActive && !isRoomCorrectionScanActive
+        isScanning && !isProcessing && !isRoomRescanActive
     }
 
     var canResumePausedRoom: Bool {
@@ -229,7 +217,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
                 roomIdentifier: room.identifier,
                 metrics: RoomRevisionMetrics(room: room),
                 revisionCount: roomRevisionRecords.filter { $0.roomIndex == roomIndex }.count,
-                correctionCount: roomCorrectionRecords.filter { $0.roomIndex == roomIndex && $0.decision == .accepted }.count,
                 sharedWallCount: wallItems(for: roomIndex).filter(\.isShared).count
             )
         }
@@ -372,13 +359,9 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         isProcessing = true
         shouldAcceptNextProcessedRoom = true
         pendingStopAction = .finalizeRoom
-        if isRoomRescanActive {
-            statusMessage = "جارٍ معالجة إعادة مسح الغرفة رقم \(activeRoomNumber) للمقارنة…"
-        } else if isRoomCorrectionScanActive {
-            statusMessage = "جارٍ معالجة الجزء الناقص للغرفة رقم \(activeRoomNumber) للمراجعة…"
-        } else {
-            statusMessage = "جارٍ حفظ نقطة الرجوع ثم تثبيت الغرفة رقم \(activeRoomNumber)…"
-        }
+        statusMessage = isRoomRescanActive
+            ? "جارٍ معالجة إعادة مسح الغرفة رقم \(activeRoomNumber) للمقارنة…"
+            : "جارٍ حفظ نقطة الرجوع ثم تثبيت الغرفة رقم \(activeRoomNumber)…"
         saveWorldMapCheckpoint(reason: "room-finalization") { [weak self] in
             guard let self else { return }
             self.captureView?.captureSession.stop(pauseARSession: false)
@@ -590,9 +573,10 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             errorMessage = "أنهِ المبنى أولًا قبل إعادة مسح غرفة محفوظة."
             return
         }
-        guard !isScanning, !isPaused, !isProcessing,
-              pendingRoomRevision == nil, pendingRoomCorrection == nil else {
-            errorMessage = "أنهِ أو راجع العملية الحالية قبل بدء إعادة مسح جديدة."
+        guard !isScanning, !isPaused, !isProcessing, pendingRoomRevision == nil else {
+            errorMessage = pendingRoomRevision == nil
+                ? "أنهِ العملية الحالية أولًا."
+                : "راجع نتيجة إعادة المسح الحالية قبل بدء مراجعة جديدة."
             return
         }
         guard let captureView else {
@@ -615,7 +599,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         buildingWasFinishedBeforeRescan = isBuildingFinished
         isBuildingFinished = false
         isRoomRescanActive = true
-        isRoomCorrectionScanActive = false
         roomRescanTargetIndex = roomIndex
         activeRoomNumber = roomIndex
         activeRoomFragmentCount = 0
@@ -856,427 +839,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         )
     }
 
-
-    // MARK: - Phase 5C missing-area correction scans
-
-    func beginMissingAreaScan(roomIndex: Int) {
-        guard RoomCaptureSession.isSupported else {
-            errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
-            return
-        }
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else {
-            errorMessage = "رقم الغرفة غير صالح."
-            return
-        }
-        guard isBuildingFinished else {
-            errorMessage = "أنهِ المبنى أولًا قبل إضافة جزء ناقص."
-            return
-        }
-        guard !isScanning, !isPaused, !isProcessing,
-              pendingRoomRevision == nil, pendingRoomCorrection == nil else {
-            errorMessage = "أنهِ أو راجع العملية الحالية أولًا."
-            return
-        }
-        guard let captureView else {
-            errorMessage = "عارض RoomPlan غير جاهز بعد."
-            return
-        }
-
-        if sharedARSession.currentFrame == nil, let recoveredWorldMapURL {
-            activeRoomNumber = 0
-            recoveredProjectRequiresRelocalization = true
-            beginRelocalization(using: recoveredWorldMapURL)
-            errorMessage = "طابق مكان المشروع المحفوظ أولًا، ثم ابدأ إضافة الجزء الناقص."
-            return
-        }
-        guard !recoveredProjectRequiresRelocalization else {
-            errorMessage = "أعد تحديد موقع المشروع قبل إضافة جزء ناقص."
-            return
-        }
-
-        buildingWasFinishedBeforeRescan = isBuildingFinished
-        isBuildingFinished = false
-        isRoomCorrectionScanActive = true
-        roomCorrectionTargetIndex = roomIndex
-        activeRoomNumber = roomIndex
-        activeRoomFragmentCount = 0
-        activeRoomDefaultThicknessMeters = roomWallConfigurations
-            .first(where: { $0.roomIndex == roomIndex })?.defaultThicknessMeters
-            ?? buildingDefaultWallThicknessMeters
-        shouldAcceptNextProcessedRoom = false
-        pendingStopAction = nil
-        latestExport = nil
-        statusMessage = "إضافة جزء ناقص للغرفة \(roomIndex): امسح المنطقة المفقودة فقط، ثم اضغط إنهاء للمراجعة."
-
-        captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
-        isScanning = true
-        persistSessionCheckpoint()
-    }
-
-    func cancelRoomCorrectionScan() {
-        guard isRoomCorrectionScanActive else { return }
-        shouldAcceptNextProcessedRoom = false
-        pendingStopAction = nil
-        captureView?.captureSession.stop(pauseARSession: true)
-        sharedARSession.pause()
-        isScanning = false
-        isProcessing = false
-        isPaused = false
-        isRoomCorrectionScanActive = false
-        roomCorrectionTargetIndex = nil
-        activeRoomNumber = 0
-        activeRoomFragmentCount = 0
-        isBuildingFinished = buildingWasFinishedBeforeRescan
-        statusMessage = "تم إلغاء مسح الجزء الناقص دون تغيير المشروع."
-        persistSessionCheckpoint()
-        writeManifest()
-    }
-
-    func acceptPendingRoomCorrection() {
-        guard let pending = pendingRoomCorrection else { return }
-        updateCorrectionDecision(id: pending.id, decision: .accepted)
-        guard let acceptedRecord = roomCorrectionRecords.first(where: { $0.id == pending.id }) else { return }
-        acceptedRoomCorrections.removeAll { $0.id == acceptedRecord.id }
-        acceptedRoomCorrections.append(
-            AcceptedRoomCorrectionLayer(record: acceptedRecord, room: pending.candidateRoom)
-        )
-        pendingRoomCorrection = nil
-        isBuildingFinished = true
-        statusMessage = "تم اعتماد الجزء الناقص للغرفة \(acceptedRecord.roomIndex) كطبقة مكملة دون استبدال المسح الأصلي."
-        persistRoomCorrectionDocument()
-        persistSessionCheckpoint()
-        writeManifest()
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-    }
-
-    func rejectPendingRoomCorrection() {
-        guard let pending = pendingRoomCorrection else { return }
-        updateCorrectionDecision(id: pending.id, decision: .rejected)
-        pendingRoomCorrection = nil
-        isBuildingFinished = true
-        statusMessage = "تم رفض الجزء الإضافي للغرفة \(pending.record.roomIndex)، وبقي المشروع دون تغيير."
-        persistRoomCorrectionDocument()
-        persistSessionCheckpoint()
-        writeManifest()
-    }
-
-    private func completeRoomCorrection(with candidate: CapturedRoom) {
-        guard let roomIndex = roomCorrectionTargetIndex,
-              roomIndex > 0, roomIndex <= capturedRooms.count else {
-            cancelRoomCorrectionScan()
-            return
-        }
-
-        let correctionNumber = (roomCorrectionRecords
-            .filter { $0.roomIndex == roomIndex }
-            .map(\.correctionNumber)
-            .max() ?? 0) + 1
-        let relativePath = String(
-            format: "Corrections/Room-%02d/Correction-%03d/candidate.json",
-            roomIndex,
-            correctionNumber
-        )
-        let record = RoomCorrectionRecord(
-            id: UUID(),
-            roomIndex: roomIndex,
-            correctionNumber: correctionNumber,
-            createdAt: Date(),
-            decidedAt: nil,
-            decision: .pending,
-            capturedRoomIdentifier: candidate.identifier,
-            metrics: RoomRevisionMetrics(room: candidate),
-            candidateRelativePath: relativePath
-        )
-
-        persistRoomCorrectionFile(record: record, room: candidate)
-        roomCorrectionRecords.append(record)
-        pendingRoomCorrection = PendingRoomCorrection(record: record, candidateRoom: candidate)
-        persistRoomCorrectionDocument()
-
-        sharedARSession.pause()
-        isScanning = false
-        isProcessing = false
-        isPaused = false
-        isRoomCorrectionScanActive = false
-        roomCorrectionTargetIndex = nil
-        activeRoomNumber = 0
-        activeRoomFragmentCount = 0
-        isBuildingFinished = true
-        statusMessage = "اكتمل مسح الجزء الناقص للغرفة \(roomIndex). افتح مركز المراجعة لاعتماده أو رفضه."
-        persistSessionCheckpoint()
-        writeManifest()
-        UINotificationFeedbackGenerator().notificationOccurred(.warning)
-    }
-
-    private func updateCorrectionDecision(id: UUID, decision: RoomCorrectionDecision) {
-        guard let index = roomCorrectionRecords.firstIndex(where: { $0.id == id }) else { return }
-        roomCorrectionRecords[index].decision = decision
-        roomCorrectionRecords[index].decidedAt = Date()
-    }
-
-    private func persistRoomCorrectionFile(record: RoomCorrectionRecord, room: CapturedRoom) {
-        guard let buildingFolderURL else { return }
-        do {
-            let url = buildingFolderURL.appendingPathComponent(record.candidateRelativePath)
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try configuredEncoder().encode(room).write(to: url, options: .atomic)
-        } catch {
-            errorMessage = "تعذر حفظ الجزء الإضافي: \(error.localizedDescription)"
-        }
-    }
-
-    private func persistRoomCorrectionDocument() {
-        guard let buildingFolderURL else { return }
-        do {
-            let folder = buildingFolderURL.appendingPathComponent("Corrections", isDirectory: true)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let document = RoomCorrectionDocument(
-                schemaVersion: 1,
-                updatedAt: Date(),
-                corrections: roomCorrectionRecords
-            )
-            try configuredEncoder().encode(document)
-                .write(to: folder.appendingPathComponent("room-corrections.json"), options: .atomic)
-        } catch {
-            errorMessage = "تعذر تحديث سجل الأجزاء الإضافية: \(error.localizedDescription)"
-        }
-    }
-
-    private func loadRoomCorrectionHistory(from folder: URL) {
-        let url = folder
-            .appendingPathComponent("Corrections", isDirectory: true)
-            .appendingPathComponent("room-corrections.json")
-        guard let data = try? Data(contentsOf: url),
-              let document = try? configuredDecoder().decode(RoomCorrectionDocument.self, from: data) else {
-            return
-        }
-
-        roomCorrectionRecords = document.corrections
-        acceptedRoomCorrections = []
-        pendingRoomCorrection = nil
-
-        for record in document.corrections.sorted(by: { $0.createdAt < $1.createdAt }) {
-            let roomURL = folder.appendingPathComponent(record.candidateRelativePath)
-            guard let roomData = try? Data(contentsOf: roomURL),
-                  let room = try? configuredDecoder().decode(CapturedRoom.self, from: roomData) else {
-                continue
-            }
-            switch record.decision {
-            case .accepted:
-                acceptedRoomCorrections.append(AcceptedRoomCorrectionLayer(record: record, room: room))
-            case .pending:
-                if pendingRoomCorrection == nil || record.createdAt > pendingRoomCorrection!.record.createdAt {
-                    pendingRoomCorrection = PendingRoomCorrection(record: record, candidateRoom: room)
-                }
-            case .rejected:
-                break
-            }
-        }
-    }
-
-    // MARK: - Phase 5D manual openings and detected-surface overrides
-
-    func wallSelection(roomIndex: Int, wallIdentifier: UUID) -> RoomWallSelection? {
-        guard let assignment = roomWallAssignments.first(where: {
-            $0.roomIndex == roomIndex && $0.wallIdentifier == wallIdentifier
-        }) else { return nil }
-        return RoomWallSelection(
-            assignmentID: assignment.id,
-            roomIndex: assignment.roomIndex,
-            wallNumber: assignment.wallNumber,
-            wallIdentifier: assignment.wallIdentifier,
-            buildingWallID: assignment.buildingWallID,
-            geometry: assignment.geometry
-        )
-    }
-
-    func wallSelections(for roomIndex: Int) -> [RoomWallSelection] {
-        roomWallAssignments
-            .filter { $0.roomIndex == roomIndex }
-            .sorted { $0.wallNumber < $1.wallNumber }
-            .map {
-                RoomWallSelection(
-                    assignmentID: $0.id,
-                    roomIndex: $0.roomIndex,
-                    wallNumber: $0.wallNumber,
-                    wallIdentifier: $0.wallIdentifier,
-                    buildingWallID: $0.buildingWallID,
-                    geometry: $0.geometry
-                )
-            }
-    }
-
-    func manualOpenings(for roomIndex: Int) -> [ManualOpeningRecord] {
-        let wallIDs = Set(roomWallAssignments.filter { $0.roomIndex == roomIndex }.map(\.buildingWallID))
-        return manualOpeningRecords
-            .filter { wallIDs.contains($0.buildingWallID) }
-            .sorted { $0.createdAt < $1.createdAt }
-    }
-
-    var manualOpeningOverlays: [ProjectOpeningOverlay] {
-        manualOpeningRecords.map { record in
-            let tangent = normalized2D(SIMD2<Float>(record.tangentX, record.tangentZ))
-            let center = SIMD2<Float>(record.centerX, record.centerZ)
-            let halfWidth = Float(record.widthMeters) / 2
-            return ProjectOpeningOverlay(
-                id: record.id,
-                roomIndex: record.sourceRoomIndex,
-                buildingWallID: record.buildingWallID,
-                kind: record.kind,
-                start: center - tangent * halfWidth,
-                end: center + tangent * halfWidth,
-                centerY: record.centerY,
-                widthMeters: Float(record.widthMeters),
-                heightMeters: Float(record.heightMeters),
-                isManual: true
-            )
-        }
-    }
-
-    var suppressedSurfaceIdentifiers: Set<UUID> {
-        Set(suppressedDetectedSurfaces.map(\.surfaceIdentifier))
-    }
-
-    func detectedOpeningItems(for roomIndex: Int) -> [DetectedOpeningDisplayItem] {
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return [] }
-        let room = capturedRooms[roomIndex - 1]
-        let suppressed = suppressedSurfaceIdentifiers
-        var items: [DetectedOpeningDisplayItem] = []
-
-        func append(_ surfaces: [CapturedRoom.Surface], kind: DetectedSurfaceKind) {
-            items.append(contentsOf: surfaces.map {
-                DetectedOpeningDisplayItem(
-                    roomIndex: roomIndex,
-                    surfaceIdentifier: $0.identifier,
-                    kind: kind,
-                    parentWallIdentifier: $0.parentIdentifier,
-                    widthMeters: $0.dimensions.x,
-                    heightMeters: $0.dimensions.y,
-                    isSuppressed: suppressed.contains($0.identifier)
-                )
-            })
-        }
-
-        append(room.doors, kind: .door)
-        append(room.openings, kind: .opening)
-        append(room.windows, kind: .window)
-        return items
-    }
-
-    func setDetectedSurfaceSuppressed(_ item: DetectedOpeningDisplayItem, suppressed: Bool) {
-        suppressedDetectedSurfaces.removeAll { $0.surfaceIdentifier == item.surfaceIdentifier }
-        if suppressed {
-            suppressedDetectedSurfaces.append(
-                SuppressedDetectedSurfaceRecord(
-                    id: UUID(),
-                    roomIndex: item.roomIndex,
-                    surfaceIdentifier: item.surfaceIdentifier,
-                    kind: item.kind,
-                    createdAt: Date()
-                )
-            )
-        }
-        persistManualOpeningDocument()
-    }
-
-    @discardableResult
-    func saveManualOpening(
-        existingID: UUID? = nil,
-        selection: RoomWallSelection,
-        kind: ManualOpeningKind,
-        positionPercent: Double,
-        widthCentimeters: Double,
-        heightCentimeters: Double,
-        sillHeightCentimeters: Double,
-        connectsRoomIndex: Int?
-    ) -> UUID {
-        let geometry = selection.geometry
-        let tangent = normalized2D(SIMD2<Float>(geometry.tangentX, geometry.tangentZ))
-        let normal = normalized2D(SIMD2<Float>(geometry.normalX, geometry.normalZ))
-        let ratio = min(max(positionPercent / 100.0, 0), 1)
-        let width = min(max(widthCentimeters / 100.0, 0.20), Double(geometry.widthMeters))
-        let height = min(max(heightCentimeters / 100.0, 0.20), Double(geometry.heightMeters))
-        let sill = kind == .window
-            ? min(max(sillHeightCentimeters / 100.0, 0), max(Double(geometry.heightMeters) - height, 0))
-            : 0
-        let horizontalOffset = Float((ratio - 0.5) * Double(geometry.widthMeters))
-        let center2D = SIMD2<Float>(geometry.centerX, geometry.centerZ) + tangent * horizontalOffset
-        let wallBottomY = Double(geometry.centerY) - Double(geometry.heightMeters) / 2.0
-        let centerY = Float(wallBottomY + sill + height / 2.0)
-        let now = Date()
-        let id = existingID ?? UUID()
-        let createdAt = existingID.flatMap { existing in
-            manualOpeningRecords.first(where: { $0.id == existing })?.createdAt
-        } ?? now
-        let record = ManualOpeningRecord(
-            id: id,
-            buildingWallID: selection.buildingWallID,
-            sourceRoomIndex: selection.roomIndex,
-            sourceWallIdentifier: selection.wallIdentifier,
-            kind: kind,
-            positionRatio: ratio,
-            widthMeters: width,
-            heightMeters: height,
-            sillHeightMeters: sill,
-            connectsRoomIndex: connectsRoomIndex == selection.roomIndex ? nil : connectsRoomIndex,
-            centerX: center2D.x,
-            centerY: centerY,
-            centerZ: center2D.y,
-            tangentX: tangent.x,
-            tangentZ: tangent.y,
-            normalX: normal.x,
-            normalZ: normal.y,
-            createdAt: createdAt,
-            updatedAt: now
-        )
-
-        if let index = manualOpeningRecords.firstIndex(where: { $0.id == id }) {
-            manualOpeningRecords[index] = record
-        } else {
-            manualOpeningRecords.append(record)
-        }
-        persistManualOpeningDocument()
-        return id
-    }
-
-    func deleteManualOpening(id: UUID) {
-        manualOpeningRecords.removeAll { $0.id == id }
-        persistManualOpeningDocument()
-    }
-
-    private func persistManualOpeningDocument() {
-        guard let buildingFolderURL else { return }
-        do {
-            let reviewFolder = buildingFolderURL.appendingPathComponent("Review", isDirectory: true)
-            try FileManager.default.createDirectory(at: reviewFolder, withIntermediateDirectories: true)
-            let document = ManualOpeningDocument(
-                schemaVersion: 1,
-                updatedAt: Date(),
-                manualOpenings: manualOpeningRecords,
-                suppressedDetectedSurfaces: suppressedDetectedSurfaces
-            )
-            try configuredEncoder().encode(document)
-                .write(to: reviewFolder.appendingPathComponent("manual-openings.json"), options: .atomic)
-        } catch {
-            errorMessage = "تعذر حفظ تعديلات الأبواب والفتحات: \(error.localizedDescription)"
-        }
-    }
-
-    private func loadManualOpeningDocument(from folder: URL) {
-        let url = folder
-            .appendingPathComponent("Review", isDirectory: true)
-            .appendingPathComponent("manual-openings.json")
-        guard let data = try? Data(contentsOf: url),
-              let document = try? configuredDecoder().decode(ManualOpeningDocument.self, from: data) else {
-            return
-        }
-        manualOpeningRecords = document.manualOpenings
-        suppressedDetectedSurfaces = document.suppressedDetectedSurfaces
-    }
-
     func clearError() {
         errorMessage = nil
     }
@@ -1409,8 +971,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     func handleAppBecameInactive() {
         if isRoomRescanActive {
             cancelRoomRescan()
-        } else if isRoomCorrectionScanActive {
-            cancelRoomCorrectionScan()
         } else if isScanning {
             requestPauseCurrentRoom(reason: .appInterruption)
         } else if isRelocalizing {
@@ -1526,8 +1086,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
                 capturedStructure = structure
             }
             loadRoomRevisionHistory(from: folder)
-            loadRoomCorrectionHistory(from: folder)
-            loadManualOpeningDocument(from: folder)
 
             activeRoomNumber = checkpoint.activeRoomNumber
             activeRoomFragmentCount = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count
@@ -1861,21 +1419,9 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             pendingStopAction = nil
             isProcessing = false
             sharedARSession.pause()
-            isPaused = activeRoomNumber > 0 && !isRoomRescanActive && !isRoomCorrectionScanActive
-            if isRoomRescanActive {
-                isRoomRescanActive = false
-                roomRescanTargetIndex = nil
-                activeRoomNumber = 0
-                isBuildingFinished = buildingWasFinishedBeforeRescan
-            }
-            if isRoomCorrectionScanActive {
-                isRoomCorrectionScanActive = false
-                roomCorrectionTargetIndex = nil
-                activeRoomNumber = 0
-                isBuildingFinished = buildingWasFinishedBeforeRescan
-            }
+            isPaused = activeRoomNumber > 0
             errorMessage = error.localizedDescription
-            statusMessage = "تعذر حفظ نتيجة المسح الحالية. حاول من جديد من نفس المكان."
+            statusMessage = "تعذر حفظ الجزء الحالي. يمكنك محاولة استكمال الغرفة من نفس المكان."
             persistSessionCheckpoint()
             writeManifest()
             return false
@@ -1883,14 +1429,8 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
 
         isScanning = false
         isProcessing = true
-        if isRoomRescanActive {
-            statusMessage = "جارٍ معالجة إعادة مسح الغرفة رقم \(activeRoomNumber)…"
-        } else if isRoomCorrectionScanActive {
-            statusMessage = "جارٍ معالجة الجزء الناقص للغرفة رقم \(activeRoomNumber)…"
-        } else {
-            let fragmentNumber = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count + 1
-            statusMessage = "جارٍ إنشاء نتيجة الجزء \(fragmentNumber) من الغرفة رقم \(activeRoomNumber)…"
-        }
+        let fragmentNumber = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count + 1
+        statusMessage = "جارٍ إنشاء نتيجة الجزء \(fragmentNumber) من الغرفة رقم \(activeRoomNumber)…"
         return true
     }
 
@@ -1903,16 +1443,10 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         if let error {
             let failedRoomNumber = activeRoomNumber
             sharedARSession.pause()
-            isPaused = activeRoomNumber > 0 && !isRoomRescanActive && !isRoomCorrectionScanActive
+            isPaused = activeRoomNumber > 0 && !isRoomRescanActive
             if isRoomRescanActive {
                 isRoomRescanActive = false
                 roomRescanTargetIndex = nil
-                activeRoomNumber = 0
-                isBuildingFinished = buildingWasFinishedBeforeRescan
-            }
-            if isRoomCorrectionScanActive {
-                isRoomCorrectionScanActive = false
-                roomCorrectionTargetIndex = nil
                 activeRoomNumber = 0
                 isBuildingFinished = buildingWasFinishedBeforeRescan
             }
@@ -1925,10 +1459,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
 
         if isRoomRescanActive, stopAction == .finalizeRoom {
             completeRoomRescan(with: processedResult)
-            return
-        }
-        if isRoomCorrectionScanActive, stopAction == .finalizeRoom {
-            completeRoomCorrection(with: processedResult)
             return
         }
 
@@ -2400,13 +1930,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         pendingRoomRevision = nil
         isRoomRescanActive = false
         roomRescanTargetIndex = nil
-        roomCorrectionRecords = []
-        pendingRoomCorrection = nil
-        acceptedRoomCorrections = []
-        isRoomCorrectionScanActive = false
-        roomCorrectionTargetIndex = nil
-        manualOpeningRecords = []
-        suppressedDetectedSurfaces = []
         buildingWasFinishedBeforeRescan = false
         shouldAcceptNextProcessedRoom = false
         pendingStopAction = nil
@@ -2426,8 +1949,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             )
             buildingFolderURL = folder
             persistWallMetadata()
-            persistRoomCorrectionDocument()
-            persistManualOpeningDocument()
             persistSessionCheckpoint()
             writeManifest()
         } catch {
