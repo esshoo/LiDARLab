@@ -1,0 +1,1436 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 50caefc..826fadb 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,22 @@
+ # Changelog
+ 
++## 0.12.0
++
++- إضافة حفظ `ARWorldMap` قبل التوقف المؤقت وقبل تثبيت الغرفة.
++- حفظ صورة مرجعية لآخر موضع للمساعدة أثناء إعادة تحديد الموقع.
++- إضافة مجلد `Resume` داخل مشروع المسح وملفي `world-map.arexperience` و`relocalization-reference.jpg`.
++- ترقية `session-checkpoint.json` إلى schema 2 مع الحفاظ على قراءة ملفات 0.11.0.
++- اكتشاف أحدث مشروع غير مكتمل تلقائيًا عند فتح وظيفة مسح الغرف.
++- تحميل الغرف والأجزاء وبيانات سماكات الحوائط من الملفات بعد إعادة تشغيل التطبيق.
++- تشغيل `ARWorldTrackingConfiguration` باستخدام `initialWorldMap` ومحاولة مطابقة البيئة السابقة.
++- انتظار حالة تتبع طبيعية لعدة إطارات قبل السماح باستكمال RoomPlan.
++- إضافة شاشة صورة مرجعية وحالة التتبع وإعادة المحاولة عند فشل المطابقة.
++- السماح باعتماد أجزاء الغرفة المحفوظة حتى عند تعذر المطابقة المكانية.
++- محاولة حفظ تلقائي عند انتقال التطبيق إلى الخلفية أثناء مسح نشط.
++- منع الرجوع من شاشة المسح أثناء الحفظ أو المطابقة لتجنب قطع المعالجة.
++- إضافة نسخة احتياطية لملفات مرحلة 0.11.0 داخل `_backup/RoomScan_phase3`.
++- تحديث الإصدار إلى `0.12.0` ورقم البناء إلى `15`.
++
+ ## 0.11.0
+ 
+ - إضافة زر **توقف مؤقت** أثناء مسح الغرفة.
+diff --git a/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift b/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift
+index 92a7f71..3513e8e 100644
+--- a/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift
++++ b/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift
+@@ -1,8 +1,9 @@
+ import RoomPlan
+ import SwiftUI
+ 
+-/// Keeps one RoomCaptureView and one ARSession alive for the whole multi-room workflow.
+-/// Every room is still captured as a separate RoomPlan scan.
++/// Keeps one RoomCaptureView and one app-owned ARSession alive for the whole workflow.
++/// The same ARSession is reused for separate rooms and is also loaded with a saved
++/// ARWorldMap when an unfinished project is reopened.
+ struct RoomCaptureViewContainer: UIViewRepresentable {
+     @ObservedObject var model: RoomScanViewModel
+ 
+diff --git a/LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift b/LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift
+index 0306f70..709b9b4 100644
+--- a/LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift
+@@ -4,12 +4,15 @@ import Foundation
+ /// so the app freezes the current partial result and starts another fragment later.
+ enum RoomScanFragmentReason: String, Codable, Equatable {
+     case manualPause
++    case appInterruption
+     case roomCompletion
+ 
+     var arabicTitle: String {
+         switch self {
+         case .manualPause:
+             return "توقف مؤقت"
++        case .appInterruption:
++            return "حفظ تلقائي عند مغادرة التطبيق"
+         case .roomCompletion:
+             return "إنهاء الغرفة"
+         }
+@@ -41,8 +44,8 @@ struct RoomFragmentsDocument: Codable, Equatable {
+     let fragments: [RoomScanFragmentMetadata]
+ }
+ 
+-/// Phase 3 writes this checkpoint to prepare for Phase 4 persistence. In this phase,
+-/// resuming is supported only while the same app process and shared ARSession remain alive.
++/// Durable checkpoint for reopening an unfinished scan after the app process ends.
++/// New optional fields keep checkpoints from Phase 3 readable.
+ struct RoomScanSessionCheckpoint: Codable, Equatable {
+     let schemaVersion: Int
+     let updatedAt: Date
+@@ -52,4 +55,33 @@ struct RoomScanSessionCheckpoint: Codable, Equatable {
+     let activeRoomNumber: Int
+     let activeRoomFragmentCount: Int
+     let resumeScope: String
++
++    let buildingDefaultWallThicknessMeters: Double?
++    let activeRoomDefaultThicknessMeters: Double?
++    let isBuildingFinished: Bool?
++    let worldMapRelativePath: String?
++    let referenceSnapshotRelativePath: String?
++    let worldMapSavedAt: Date?
++    let worldMappingStatus: String?
++}
++
++/// Lightweight summary shown before loading an unfinished project from disk.
++struct RecoverableRoomScanProject: Identifiable, Equatable {
++    var id: String { folderURL.path }
++    let folderURL: URL
++    let updatedAt: Date
++    let completedRoomCount: Int
++    let totalFragmentCount: Int
++    let activeRoomNumber: Int
++    let isPaused: Bool
++    let hasWorldMap: Bool
++    let hasReferenceSnapshot: Bool
++}
++
++enum RoomScanRelocalizationState: String, Equatable {
++    case idle
++    case preparing
++    case relocalizing
++    case localized
++    case failed
+ }
+diff --git a/LiDARLab/Features/RoomScan/RoomScanView.swift b/LiDARLab/Features/RoomScan/RoomScanView.swift
+index b3c56f5..210500a 100644
+--- a/LiDARLab/Features/RoomScan/RoomScanView.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanView.swift
+@@ -1,6 +1,7 @@
+ import SwiftUI
+ 
+ struct RoomScanView: View {
++    @Environment(\.scenePhase) private var scenePhase
+     @StateObject private var model = RoomScanViewModel()
+     @State private var showingShareSheet = false
+     @State private var showingResetConfirmation = false
+@@ -15,10 +16,14 @@ struct RoomScanView: View {
+             RoomCaptureViewContainer(model: model)
+                 .ignoresSafeArea(edges: .bottom)
+ 
+-            if model.isPaused {
++            if model.isPaused && !model.isRelocalizing && !model.requiresRelocalization {
+                 pausedCameraOverlay
+             }
+ 
++            if model.isRelocalizing || model.requiresRelocalization {
++                relocalizationOverlay
++            }
++
+             VStack(spacing: 12) {
+                 statusPanel
+                 Spacer(minLength: 10)
+@@ -30,7 +35,19 @@ struct RoomScanView: View {
+         .background(.black)
+         .navigationTitle("مسح متعدد الغرف")
+         .navigationBarTitleDisplayMode(.inline)
+-        .onDisappear { model.stopWithoutProcessing() }
++        .navigationBarBackButtonHidden(model.isScanning || model.isProcessing || model.isRelocalizing)
++        .onAppear { model.handleAppBecameActive() }
++        .onDisappear { model.suspendForNavigation() }
++        .onChange(of: scenePhase) { _, phase in
++            switch phase {
++            case .active:
++                model.handleAppBecameActive()
++            case .inactive, .background:
++                model.handleAppBecameInactive()
++            @unknown default:
++                break
++            }
++        }
+         .sheet(isPresented: $showingShareSheet) {
+             ActivityView(items: shareItems)
+         }
+@@ -63,6 +80,19 @@ struct RoomScanView: View {
+                 )
+             }
+         }
++        .sheet(item: Binding(
++            get: { model.recoverableProject },
++            set: { value in
++                if value == nil { model.dismissRecoverySuggestion() }
++            }
++        )) { project in
++            RoomScanRecoverySheet(
++                project: project,
++                onRestore: { model.restoreRecoverableProject() },
++                onDismiss: { model.dismissRecoverySuggestion() }
++            )
++            .presentationDetents([.medium, .large])
++        }
+         .alert("حذف جلسة المسح الحالية؟", isPresented: $showingResetConfirmation) {
+             Button("حذف وبدء جديد", role: .destructive) {
+                 model.resetBuilding()
+@@ -110,6 +140,20 @@ struct RoomScanView: View {
+                 .foregroundStyle(.yellow)
+             }
+ 
++            if model.isRelocalizing || model.requiresRelocalization {
++                VStack(alignment: .leading, spacing: 5) {
++                    Label(
++                        model.relocalizationMessage,
++                        systemImage: model.isRelocalizing ? "location.magnifyingglass" : "exclamationmark.triangle.fill"
++                    )
++                    if !model.relocalizationTrackingStatus.isEmpty {
++                        Label(model.relocalizationTrackingStatus, systemImage: "wave.3.right")
++                    }
++                }
++                .font(.caption)
++                .foregroundStyle(model.isRelocalizing ? .yellow : .orange)
++            }
++
+             if model.isPaused {
+                 VStack(alignment: .leading, spacing: 5) {
+                     Label(
+@@ -117,7 +161,9 @@ struct RoomScanView: View {
+                         systemImage: "pause.circle.fill"
+                     )
+                     Label(
+-                        "الأجزاء المحفوظة: \(model.activeRoomFragmentCount). الاستكمال متاح ما دامت شاشة التطبيق الحالية مفتوحة.",
++                        model.hasSavedWorldMapCheckpoint
++                            ? "الأجزاء المحفوظة: \(model.activeRoomFragmentCount). خريطة المكان محفوظة للاستكمال بعد إغلاق التطبيق."
++                            : "الأجزاء المحفوظة: \(model.activeRoomFragmentCount). خريطة المكان غير متاحة بعد.",
+                         systemImage: "square.stack.3d.up.fill"
+                     )
+                 }
+@@ -213,7 +259,66 @@ struct RoomScanView: View {
+ 
+     @ViewBuilder
+     private var primaryControls: some View {
+-        if model.isScanning {
++        if model.isRelocalizing {
++            VStack(spacing: 10) {
++                Button {} label: {
++                    Label("جارٍ مطابقة المكان المحفوظ…", systemImage: "location.magnifyingglass")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++                .controlSize(.large)
++                .disabled(true)
++
++                Button(role: .cancel) {
++                    model.cancelRelocalization()
++                } label: {
++                    Label("إيقاف محاولة المطابقة", systemImage: "xmark.circle")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++            }
++        } else if model.requiresRelocalization {
++            VStack(spacing: 10) {
++                if model.canRetryRelocalization {
++                    Button {
++                        model.retryRelocalization()
++                    } label: {
++                        Label("إعادة محاولة مطابقة المكان", systemImage: "arrow.clockwise.circle.fill")
++                            .frame(maxWidth: .infinity)
++                    }
++                    .buttonStyle(.borderedProminent)
++                    .controlSize(.large)
++                }
++
++                if model.isPaused && model.activeRoomFragmentCount > 0 {
++                    Button {
++                        model.finishPausedRoom()
++                    } label: {
++                        Label("اعتماد الأجزاء دون استكمال مكاني", systemImage: "checkmark.seal")
++                            .frame(maxWidth: .infinity)
++                    }
++                    .buttonStyle(.bordered)
++                }
++
++                if !model.isPaused && model.roomCount > 0 {
++                    Button {
++                        model.finishBuilding()
++                    } label: {
++                        Label("إنهاء المبنى بالبيانات المحفوظة", systemImage: "checkmark.seal.fill")
++                            .frame(maxWidth: .infinity)
++                    }
++                    .buttonStyle(.bordered)
++                }
++
++                Button(role: .destructive) {
++                    model.closeRecoveredProject()
++                } label: {
++                    Label("إغلاق المشروع المحفوظ", systemImage: "xmark.rectangle")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++            }
++        } else if model.isScanning {
+             ViewThatFits(in: .horizontal) {
+                 HStack(spacing: 10) { activeScanControls }
+                 VStack(spacing: 10) { activeScanControls }
+@@ -238,7 +343,9 @@ struct RoomScanView: View {
+                 .buttonStyle(.bordered)
+                 .controlSize(.large)
+ 
+-                Text("لا تغلق التطبيق في هذه المرحلة؛ الاستكمال بعد إغلاق التطبيق سيُضاف في المرحلة التالية.")
++                Text(model.hasSavedWorldMapCheckpoint
++                     ? "تم حفظ خريطة المكان. يمكنك إغلاق التطبيق، ثم اختيار استكمال المشروع عند العودة."
++                     : "لم تُحفظ خريطة مكان موثوقة بعد؛ استكمال الجلسة الحالية هو الخيار الأكثر أمانًا.")
+                     .font(.caption2)
+                     .foregroundStyle(.secondary)
+                     .multilineTextAlignment(.center)
+@@ -260,6 +367,14 @@ struct RoomScanView: View {
+             }
+             .buttonStyle(.borderedProminent)
+             .controlSize(.large)
++
++            Button {
++                model.discoverRecoverableProject()
++            } label: {
++                Label("البحث عن مشروع غير مكتمل", systemImage: "clock.arrow.circlepath")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.bordered)
+         } else if !model.isBuildingFinished {
+             ViewThatFits(in: .horizontal) {
+                 HStack(spacing: 10) { continuationControls }
+@@ -367,7 +482,55 @@ struct RoomScanView: View {
+         }
+     }
+ 
++    private var relocalizationOverlay: some View {
++        VStack {
++            Spacer(minLength: 150)
++
++            VStack(spacing: 12) {
++                if let image = model.referenceSnapshotImage {
++                    Image(uiImage: image)
++                        .resizable()
++                        .scaledToFill()
++                        .frame(maxWidth: 300, maxHeight: 180)
++                        .clipped()
++                        .clipShape(RoundedRectangle(cornerRadius: 14))
++                        .overlay(alignment: .bottom) {
++                            Text("الصورة المرجعية لآخر موضع محفوظ")
++                                .font(.caption2.bold())
++                                .padding(.horizontal, 8)
++                                .padding(.vertical, 5)
++                                .background(.ultraThinMaterial, in: Capsule())
++                                .padding(8)
++                        }
++                } else {
++                    Image(systemName: "location.viewfinder")
++                        .font(.system(size: 44))
++                        .foregroundStyle(.yellow)
++                }
++
++                Text(model.relocalizationMessage)
++                    .font(.caption.bold())
++                    .multilineTextAlignment(.center)
++                    .frame(maxWidth: 310)
++
++                if !model.relocalizationTrackingStatus.isEmpty {
++                    Text(model.relocalizationTrackingStatus)
++                        .font(.caption2.monospaced())
++                        .foregroundStyle(.secondary)
++                }
++            }
++            .padding(14)
++            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
++            .padding(.horizontal, 18)
++
++            Spacer(minLength: 220)
++        }
++        .allowsHitTesting(false)
++    }
++
+     private var stateIcon: String {
++        if model.isRelocalizing { return "location.magnifyingglass" }
++        if model.requiresRelocalization { return "exclamationmark.triangle.fill" }
+         if model.isProcessing { return "gearshape.2.fill" }
+         if model.isBuildingFinished { return "checkmark.seal.fill" }
+         if model.isPaused { return "pause.circle.fill" }
+@@ -377,6 +540,8 @@ struct RoomScanView: View {
+     }
+ 
+     private var stateColor: Color {
++        if model.isRelocalizing { return .yellow }
++        if model.requiresRelocalization { return .orange }
+         if model.isBuildingFinished { return .green }
+         if model.isPaused { return .orange }
+         if model.isScanning { return .red }
+@@ -656,3 +821,69 @@ private struct RoomWallThicknessRow: View {
+         return String(format: "%.1f", value)
+     }
+ }
++
++private struct RoomScanRecoverySheet: View {
++    let project: RecoverableRoomScanProject
++    let onRestore: () -> Void
++    let onDismiss: () -> Void
++
++    @Environment(\.dismiss) private var dismiss
++
++    var body: some View {
++        NavigationStack {
++            VStack(spacing: 18) {
++                Image(systemName: project.hasWorldMap ? "location.fill.viewfinder" : "externaldrive.badge.exclamationmark")
++                    .font(.system(size: 48))
++                    .foregroundStyle(project.hasWorldMap ? .cyan : .orange)
++
++                Text("تم العثور على مشروع مسح غير مكتمل")
++                    .font(.title3.bold())
++                    .multilineTextAlignment(.center)
++
++                VStack(alignment: .leading, spacing: 10) {
++                    Label("غرف مثبتة: \(project.completedRoomCount)", systemImage: "square.grid.2x2")
++                    Label("أجزاء محفوظة: \(project.totalFragmentCount)", systemImage: "square.stack.3d.up")
++                    if project.activeRoomNumber > 0 {
++                        Label("الغرفة الحالية: \(project.activeRoomNumber)", systemImage: "door.left.hand.closed")
++                    }
++                    Label(
++                        project.hasWorldMap
++                            ? "توجد خريطة مكان للاستكمال بعد مطابقة الكاميرا."
++                            : "لا توجد خريطة مكان؛ سيفتح المشروع للمراجعة فقط.",
++                        systemImage: project.hasWorldMap ? "checkmark.icloud" : "exclamationmark.icloud"
++                    )
++                    Label(
++                        project.updatedAt.formatted(date: .abbreviated, time: .shortened),
++                        systemImage: "clock"
++                    )
++                }
++                .font(.callout)
++                .padding(14)
++                .frame(maxWidth: .infinity, alignment: .leading)
++                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
++
++                Button {
++                    onRestore()
++                    dismiss()
++                } label: {
++                    Label("تحميل واستكمال المشروع", systemImage: "arrow.clockwise.icloud.fill")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++                .controlSize(.large)
++
++                Button {
++                    onDismiss()
++                    dismiss()
++                } label: {
++                    Text("ليس الآن")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++            }
++            .padding(20)
++            .navigationTitle("استعادة جلسة المسح")
++            .navigationBarTitleDisplayMode(.inline)
++        }
++    }
++}
+diff --git a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
+index fd35029..e2cb692 100644
+--- a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
+@@ -1,5 +1,6 @@
+ import ARKit
+ import Combine
++import CoreImage
+ import RoomPlan
+ import simd
+ import UIKit
+@@ -35,6 +36,9 @@ private struct MultiRoomScanManifest: Codable {
+     let physicalWallCount: Int
+     let sharedPhysicalWallCount: Int
+     let wallMetadataFile: String
++    let worldMapFile: String?
++    let referenceSnapshotFile: String?
++    let resumeCapability: String?
+ }
+ 
+ @MainActor
+@@ -69,13 +73,33 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+     @Published private(set) var statusMessage = "ابدأ مسح المبنى، وامسح كل غرفة منفصلة."
+     @Published private(set) var errorMessage: String?
+ 
++    /// Phase 4 recovery and ARWorldMap relocalization state.
++    @Published private(set) var recoverableProject: RecoverableRoomScanProject?
++    @Published private(set) var relocalizationState: RoomScanRelocalizationState = .idle
++    @Published private(set) var relocalizationMessage = ""
++    @Published private(set) var relocalizationTrackingStatus = ""
++    @Published private(set) var referenceSnapshotImage: UIImage?
++    @Published private(set) var hasSavedWorldMapCheckpoint = false
++    @Published private(set) var worldMapSavedAt: Date?
++
+     private weak var captureView: RoomCaptureView?
+     private var pendingStartRequest: PendingStartRequest?
+     private var shouldAcceptNextProcessedRoom = false
+     private var pendingStopAction: PendingStopAction?
+-    private var activeRoomDefaultThicknessMeters = 0.15
+     private var scanCreatedAt = Date()
+     private var capturedFragments: [CapturedFragment] = []
++    private var activeRoomDefaultThicknessMeters = 0.15
++    private var latestWorldMappingStatus = "notAvailable"
++    private var worldMapSaveRequestID: UUID?
++    private var relocalizationTask: Task<Void, Never>?
++    private var recoveredWorldMapURL: URL?
++    private var recoveredProjectRequiresRelocalization = false
++    private var didCheckForRecoverableProject = false
++    private var relocalizationNormalFrameCount = 0
++    private let imageContext = CIContext(options: nil)
++
++    private let worldMapRelativePath = "Resume/world-map.arexperience"
++    private let referenceSnapshotRelativePath = "Resume/relocalization-reference.jpg"
+ 
+     private enum PendingStartRequest {
+         case building(defaultThicknessCentimeters: Double)
+@@ -83,7 +107,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+     }
+ 
+     private enum PendingStopAction: Equatable {
+-        case pauseRoom
++        case pauseRoom(RoomScanFragmentReason)
+         case finalizeRoom
+     }
+ 
+@@ -144,7 +168,12 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+     }
+ 
+     var canStartNextRoom: Bool {
+-        !isScanning && !isPaused && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
++        !isScanning
++            && !isPaused
++            && !isProcessing
++            && !isBuildingFinished
++            && !capturedRooms.isEmpty
++            && !recoveredProjectRequiresRelocalization
+     }
+ 
+     var canFinishBuilding: Bool {
+@@ -156,13 +185,32 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+     }
+ 
+     var canResumePausedRoom: Bool {
+-        isPaused && !isScanning && !isProcessing && activeRoomNumber > 0
++        isPaused
++            && !isScanning
++            && !isProcessing
++            && activeRoomNumber > 0
++            && !recoveredProjectRequiresRelocalization
++    }
++
++    var isRelocalizing: Bool {
++        relocalizationState == .preparing || relocalizationState == .relocalizing
++    }
++
++    var requiresRelocalization: Bool { recoveredProjectRequiresRelocalization }
++
++    var canRetryRelocalization: Bool {
++        recoveredProjectRequiresRelocalization && recoveredWorldMapURL != nil && !isRelocalizing
+     }
+ 
+     func attach(to view: RoomCaptureView) {
+         captureView = view
+         view.delegate = self
+ 
++        if !didCheckForRecoverableProject {
++            didCheckForRecoverableProject = true
++            discoverRecoverableProject()
++        }
++
+         guard let request = pendingStartRequest else { return }
+         pendingStartRequest = nil
+ 
+@@ -203,6 +251,10 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+             return
+         }
+         guard !isScanning, !isPaused, !isProcessing, !isBuildingFinished else { return }
++        guard !recoveredProjectRequiresRelocalization else {
++            errorMessage = "أعد تحديد موقع المشروع المحفوظ أولًا قبل إضافة غرفة جديدة."
++            return
++        }
+         guard captureView != nil else {
+             pendingStartRequest = .room(defaultThicknessCentimeters: defaultWallThicknessCentimeters)
+             return
+@@ -231,6 +283,11 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         shouldAcceptNextProcessedRoom = false
+         pendingStopAction = nil
+         isPaused = false
++        recoveredProjectRequiresRelocalization = false
++        relocalizationState = .idle
++        relocalizationMessage = ""
++        relocalizationTrackingStatus = ""
++        referenceSnapshotImage = nil
+ 
+         let nextFragment = activeRoomFragmentCount + 1
+         let thicknessText = centimetersText(defaultThicknessMeters * 100.0)
+@@ -245,16 +302,23 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         persistSessionCheckpoint()
+     }
+ 
+-    /// Stops the current partial capture and asks RoomPlan to pause the shared ARSession.
+-    /// Resuming starts a new RoomPlan fragment that belongs to the same logical room.
++    /// Saves a relocalization checkpoint, then freezes the current partial RoomPlan result.
+     func pauseCurrentRoom() {
++        requestPauseCurrentRoom(reason: .manualPause)
++    }
++
++    private func requestPauseCurrentRoom(reason: RoomScanFragmentReason) {
+         guard canPauseCurrentRoom else { return }
+         isScanning = false
+         isProcessing = true
+         shouldAcceptNextProcessedRoom = true
+-        pendingStopAction = .pauseRoom
+-        statusMessage = "تم إيقاف الكاميرا، وجارٍ حفظ الجزء الحالي من الغرفة رقم \(activeRoomNumber)…"
+-        captureView?.captureSession.stop(pauseARSession: true)
++        pendingStopAction = .pauseRoom(reason)
++        statusMessage = "جارٍ حفظ موقع الجهاز والجزء الحالي من الغرفة رقم \(activeRoomNumber)…"
++
++        saveWorldMapCheckpoint(reason: reason.rawValue) { [weak self] in
++            guard let self else { return }
++            self.captureView?.captureSession.stop(pauseARSession: true)
++        }
+     }
+ 
+     func resumePausedRoom() {
+@@ -275,13 +339,16 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         isProcessing = true
+         shouldAcceptNextProcessedRoom = true
+         pendingStopAction = .finalizeRoom
+-        statusMessage = "جارٍ تثبيت الغرفة رقم \(activeRoomNumber) وربط كل أجزائها وحوائطها المشتركة…"
+-        captureView?.captureSession.stop(pauseARSession: false)
++        statusMessage = "جارٍ حفظ نقطة الرجوع ثم تثبيت الغرفة رقم \(activeRoomNumber)…"
++        saveWorldMapCheckpoint(reason: "room-finalization") { [weak self] in
++            guard let self else { return }
++            self.captureView?.captureSession.stop(pauseARSession: false)
++        }
+     }
+ 
+     /// Finalizes a paused room from its already saved fragments without reopening camera.
+     func finishPausedRoom() {
+-        guard canResumePausedRoom else { return }
++        guard isPaused, !isScanning, !isProcessing, activeRoomNumber > 0 else { return }
+         guard capturedFragments.contains(where: { $0.metadata.roomIndex == activeRoomNumber }) else {
+             errorMessage = "لا يوجد جزء محفوظ يمكن اعتماد الغرفة منه."
+             return
+@@ -420,6 +487,432 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         errorMessage = nil
+     }
+ 
++    // MARK: - Phase 4 project recovery and spatial relocalization
++
++    func discoverRecoverableProject() {
++        guard !isScanning, !isProcessing, buildingFolderURL == nil else { return }
++
++        let storage = LiDARLabStorage.shared
++        let fileManager = FileManager.default
++        guard let folders = try? fileManager.contentsOfDirectory(
++            at: storage.roomsURL,
++            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
++            options: [.skipsHiddenFiles]
++        ) else { return }
++
++        let candidates = folders
++            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
++            .sorted { storage.modificationDate(at: $0) > storage.modificationDate(at: $1) }
++
++        for folder in candidates {
++            let checkpointURL = folder.appendingPathComponent("session-checkpoint.json")
++            guard let data = try? Data(contentsOf: checkpointURL),
++                  let checkpoint = try? configuredDecoder().decode(RoomScanSessionCheckpoint.self, from: data) else {
++                continue
++            }
++
++            let manifestURL = folder.appendingPathComponent("manifest.json")
++            let manifest = (try? Data(contentsOf: manifestURL))
++                .flatMap { try? configuredDecoder().decode(MultiRoomScanManifest.self, from: $0) }
++            let isFinished = checkpoint.isBuildingFinished ?? manifest?.isFinished ?? false
++            guard !isFinished else { continue }
++            guard checkpoint.completedRoomCount > 0
++                    || checkpoint.totalFragmentCount > 0
++                    || checkpoint.activeRoomNumber > 0 else {
++                continue
++            }
++
++            let mapPath = checkpoint.worldMapRelativePath ?? worldMapRelativePath
++            let snapshotPath = checkpoint.referenceSnapshotRelativePath ?? referenceSnapshotRelativePath
++            recoverableProject = RecoverableRoomScanProject(
++                folderURL: folder,
++                updatedAt: checkpoint.updatedAt,
++                completedRoomCount: checkpoint.completedRoomCount,
++                totalFragmentCount: checkpoint.totalFragmentCount,
++                activeRoomNumber: checkpoint.activeRoomNumber,
++                isPaused: checkpoint.isPaused,
++                hasWorldMap: fileManager.fileExists(atPath: folder.appendingPathComponent(mapPath).path),
++                hasReferenceSnapshot: fileManager.fileExists(atPath: folder.appendingPathComponent(snapshotPath).path)
++            )
++            return
++        }
++    }
++
++    func dismissRecoverySuggestion() {
++        recoverableProject = nil
++    }
++
++    func restoreRecoverableProject() {
++        guard let project = recoverableProject else { return }
++        restoreProject(from: project.folderURL)
++    }
++
++    func closeRecoveredProject() {
++        relocalizationTask?.cancel()
++        relocalizationTask = nil
++        sharedARSession.pause()
++        resetPublishedResults()
++        buildingFolderURL = nil
++        recoverableProject = nil
++        statusMessage = "تم إغلاق المشروع المحفوظ دون حذف ملفاته. يمكنك بدء مبنى جديد."
++    }
++
++    func retryRelocalization() {
++        guard let recoveredWorldMapURL else { return }
++        beginRelocalization(using: recoveredWorldMapURL)
++    }
++
++    func cancelRelocalization() {
++        relocalizationTask?.cancel()
++        relocalizationTask = nil
++        sharedARSession.pause()
++        relocalizationState = .failed
++        relocalizationMessage = "تم إيقاف محاولة مطابقة المكان. ارجع إلى الغرفة أو الباب الظاهر في الصورة ثم أعد المحاولة."
++        relocalizationTrackingStatus = "متوقف"
++    }
++
++    func handleAppBecameInactive() {
++        if isScanning {
++            requestPauseCurrentRoom(reason: .appInterruption)
++        } else if isRelocalizing {
++            relocalizationTask?.cancel()
++            relocalizationTask = nil
++            sharedARSession.pause()
++            relocalizationState = .failed
++            relocalizationMessage = "توقفت مطابقة المكان لأن التطبيق غادر الواجهة. أعد المحاولة بعد العودة."
++            relocalizationTrackingStatus = "متوقف"
++        } else {
++            persistSessionCheckpoint()
++            writeManifest()
++        }
++    }
++
++    func handleAppBecameActive() {
++        if buildingFolderURL == nil, recoverableProject == nil {
++            discoverRecoverableProject()
++        }
++    }
++
++    func suspendForNavigation() {
++        relocalizationTask?.cancel()
++        relocalizationTask = nil
++        sharedARSession.pause()
++        persistSessionCheckpoint()
++        writeManifest()
++    }
++
++    private func restoreProject(from folder: URL) {
++        let checkpointURL = folder.appendingPathComponent("session-checkpoint.json")
++        do {
++            let checkpoint = try configuredDecoder().decode(
++                RoomScanSessionCheckpoint.self,
++                from: Data(contentsOf: checkpointURL)
++            )
++            let manifestURL = folder.appendingPathComponent("manifest.json")
++            let manifest = (try? Data(contentsOf: manifestURL))
++                .flatMap { try? configuredDecoder().decode(MultiRoomScanManifest.self, from: $0) }
++
++            isProcessing = true
++            sharedARSession.pause()
++            resetPublishedResults()
++            buildingFolderURL = folder
++            recoverableProject = nil
++            scanCreatedAt = manifest?.createdAt ?? checkpoint.updatedAt
++            isBuildingFinished = checkpoint.isBuildingFinished ?? manifest?.isFinished ?? false
++
++            let wallURL = folder.appendingPathComponent("wall-metadata.json")
++            if let wallData = try? Data(contentsOf: wallURL),
++               let wallDocument = try? configuredDecoder().decode(BuildingWallMetadataDocument.self, from: wallData) {
++                buildingDefaultWallThicknessMeters = wallDocument.buildingDefaultThicknessMeters
++                roomWallConfigurations = wallDocument.roomConfigurations
++                buildingWallRecords = wallDocument.wallRecords
++                roomWallAssignments = wallDocument.assignments
++            } else {
++                buildingDefaultWallThicknessMeters = checkpoint.buildingDefaultWallThicknessMeters
++                    ?? manifest?.buildingDefaultWallThicknessMeters
++                    ?? 0.15
++            }
++
++            var loadedFragments: [CapturedFragment] = []
++            var loadedMetadataByID: [UUID: RoomScanFragmentMetadata] = [:]
++            var primaryRoomsByIndex: [Int: CapturedRoom] = [:]
++            let frozenRoot = folder.appendingPathComponent("FrozenRooms", isDirectory: true)
++            let roomFolders = (try? FileManager.default.contentsOfDirectory(
++                at: frozenRoot,
++                includingPropertiesForKeys: [.isDirectoryKey],
++                options: [.skipsHiddenFiles]
++            )) ?? []
++
++            for roomFolder in roomFolders.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
++                guard (try? roomFolder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
++                let fallbackRoomIndex = Int(roomFolder.lastPathComponent.split(separator: "-").last ?? "")
++
++                let fragmentsURL = roomFolder.appendingPathComponent("fragments.json")
++                if let fragmentsData = try? Data(contentsOf: fragmentsURL),
++                   let document = try? configuredDecoder().decode(RoomFragmentsDocument.self, from: fragmentsData) {
++                    for metadata in document.fragments {
++                        loadedMetadataByID[metadata.id] = metadata
++                        let fragmentURL = folder.appendingPathComponent(metadata.relativeJSONPath)
++                        if let data = try? Data(contentsOf: fragmentURL),
++                           let room = try? configuredDecoder().decode(CapturedRoom.self, from: data) {
++                            loadedFragments.append(CapturedFragment(metadata: metadata, room: room))
++                        }
++                    }
++                }
++
++                let primaryURL = roomFolder.appendingPathComponent("room.json")
++                if let roomIndex = fallbackRoomIndex,
++                   roomIndex <= checkpoint.completedRoomCount,
++                   let roomData = try? Data(contentsOf: primaryURL),
++                   let room = try? configuredDecoder().decode(CapturedRoom.self, from: roomData) {
++                    primaryRoomsByIndex[roomIndex] = room
++                }
++            }
++
++            fragmentMetadata = loadedMetadataByID.values.sorted {
++                ($0.roomIndex, $0.fragmentIndex) < ($1.roomIndex, $1.fragmentIndex)
++            }
++            capturedFragments = loadedFragments.sorted {
++                ($0.metadata.roomIndex, $0.metadata.fragmentIndex)
++                    < ($1.metadata.roomIndex, $1.metadata.fragmentIndex)
++            }
++            if checkpoint.completedRoomCount > 0 {
++                capturedRooms = (1...checkpoint.completedRoomCount).compactMap { primaryRoomsByIndex[$0] }
++            }
++            capturedRoom = capturedRooms.last
++
++            activeRoomNumber = checkpoint.activeRoomNumber
++            activeRoomFragmentCount = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count
++            activeRoomDefaultThicknessMeters = checkpoint.activeRoomDefaultThicknessMeters
++                ?? roomWallConfigurations.first(where: { $0.roomIndex == activeRoomNumber })?.defaultThicknessMeters
++                ?? roomWallConfigurations.last?.defaultThicknessMeters
++                ?? buildingDefaultWallThicknessMeters
++            isPaused = activeRoomNumber > 0
++            isScanning = false
++            isProcessing = false
++
++            let mapPath = checkpoint.worldMapRelativePath ?? worldMapRelativePath
++            let snapshotPath = checkpoint.referenceSnapshotRelativePath ?? referenceSnapshotRelativePath
++            let mapURL = folder.appendingPathComponent(mapPath)
++            let snapshotURL = folder.appendingPathComponent(snapshotPath)
++            recoveredWorldMapURL = FileManager.default.fileExists(atPath: mapURL.path) ? mapURL : nil
++            hasSavedWorldMapCheckpoint = recoveredWorldMapURL != nil
++            worldMapSavedAt = checkpoint.worldMapSavedAt
++            latestWorldMappingStatus = checkpoint.worldMappingStatus ?? "unknown"
++            referenceSnapshotImage = UIImage(contentsOfFile: snapshotURL.path)
++            recoveredProjectRequiresRelocalization = !isBuildingFinished
++
++            if let recoveredWorldMapURL, recoveredProjectRequiresRelocalization {
++                statusMessage = "تم تحميل المشروع المحفوظ. طابق المكان قبل استكمال المسح."
++                beginRelocalization(using: recoveredWorldMapURL)
++            } else if recoveredProjectRequiresRelocalization {
++                relocalizationState = .failed
++                relocalizationMessage = "تم تحميل بيانات المشروع، لكن لا توجد خريطة مكان صالحة. يمكن مراجعة البيانات أو اعتماد أجزاء الغرفة، ولا يمكن إضافة مسح مرتبط مكانيًا."
++                relocalizationTrackingStatus = "خريطة المكان غير موجودة"
++                statusMessage = "المشروع مفتوح للمراجعة فقط لعدم وجود ARWorldMap محفوظة."
++            } else {
++                relocalizationState = .idle
++                statusMessage = "تم تحميل المشروع المكتمل من الملفات."
++            }
++        } catch {
++            isProcessing = false
++            errorMessage = "تعذر استعادة مشروع المسح: \(error.localizedDescription)"
++        }
++    }
++
++    private func beginRelocalization(using worldMapURL: URL) {
++        guard ARWorldTrackingConfiguration.isSupported else {
++            relocalizationState = .failed
++            relocalizationMessage = "تتبع العالم غير مدعوم على هذا الجهاز."
++            return
++        }
++
++        do {
++            relocalizationTask?.cancel()
++            relocalizationTask = nil
++            relocalizationState = .preparing
++            relocalizationMessage = "جارٍ تحميل خريطة المكان المحفوظة…"
++            relocalizationTrackingStatus = "تحضير"
++            relocalizationNormalFrameCount = 0
++
++            let data = try Data(contentsOf: worldMapURL)
++            guard let worldMap = try NSKeyedUnarchiver.unarchivedObject(
++                ofClass: ARWorldMap.self,
++                from: data
++            ) else {
++                throw CocoaError(.coderReadCorrupt)
++            }
++
++            let configuration = ARWorldTrackingConfiguration()
++            configuration.initialWorldMap = worldMap
++            configuration.planeDetection = [.horizontal, .vertical]
++            sharedARSession.run(
++                configuration,
++                options: [.resetTracking, .removeExistingAnchors]
++            )
++
++            recoveredProjectRequiresRelocalization = true
++            relocalizationState = .relocalizing
++            relocalizationMessage = "قف قرب آخر غرفة أو باب، وحرّك الهاتف ببطء حتى يتعرف على المكان."
++            relocalizationTrackingStatus = "جارٍ البحث عن المكان"
++
++            relocalizationTask = Task { [weak self] in
++                guard let self else { return }
++                let deadline = Date().addingTimeInterval(60)
++                while !Task.isCancelled, Date() < deadline {
++                    try? await Task.sleep(nanoseconds: 250_000_000)
++                    if self.evaluateRelocalizationFrame() { return }
++                }
++
++                guard !Task.isCancelled,
++                      self.relocalizationState == .relocalizing else { return }
++                self.sharedARSession.pause()
++                self.relocalizationState = .failed
++                self.relocalizationMessage = "لم يتم التعرف على المكان خلال دقيقة. ارجع إلى الموضع الظاهر في الصورة، حسّن الإضاءة، ثم أعد المحاولة."
++                self.relocalizationTrackingStatus = "انتهت المهلة"
++            }
++        } catch {
++            relocalizationState = .failed
++            relocalizationMessage = "تعذر قراءة خريطة المكان المحفوظة: \(error.localizedDescription)"
++            relocalizationTrackingStatus = "فشل تحميل الخريطة"
++        }
++    }
++
++    private func evaluateRelocalizationFrame() -> Bool {
++        guard relocalizationState == .relocalizing else { return true }
++        guard let frame = sharedARSession.currentFrame else {
++            relocalizationTrackingStatus = "في انتظار الكاميرا"
++            relocalizationNormalFrameCount = 0
++            return false
++        }
++
++        latestWorldMappingStatus = worldMappingStatusText(frame.worldMappingStatus)
++        switch frame.camera.trackingState {
++        case .normal:
++            relocalizationNormalFrameCount += 1
++            relocalizationTrackingStatus = "تم العثور على تطابق — جارٍ التثبيت"
++            guard relocalizationNormalFrameCount >= 4 else { return false }
++
++            sharedARSession.pause()
++            recoveredProjectRequiresRelocalization = false
++            relocalizationState = .localized
++            relocalizationMessage = activeRoomNumber > 0
++                ? "تمت مطابقة المكان. يمكنك الآن استكمال الغرفة \(activeRoomNumber) أو اعتماد الأجزاء المحفوظة."
++                : "تمت مطابقة المكان. يمكنك الآن إضافة الغرفة التالية في نفس نظام الإحداثيات."
++            relocalizationTrackingStatus = "تمت المطابقة بنجاح"
++            statusMessage = relocalizationMessage
++            persistSessionCheckpoint()
++            writeManifest()
++            UINotificationFeedbackGenerator().notificationOccurred(.success)
++            return true
++
++        case .limited(let reason):
++            relocalizationNormalFrameCount = 0
++            switch reason {
++            case .relocalizing:
++                relocalizationTrackingStatus = "مطابقة الخريطة المحفوظة"
++            case .initializing:
++                relocalizationTrackingStatus = "تهيئة الكاميرا"
++            case .excessiveMotion:
++                relocalizationTrackingStatus = "حرّك الهاتف ببطء"
++            case .insufficientFeatures:
++                relocalizationTrackingStatus = "وجّه الهاتف إلى جدار أو باب غني بالتفاصيل"
++            @unknown default:
++                relocalizationTrackingStatus = "التتبع محدود"
++            }
++            return false
++
++        case .notAvailable:
++            relocalizationNormalFrameCount = 0
++            relocalizationTrackingStatus = "التتبع غير متاح"
++            return false
++        }
++    }
++
++    private func saveWorldMapCheckpoint(
++        reason: String,
++        completion: @escaping () -> Void
++    ) {
++        guard let buildingFolderURL,
++              let frame = sharedARSession.currentFrame else {
++            completion()
++            return
++        }
++
++        latestWorldMappingStatus = worldMappingStatusText(frame.worldMappingStatus)
++        let snapshotData = referenceSnapshotJPEGData(from: frame)
++        let resumeFolder = buildingFolderURL.appendingPathComponent("Resume", isDirectory: true)
++        try? FileManager.default.createDirectory(at: resumeFolder, withIntermediateDirectories: true)
++        if let snapshotData {
++            let snapshotURL = buildingFolderURL.appendingPathComponent(referenceSnapshotRelativePath)
++            try? snapshotData.write(to: snapshotURL, options: .atomic)
++            referenceSnapshotImage = UIImage(data: snapshotData)
++        }
++
++        let requestID = UUID()
++        worldMapSaveRequestID = requestID
++        relocalizationMessage = "حفظ نقطة استعادة: \(reason)"
++
++        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
++            guard let self, self.worldMapSaveRequestID == requestID else { return }
++            self.worldMapSaveRequestID = nil
++            self.persistSessionCheckpoint()
++            self.writeManifest()
++            completion()
++        }
++
++        sharedARSession.getCurrentWorldMap { [weak self] worldMap, _ in
++            DispatchQueue.main.async {
++                guard let self, self.worldMapSaveRequestID == requestID else { return }
++                self.worldMapSaveRequestID = nil
++
++                if let worldMap,
++                   let data = try? NSKeyedArchiver.archivedData(
++                    withRootObject: worldMap,
++                    requiringSecureCoding: true
++                   ) {
++                    let mapURL = buildingFolderURL.appendingPathComponent(self.worldMapRelativePath)
++                    do {
++                        try data.write(to: mapURL, options: .atomic)
++                        self.hasSavedWorldMapCheckpoint = true
++                        self.worldMapSavedAt = Date()
++                        self.recoveredWorldMapURL = mapURL
++                    } catch {
++                        if !self.hasSavedWorldMapCheckpoint {
++                            self.relocalizationMessage = "تعذر كتابة خريطة المكان: \(error.localizedDescription)"
++                        }
++                    }
++                }
++
++                self.persistSessionCheckpoint()
++                self.writeManifest()
++                completion()
++            }
++        }
++    }
++
++    private func referenceSnapshotJPEGData(from frame: ARFrame) -> Data? {
++        let image = CIImage(cvPixelBuffer: frame.capturedImage)
++        guard let cgImage = imageContext.createCGImage(image, from: image.extent) else { return nil }
++        let oriented = UIImage(cgImage: cgImage, scale: 1, orientation: .right)
++        return oriented.jpegData(compressionQuality: 0.72)
++    }
++
++    private func worldMappingStatusText(_ status: ARFrame.WorldMappingStatus) -> String {
++        switch status {
++        case .notAvailable:
++            return "notAvailable"
++        case .limited:
++            return "limited"
++        case .extending:
++            return "extending"
++        case .mapped:
++            return "mapped"
++        @unknown default:
++            return "unknown"
++        }
++    }
++
+     // MARK: - Wall thickness metadata
+ 
+     func wallItems(for roomIndex: Int) -> [RoomWallDisplayItem] {
+@@ -553,7 +1046,13 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+ 
+         let roomIndex = activeRoomNumber
+         let fragmentIndex = fragmentMetadata.filter { $0.roomIndex == roomIndex }.count + 1
+-        let reason: RoomScanFragmentReason = stopAction == .pauseRoom ? .manualPause : .roomCompletion
++        let reason: RoomScanFragmentReason
++        switch stopAction {
++        case .pauseRoom(let pauseReason):
++            reason = pauseReason
++        case .finalizeRoom:
++            reason = .roomCompletion
++        }
+         let metadata = makeFragmentMetadata(
+             for: processedResult,
+             roomIndex: roomIndex,
+@@ -578,10 +1077,12 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         persistRoomFragmentsDocument(roomIndex: roomIndex, isFinalized: stopAction == .finalizeRoom)
+ 
+         switch stopAction {
+-        case .pauseRoom:
++        case .pauseRoom(let pauseReason):
+             sharedARSession.pause()
+             isPaused = true
+-            statusMessage = "تم حفظ الجزء \(fragmentIndex) من الغرفة \(roomIndex) وإغلاق الكاميرا. لا تحرك الهاتف كثيرًا قبل الاستكمال."
++            statusMessage = pauseReason == .appInterruption
++                ? "تم الحفظ تلقائيًا عند مغادرة التطبيق. يمكنك العودة لاحقًا واستعادة المكان."
++                : "تم حفظ الجزء \(fragmentIndex) من الغرفة \(roomIndex) وخريطة المكان. يمكنك إغلاق التطبيق والعودة لاحقًا."
+             persistSessionCheckpoint()
+             writeManifest()
+             UINotificationFeedbackGenerator().notificationOccurred(.success)
+@@ -969,6 +1470,13 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+             .mapValues { assignments in Set(assignments.map(\.roomIndex)).count }
+     }
+ 
++    private var hasReferenceSnapshotCheckpoint: Bool {
++        guard let buildingFolderURL else { return false }
++        return FileManager.default.fileExists(
++            atPath: buildingFolderURL.appendingPathComponent(referenceSnapshotRelativePath).path
++        )
++    }
++
+     // MARK: - Persistence and export
+ 
+     private func resetPublishedResults() {
+@@ -987,6 +1495,19 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         buildingWallRecords = []
+         roomWallAssignments = []
+         latestExport = nil
++        relocalizationTask?.cancel()
++        relocalizationTask = nil
++        worldMapSaveRequestID = nil
++        relocalizationState = .idle
++        relocalizationMessage = ""
++        relocalizationTrackingStatus = ""
++        referenceSnapshotImage = nil
++        recoveredWorldMapURL = nil
++        recoveredProjectRequiresRelocalization = false
++        relocalizationNormalFrameCount = 0
++        hasSavedWorldMapCheckpoint = false
++        worldMapSavedAt = nil
++        latestWorldMappingStatus = "notAvailable"
+         shouldAcceptNextProcessedRoom = false
+         pendingStopAction = nil
+         activeRoomDefaultThicknessMeters = buildingDefaultWallThicknessMeters
+@@ -1060,14 +1581,21 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         guard let buildingFolderURL else { return }
+ 
+         let checkpoint = RoomScanSessionCheckpoint(
+-            schemaVersion: 1,
++            schemaVersion: 2,
+             updatedAt: Date(),
+             completedRoomCount: capturedRooms.count,
+             totalFragmentCount: fragmentMetadata.count,
+             isPaused: isPaused,
+             activeRoomNumber: activeRoomNumber,
+             activeRoomFragmentCount: activeRoomFragmentCount,
+-            resumeScope: "same-app-process-shared-ARSession"
++            resumeScope: "saved-ARWorldMap-across-app-launches",
++            buildingDefaultWallThicknessMeters: buildingDefaultWallThicknessMeters,
++            activeRoomDefaultThicknessMeters: activeRoomDefaultThicknessMeters,
++            isBuildingFinished: isBuildingFinished,
++            worldMapRelativePath: hasSavedWorldMapCheckpoint ? worldMapRelativePath : nil,
++            referenceSnapshotRelativePath: hasReferenceSnapshotCheckpoint ? referenceSnapshotRelativePath : nil,
++            worldMapSavedAt: worldMapSavedAt,
++            worldMappingStatus: latestWorldMappingStatus
+         )
+ 
+         do {
+@@ -1169,7 +1697,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+ 
+         do {
+             let manifest = MultiRoomScanManifest(
+-                schemaVersion: 3,
++                schemaVersion: 4,
+                 createdAt: scanCreatedAt,
+                 updatedAt: Date(),
+                 roomCount: capturedRooms.count,
+@@ -1181,7 +1709,10 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+                 buildingDefaultWallThicknessMeters: buildingDefaultWallThicknessMeters,
+                 physicalWallCount: physicalWallCount,
+                 sharedPhysicalWallCount: sharedPhysicalWallCount,
+-                wallMetadataFile: "wall-metadata.json"
++                wallMetadataFile: "wall-metadata.json",
++                worldMapFile: hasSavedWorldMapCheckpoint ? worldMapRelativePath : nil,
++                referenceSnapshotFile: hasReferenceSnapshotCheckpoint ? referenceSnapshotRelativePath : nil,
++                resumeCapability: hasSavedWorldMapCheckpoint ? "ARWorldMap-relocalization" : "project-data-only"
+             )
+             let url = buildingFolderURL.appendingPathComponent("manifest.json")
+             try configuredEncoder().encode(manifest).write(to: url, options: .atomic)
+@@ -1250,6 +1781,12 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
+         return encoder
+     }
+ 
++    private func configuredDecoder() -> JSONDecoder {
++        let decoder = JSONDecoder()
++        decoder.dateDecodingStrategy = .iso8601
++        return decoder
++    }
++
+     private func validatedThicknessMeters(fromCentimeters centimeters: Double) -> Double {
+         min(max(centimeters, 5.0), 60.0) / 100.0
+     }
+diff --git a/README.md b/README.md
+index ee473dd..85297b1 100644
+--- a/README.md
++++ b/README.md
+@@ -11,6 +11,37 @@
+ - App Folder: `Apps/LiDARLab`
+ - Future App Group: `group.com.essam.3e`
+ 
++## النسخة 0.12.0 — حفظ المشروع واستكماله بعد إغلاق التطبيق
++
++أضيفت مرحلة الاستعادة الدائمة لمسح المبنى. قبل التوقف المؤقت أو تثبيت الغرفة يحاول التطبيق حفظ `ARWorldMap` مع صورة مرجعية لآخر موضع، ثم يحتفظ بالغرف والأجزاء وسماكات الحوائط داخل مجلد المشروع نفسه. عند فتح وظيفة المسح لاحقًا يبحث التطبيق عن أحدث مشروع غير مكتمل ويعرض خيار تحميله.
++
++بعد التحميل يشغّل التطبيق `ARWorldTrackingConfiguration` باستخدام `initialWorldMap`، ويطلب من المستخدم الوقوف قرب آخر غرفة أو باب وتحريك الهاتف ببطء. لا يبدأ RoomPlan مجددًا إلا بعد أن تصبح حالة تتبع ARKit طبيعية لعدة إطارات متتالية. إذا فشلت المطابقة يمكن إعادة المحاولة، أو اعتماد أجزاء الغرفة المحفوظة دون إضافة مسح جديد مرتبط مكانيًا.
++
++ملفات الاستعادة الجديدة:
++
++```text
++Rooms/MultiRoom-<timestamp>/
++├── manifest.json
++├── session-checkpoint.json
++├── wall-metadata.json
++├── Resume/
++│   ├── world-map.arexperience
++│   └── relocalization-reference.jpg
++├── FrozenRooms/
++│   └── ...
++└── structure.json
++```
++
++يدعم التطبيق الآن الحالات التالية:
++
++- إيقاف الغرفة مؤقتًا، إغلاق التطبيق، ثم استكمال الغرفة نفسها بعد مطابقة المكان.
++- تثبيت غرفة، إغلاق التطبيق، ثم العودة لإضافة الغرفة التالية في نظام الإحداثيات نفسه.
++- حفظ تلقائي عند انتقال التطبيق إلى الخلفية أثناء المسح، بقدر الوقت الذي يمنحه iOS للتطبيق.
++- تحميل ملفات مشاريع المرحلة السابقة حتى عند عدم وجود خريطة مكان؛ تفتح حينها للمراجعة فقط.
++- عرض صورة مرجعية لمساعدة المستخدم أثناء إعادة تحديد الموقع.
++
++> الإغلاق بعد ظهور رسالة اكتمال الحفظ هو المسار الأكثر موثوقية. الإغلاق القسري المفاجئ قبل انتهاء الحفظ قد يفقد آخر جزء غير مثبت، بينما تبقى الغرف والأجزاء التي حُفظت سابقًا سليمة.
++
+ ## النسخة 0.11.0 — التوقف المؤقت وأجزاء الغرفة
+ 
+ أصبح مسح الغرفة يدعم **توقفًا مؤقتًا حقيقيًا من جهة الكاميرا والتتبع**. عند الضغط على التوقف، يوقف التطبيق جلسة RoomPlan و`ARSession` ثم يعالج النتيجة الحالية ويحفظها كجزء مستقل. عند الاستكمال يبدأ جزء جديد لنفس رقم الغرفة باستخدام جلسة AR المشتركة نفسها داخل تشغيل التطبيق الحالي.
+@@ -39,7 +70,7 @@ Rooms/MultiRoom-<timestamp>/
+ 
+ `room.json` لا يزال ناتج RoomPlan غير معدل، وجميع الأجزاء الأصلية تبقى محفوظة داخل `Fragments`. ملف `wall-metadata.json` يحتفظ أيضًا بسماكات الحوائط المشتركة من مرحلة 0.10.0.
+ 
+-> الاستكمال في 0.11.0 يعمل ما دامت عملية التطبيق الحالية ما زالت مفتوحة. استعادة الجلسة بعد إغلاق التطبيق بالكامل ستكون المرحلة التالية باستخدام خريطة عالم محفوظة وإعادة تحديد الموقع.
++> كانت حدود 0.11.0 تقتصر على تشغيل التطبيق نفسه. أضيفت الاستعادة عبر `ARWorldMap` في 0.12.0 مع الإبقاء على صيغة ملفات 0.11.0 قابلة للقراءة.
+ 
+ ## النسخة 0.8.2 — توافق سجل تطبيقات 3E
+ 
+diff --git a/ROOMSCAN_WORLD_MAP_PHASE4.md b/ROOMSCAN_WORLD_MAP_PHASE4.md
+new file mode 100644
+index 0000000..d2cfa66
+--- /dev/null
++++ b/ROOMSCAN_WORLD_MAP_PHASE4.md
+@@ -0,0 +1,29 @@
++# RoomScan — ARWorldMap Recovery Phase 4
++
++## الهدف
++
++استكمال مشروع مسح متعدد الغرف بعد إغلاق التطبيق، مع الحفاظ قدر الإمكان على نظام الإحداثيات الذي استُخدم عند مسح الغرف السابقة.
++
++## التدفق
++
++1. عند الضغط على **توقف مؤقت** أو **إنهاء وتثبيت الغرفة** يلتقط التطبيق صورة مرجعية ويطلب `ARWorldMap` من `ARSession` الحالية.
++2. تحفظ الخريطة في `Resume/world-map.arexperience` وتحفظ الصورة في `Resume/relocalization-reference.jpg`.
++3. تحفظ حالة المشروع في `session-checkpoint.json` بإصدار schema 2.
++4. عند فتح شاشة المسح يبحث التطبيق عن أحدث مشروع غير مكتمل.
++5. بعد اختيار الاستكمال، يحمّل التطبيق كل الغرف والأجزاء وبيانات الحوائط من JSON.
++6. يشغّل `ARWorldTrackingConfiguration` مع `initialWorldMap` وخيارات إعادة التتبع وإزالة الـanchors الحالية.
++7. ينتظر التطبيق انتقال `ARCamera.TrackingState` إلى `.normal` لأربع قراءات متتالية قبل السماح ببدء RoomPlan.
++8. بعد نجاح المطابقة يوقف الكاميرا مؤقتًا، ثم يبدأ RoomPlan فقط عندما يختار المستخدم استكمال الغرفة أو بدء الغرفة التالية.
++
++## التوافق
++
++- تقرأ النسخة الجديدة checkpoints القديمة من 0.11.0 لأن الحقول الجديدة اختيارية.
++- المشاريع القديمة التي لا تحتوي `ARWorldMap` تفتح للمراجعة واعتماد الأجزاء، لكن لا يمكن إضافة مسح جديد مضمون الارتباط المكاني.
++- لا يتم تعديل JSON الأصلي لـRoomPlan.
++
++## القيود
++
++- نجاح إعادة تحديد الموقع يعتمد على العودة إلى البيئة نفسها، قرب منطقة سبق رؤيتها، مع إضاءة وتفاصيل بصرية كافية.
++- لا توجد ضمانة أن iOS يمنح وقتًا كافيًا عند الإغلاق القسري أثناء مسح نشط؛ الإيقاف المؤقت وانتظار رسالة اكتمال الحفظ أكثر موثوقية.
++- `ARWorldMap` لا يستعيد كائن RoomPlan من منتصفه؛ يبدأ التطبيق جزء RoomPlan جديدًا ضمن الغرفة المنطقية نفسها.
++- إذا تغيرت البيئة كثيرًا أو تعذر التتبع، يجب إعادة المحاولة أو اعتماد البيانات المحفوظة دون استكمال مكاني.
+diff --git a/TEST_3E.md b/TEST_3E.md
+index 04d60c2..18a1d27 100644
+--- a/TEST_3E.md
++++ b/TEST_3E.md
+@@ -147,7 +147,32 @@ session-checkpoint.json
+ 13. اختبر **اعتماد الأجزاء وإنهاء الغرفة** أثناء التوقف، ويجب إنهاء الغرفة دون إعادة تشغيل الكاميرا.
+ 14. اختبر غرفة ثانية وحائطًا مشتركًا؛ يجب أن يظل منطق السماكة المشتركة من 0.10.0 يعمل.
+ 
+-### اختبار حدود المرحلة
++### اختبار التوافق مع المرحلة الجديدة
+ 
+-- أغلق التطبيق بالكامل أثناء التوقف ثم افتحه. لا يُفترض أن يظهر زر استكمال في 0.11.0؛ الملفات المحفوظة يجب ألا تضيع.
+-- تحريك الجهاز بعيدًا أثناء التوقف قد يسبب انحرافًا عند الاستكمال، لذلك اختبر أولًا والجهاز ثابت أو قريب من آخر موضع.
++- في 0.12.0 يجب أن يظهر المشروع غير المكتمل بعد إغلاق التطبيق، بشرط اكتمال حفظ خريطة المكان.
++- مشاريع 0.11.0 التي لا تحتوي خريطة مكان يجب أن تفتح للمراجعة فقط دون فقد الملفات.
++- تحريك الجهاز بعيدًا عن البيئة السابقة قد يمنع إعادة تحديد الموقع؛ ارجع إلى آخر باب أو حائط واضح.
++
++## 9. اختبار الاستكمال بعد إغلاق التطبيق — 0.12.0
++
++1. امسح جزءًا من غرفة واضغط **توقف مؤقت**.
++2. انتظر حتى تظهر رسالة أن خريطة المكان محفوظة.
++3. تحقق من وجود:
++
++```text
++Resume/world-map.arexperience
++Resume/relocalization-reference.jpg
++session-checkpoint.json
++```
++
++4. أغلق التطبيق بالكامل ثم افتحه.
++5. افتح **مسح متعدد الغرف** ويجب أن تظهر نافذة مشروع غير مكتمل.
++6. اضغط **تحميل واستكمال المشروع**.
++7. طابق الكاميرا مع الصورة المرجعية، وتحرك ببطء حتى تظهر رسالة نجاح المطابقة.
++8. استكمل الغرفة وتأكد من إنشاء Fragment جديد لنفس رقم الغرفة.
++9. ثبت الغرفة، أغلق التطبيق، ثم استعد المشروع مرة أخرى.
++10. بعد نجاح المطابقة ابدأ الغرفة التالية وتحقق من بقاء الإحداثيات والحوائط المشتركة.
++11. اختبر إضاءة ضعيفة أو تغييرًا كبيرًا في المكان؛ يجب أن تظهر مهلة وإمكانية إعادة المحاولة.
++12. اختبر زر **اعتماد الأجزاء دون استكمال مكاني** بعد فشل المطابقة.
++13. اختبر مشروع 0.11.0 قديمًا؛ يجب تحميل JSON مع رسالة عدم وجود خريطة مكان.
++14. أثناء مسح نشط، اخرج إلى الشاشة الرئيسية دون الضغط على توقف؛ تحقق من محاولة الحفظ التلقائي، مع اعتبار هذا المسار أقل ضمانًا من التوقف اليدوي.
+diff --git a/UPDATE_UPLOAD.md b/UPDATE_UPLOAD.md
+index d2593bb..b728dcd 100644
+--- a/UPDATE_UPLOAD.md
++++ b/UPDATE_UPLOAD.md
+@@ -1,4 +1,4 @@
+-# رفع تحديث 3ELiDAR 0.11.0
++# رفع تحديث 3ELiDAR 0.12.0
+ 
+ ## الطريقة الأسرع
+ 
+@@ -8,15 +8,15 @@
+ 4. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
+ 5. نزّل ملف IPA وثبّته بالطريقة التجريبية المعتادة.
+ 
+-## أهم ملفات مرحلة التوقف المؤقت
++## أهم ملفات مرحلة الاستعادة الدائمة
+ 
+ - `project.yml`
+ - `LiDARLab/Features/RoomScan/RoomScanView.swift`
+ - `LiDARLab/Features/RoomScan/RoomScanViewModel.swift`
+-- `LiDARLab/Features/RoomScan/RoomWallMetadata.swift`
+ - `LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift`
+-- `ROOMSCAN_PAUSE_RESUME_PHASE3.md`
++- `LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift`
++- `ROOMSCAN_WORLD_MAP_PHASE4.md`
+ 
+-يمكن استخدام `PAUSE_RESUME_PHASE3.patch` بدل استبدال المشروع الكامل عند العمل داخل Git.
++يمكن استخدام `WORLD_MAP_RECOVERY_PHASE4.patch` بدل استبدال المشروع الكامل عند العمل داخل Git.
+ 
+ لا تضف ملف Entitlements ولا تفعّل App Groups في Signing & Capabilities عند استخدام التوقيع المجاني.
+diff --git a/VALIDATION.md b/VALIDATION.md
+index 7d6ade9..84ced40 100644
+--- a/VALIDATION.md
++++ b/VALIDATION.md
+@@ -1,29 +1,29 @@
+-# Validation Notes — 0.11.0
++# Validation Notes — 0.12.0
+ 
+-تم تنفيذ الفحوص التالية على مرحلة التوقف المؤقت وأجزاء الغرفة:
++تم تنفيذ الفحوص التالية على مرحلة حفظ المشروع وإعادة تحديد الموقع:
+ 
+ - تحليل Syntax لجميع ملفات Swift باستخدام Swift 6.2 parser.
+ - التحقق من صحة `project.yml` كملف YAML.
+ - التحقق من صحة `LiDARLab/Info.plist` كملف Property List.
+-- التحقق من الإصدار `0.11.0` ورقم البناء `14`.
++- التحقق من الإصدار `0.12.0` ورقم البناء `15`.
+ - التحقق من بقاء Display Name: `3ELiDAR`.
+ - التحقق من بقاء Bundle Identifier: `com.essam.3E.LiDARLab`.
+ - التحقق من بقاء URL Scheme: `lidar`.
+-- التحقق من عدم إضافة App Group entitlement أو تغيير مسارات التخزين الحالية.
+-- التحقق من استمرار استخدام `ARSession` واحدة مشتركة طوال تشغيل مسح المبنى.
+-- التحقق من أن التوقف المؤقت ينفذ `RoomCaptureSession.stop(pauseARSession: true)` لإيقاف جلسة RoomPlan والكاميرا و`ARSession` مع استمرار معالجة النتيجة الجزئية.
+-- التحقق من أن الاستكمال يبدأ `RoomCaptureSession` جديدة لنفس رقم الغرفة داخل الجلسة الحالية.
+-- التحقق من دعم أكثر من توقف واستكمال للغرفة نفسها.
+-- التحقق من حفظ كل جزء في مسار مستقل وعدم استبدال الأجزاء السابقة.
+-- التحقق من إنشاء `fragments.json` و`session-checkpoint.json`.
+-- التحقق من أن حائطًا مكررًا داخل أجزاء الغرفة لا يُحسب حائطًا مشتركًا بين غرفتين.
+-- التحقق من استمرار منطق سماكات الحوائط المشتركة بين أرقام غرف مختلفة.
+-- اختبار منطقي اصطناعي لخوارزمية مطابقة أجزاء الحائط:
+-  - قبول حائط متداخل على المستوى نفسه بفاصل 3 سم.
+-  - قبول امتداد مجاور للحائط بفجوة صغيرة.
+-  - رفض حائط موازٍ على مستوى يبعد مترين.
+-  - رفض حائط متعامد.
+-- التحقق من وجود نسخة احتياطية لملفات مرحلة 0.10.0 داخل `_backup/RoomScan_phase2`.
++- التحقق من عدم إضافة Entitlements أو App Group جديد.
++- التحقق من استمرار استخدام `ARSession` واحدة مشتركة داخل مشروع المسح.
++- التحقق من طلب `getCurrentWorldMap` قبل إيقاف RoomPlan في التوقف المؤقت وتثبيت الغرفة.
++- التحقق من أرشفة `ARWorldMap` باستخدام Secure Coding وكتابتها كتابة ذرية.
++- التحقق من حفظ صورة مرجعية لآخر إطار كاميرا.
++- التحقق من إضافة حقول الاستعادة كحقول اختيارية للحفاظ على قراءة checkpoints القديمة.
++- التحقق من تحميل `CapturedRoom` المجمدة وRoom Fragments وWall Metadata من مجلد المشروع.
++- التحقق من تشغيل `ARWorldTrackingConfiguration.initialWorldMap` عند الاستعادة.
++- التحقق من استخدام `.resetTracking` و`.removeExistingAnchors` عند بدء إعادة تحديد الموقع.
++- التحقق من عدم اعتبار المطابقة ناجحة إلا بعد أربع حالات تتبع `.normal` متتالية.
++- التحقق من وجود مهلة 60 ثانية وإمكانية إعادة المحاولة.
++- التحقق من إيقاف `ARSession` بعد نجاح المطابقة حتى يختار المستخدم بدء RoomPlan.
++- التحقق من إمكانية اعتماد أجزاء الغرفة المحفوظة دون مطابقة مكانية.
++- التحقق من محاولة الحفظ عند انتقال التطبيق إلى inactive/background.
++- التحقق من وجود نسخة احتياطية لملفات 0.11.0 داخل `_backup/RoomScan_phase3`.
+ - فحص سلامة ملف ZIP النهائي بعد إنشائه.
+ 
+ ## قيود التحقق
+@@ -31,17 +31,23 @@
+ لا تتوفر Apple SDKs أو جهاز LiDAR داخل بيئة التنفيذ الحالية، لذلك يتبقى:
+ 
+ 1. تشغيل GitHub Actions على macOS للتأكد من Type-check والربط الكامل مع RoomPlan وARKit.
+-2. اختبار توقف مؤشر الكاميرا فعليًا على جهاز iPhone/iPad يدعم RoomPlan.
+-3. اختبار استقرار الإحداثيات عند استكمال الغرفة بعد فترات توقف مختلفة.
+-4. اختبار ما يحدث إذا تحرك الجهاز كثيرًا أثناء التوقف.
+-5. اختبار `StructureBuilder` مع عدة أجزاء للغرفة الواحدة؛ الناتج يظل نموذج مقارنة وليس مصدر الحقيقة.
++2. اختبار حجم وزمن كتابة `ARWorldMap` على أجهزة مختلفة.
++3. اختبار الاستعادة بعد إغلاق التطبيق بالكامل، وليس مجرد الخلفية.
++4. اختبار إعادة تحديد الموقع من باب مشترك ومن داخل الغرفة نفسها.
++5. اختبار الفشل عند تغيير الأثاث أو الإضاءة ثم إعادة المحاولة.
++6. التأكد من أن RoomPlan يستمر في نفس الإحداثيات بعد نجاح ARKit ثم إيقاف الجلسة واستئنافها.
++7. اختبار الإغلاق القسري أثناء الحفظ؛ لا يمكن ضمان اكتمال العملية لأن iOS قد يوقف التطبيق فورًا.
+ 
+ ## سيناريو الاختبار الأساسي على الجهاز
+ 
+-1. امسح نصف غرفة.
+-2. اضغط **توقف مؤقت** وانتظر اكتمال الحفظ وإغلاق الكاميرا.
+-3. استكمل من نفس الحائط.
+-4. توقف مرة ثانية ثم استكمل.
+-5. أنهِ الغرفة.
+-6. تحقق من وجود ثلاثة ملفات أجزاء، مع رقم غرفة واحد.
+-7. تحقق من أن الحائط المعاد رؤيته يستخدم `buildingWallID` واحدًا ولا يظهر كمشترك إلا عند ربط غرفة ثانية به.
++1. ابدأ غرفة وامسح جزءًا واضحًا يتضمن بابًا أو حائطًا غنيًا بالتفاصيل.
++2. اضغط **توقف مؤقت** وانتظر ظهور تأكيد حفظ الجزء وخريطة المكان.
++3. أغلق التطبيق بالكامل.
++4. افتح التطبيق ثم وظيفة **مسح متعدد الغرف**.
++5. اختر **تحميل واستكمال المشروع**.
++6. قف قرب المكان الظاهر في الصورة المرجعية وحرك الهاتف ببطء.
++7. انتظر رسالة نجاح المطابقة.
++8. اضغط **استكمال الغرفة** وأضف جزءًا جديدًا.
++9. ثبت الغرفة ثم أغلق التطبيق مرة أخرى.
++10. افتح المشروع واستعد المكان، ثم ابدأ الغرفة التالية.
++11. تحقق أن الحائط المشترك يحتفظ بنفس `buildingWallID` والسماكة السابقة.
+diff --git a/project.yml b/project.yml
+index 490da5a..2d15103 100644
+--- a/project.yml
++++ b/project.yml
+@@ -9,8 +9,8 @@ options:
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.11.0"
+-    CURRENT_PROJECT_VERSION: "14"
++    MARKETING_VERSION: "0.12.0"
++    CURRENT_PROJECT_VERSION: "15"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar

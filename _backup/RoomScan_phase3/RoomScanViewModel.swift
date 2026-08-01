@@ -1,6 +1,5 @@
 import ARKit
 import Combine
-import CoreImage
 import RoomPlan
 import simd
 import UIKit
@@ -36,9 +35,6 @@ private struct MultiRoomScanManifest: Codable {
     let physicalWallCount: Int
     let sharedPhysicalWallCount: Int
     let wallMetadataFile: String
-    let worldMapFile: String?
-    let referenceSnapshotFile: String?
-    let resumeCapability: String?
 }
 
 @MainActor
@@ -73,33 +69,13 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     @Published private(set) var statusMessage = "ابدأ مسح المبنى، وامسح كل غرفة منفصلة."
     @Published private(set) var errorMessage: String?
 
-    /// Phase 4 recovery and ARWorldMap relocalization state.
-    @Published private(set) var recoverableProject: RecoverableRoomScanProject?
-    @Published private(set) var relocalizationState: RoomScanRelocalizationState = .idle
-    @Published private(set) var relocalizationMessage = ""
-    @Published private(set) var relocalizationTrackingStatus = ""
-    @Published private(set) var referenceSnapshotImage: UIImage?
-    @Published private(set) var hasSavedWorldMapCheckpoint = false
-    @Published private(set) var worldMapSavedAt: Date?
-
     private weak var captureView: RoomCaptureView?
     private var pendingStartRequest: PendingStartRequest?
     private var shouldAcceptNextProcessedRoom = false
     private var pendingStopAction: PendingStopAction?
+    private var activeRoomDefaultThicknessMeters = 0.15
     private var scanCreatedAt = Date()
     private var capturedFragments: [CapturedFragment] = []
-    private var activeRoomDefaultThicknessMeters = 0.15
-    private var latestWorldMappingStatus = "notAvailable"
-    private var worldMapSaveRequestID: UUID?
-    private var relocalizationTask: Task<Void, Never>?
-    private var recoveredWorldMapURL: URL?
-    private var recoveredProjectRequiresRelocalization = false
-    private var didCheckForRecoverableProject = false
-    private var relocalizationNormalFrameCount = 0
-    private let imageContext = CIContext(options: nil)
-
-    private let worldMapRelativePath = "Resume/world-map.arexperience"
-    private let referenceSnapshotRelativePath = "Resume/relocalization-reference.jpg"
 
     private enum PendingStartRequest {
         case building(defaultThicknessCentimeters: Double)
@@ -107,7 +83,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     }
 
     private enum PendingStopAction: Equatable {
-        case pauseRoom(RoomScanFragmentReason)
+        case pauseRoom
         case finalizeRoom
     }
 
@@ -168,12 +144,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     }
 
     var canStartNextRoom: Bool {
-        !isScanning
-            && !isPaused
-            && !isProcessing
-            && !isBuildingFinished
-            && !capturedRooms.isEmpty
-            && !recoveredProjectRequiresRelocalization
+        !isScanning && !isPaused && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
     }
 
     var canFinishBuilding: Bool {
@@ -185,31 +156,12 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     }
 
     var canResumePausedRoom: Bool {
-        isPaused
-            && !isScanning
-            && !isProcessing
-            && activeRoomNumber > 0
-            && !recoveredProjectRequiresRelocalization
-    }
-
-    var isRelocalizing: Bool {
-        relocalizationState == .preparing || relocalizationState == .relocalizing
-    }
-
-    var requiresRelocalization: Bool { recoveredProjectRequiresRelocalization }
-
-    var canRetryRelocalization: Bool {
-        recoveredProjectRequiresRelocalization && recoveredWorldMapURL != nil && !isRelocalizing
+        isPaused && !isScanning && !isProcessing && activeRoomNumber > 0
     }
 
     func attach(to view: RoomCaptureView) {
         captureView = view
         view.delegate = self
-
-        if !didCheckForRecoverableProject {
-            didCheckForRecoverableProject = true
-            discoverRecoverableProject()
-        }
 
         guard let request = pendingStartRequest else { return }
         pendingStartRequest = nil
@@ -251,10 +203,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             return
         }
         guard !isScanning, !isPaused, !isProcessing, !isBuildingFinished else { return }
-        guard !recoveredProjectRequiresRelocalization else {
-            errorMessage = "أعد تحديد موقع المشروع المحفوظ أولًا قبل إضافة غرفة جديدة."
-            return
-        }
         guard captureView != nil else {
             pendingStartRequest = .room(defaultThicknessCentimeters: defaultWallThicknessCentimeters)
             return
@@ -283,11 +231,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         shouldAcceptNextProcessedRoom = false
         pendingStopAction = nil
         isPaused = false
-        recoveredProjectRequiresRelocalization = false
-        relocalizationState = .idle
-        relocalizationMessage = ""
-        relocalizationTrackingStatus = ""
-        referenceSnapshotImage = nil
 
         let nextFragment = activeRoomFragmentCount + 1
         let thicknessText = centimetersText(defaultThicknessMeters * 100.0)
@@ -302,23 +245,16 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         persistSessionCheckpoint()
     }
 
-    /// Saves a relocalization checkpoint, then freezes the current partial RoomPlan result.
+    /// Stops the current partial capture and asks RoomPlan to pause the shared ARSession.
+    /// Resuming starts a new RoomPlan fragment that belongs to the same logical room.
     func pauseCurrentRoom() {
-        requestPauseCurrentRoom(reason: .manualPause)
-    }
-
-    private func requestPauseCurrentRoom(reason: RoomScanFragmentReason) {
         guard canPauseCurrentRoom else { return }
         isScanning = false
         isProcessing = true
         shouldAcceptNextProcessedRoom = true
-        pendingStopAction = .pauseRoom(reason)
-        statusMessage = "جارٍ حفظ موقع الجهاز والجزء الحالي من الغرفة رقم \(activeRoomNumber)…"
-
-        saveWorldMapCheckpoint(reason: reason.rawValue) { [weak self] in
-            guard let self else { return }
-            self.captureView?.captureSession.stop(pauseARSession: true)
-        }
+        pendingStopAction = .pauseRoom
+        statusMessage = "تم إيقاف الكاميرا، وجارٍ حفظ الجزء الحالي من الغرفة رقم \(activeRoomNumber)…"
+        captureView?.captureSession.stop(pauseARSession: true)
     }
 
     func resumePausedRoom() {
@@ -339,16 +275,13 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         isProcessing = true
         shouldAcceptNextProcessedRoom = true
         pendingStopAction = .finalizeRoom
-        statusMessage = "جارٍ حفظ نقطة الرجوع ثم تثبيت الغرفة رقم \(activeRoomNumber)…"
-        saveWorldMapCheckpoint(reason: "room-finalization") { [weak self] in
-            guard let self else { return }
-            self.captureView?.captureSession.stop(pauseARSession: false)
-        }
+        statusMessage = "جارٍ تثبيت الغرفة رقم \(activeRoomNumber) وربط كل أجزائها وحوائطها المشتركة…"
+        captureView?.captureSession.stop(pauseARSession: false)
     }
 
     /// Finalizes a paused room from its already saved fragments without reopening camera.
     func finishPausedRoom() {
-        guard isPaused, !isScanning, !isProcessing, activeRoomNumber > 0 else { return }
+        guard canResumePausedRoom else { return }
         guard capturedFragments.contains(where: { $0.metadata.roomIndex == activeRoomNumber }) else {
             errorMessage = "لا يوجد جزء محفوظ يمكن اعتماد الغرفة منه."
             return
@@ -487,432 +420,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         errorMessage = nil
     }
 
-    // MARK: - Phase 4 project recovery and spatial relocalization
-
-    func discoverRecoverableProject() {
-        guard !isScanning, !isProcessing, buildingFolderURL == nil else { return }
-
-        let storage = LiDARLabStorage.shared
-        let fileManager = FileManager.default
-        guard let folders = try? fileManager.contentsOfDirectory(
-            at: storage.roomsURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
-
-        let candidates = folders
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            .sorted { storage.modificationDate(at: $0) > storage.modificationDate(at: $1) }
-
-        for folder in candidates {
-            let checkpointURL = folder.appendingPathComponent("session-checkpoint.json")
-            guard let data = try? Data(contentsOf: checkpointURL),
-                  let checkpoint = try? configuredDecoder().decode(RoomScanSessionCheckpoint.self, from: data) else {
-                continue
-            }
-
-            let manifestURL = folder.appendingPathComponent("manifest.json")
-            let manifest = (try? Data(contentsOf: manifestURL))
-                .flatMap { try? configuredDecoder().decode(MultiRoomScanManifest.self, from: $0) }
-            let isFinished = checkpoint.isBuildingFinished ?? manifest?.isFinished ?? false
-            guard !isFinished else { continue }
-            guard checkpoint.completedRoomCount > 0
-                    || checkpoint.totalFragmentCount > 0
-                    || checkpoint.activeRoomNumber > 0 else {
-                continue
-            }
-
-            let mapPath = checkpoint.worldMapRelativePath ?? worldMapRelativePath
-            let snapshotPath = checkpoint.referenceSnapshotRelativePath ?? referenceSnapshotRelativePath
-            recoverableProject = RecoverableRoomScanProject(
-                folderURL: folder,
-                updatedAt: checkpoint.updatedAt,
-                completedRoomCount: checkpoint.completedRoomCount,
-                totalFragmentCount: checkpoint.totalFragmentCount,
-                activeRoomNumber: checkpoint.activeRoomNumber,
-                isPaused: checkpoint.isPaused,
-                hasWorldMap: fileManager.fileExists(atPath: folder.appendingPathComponent(mapPath).path),
-                hasReferenceSnapshot: fileManager.fileExists(atPath: folder.appendingPathComponent(snapshotPath).path)
-            )
-            return
-        }
-    }
-
-    func dismissRecoverySuggestion() {
-        recoverableProject = nil
-    }
-
-    func restoreRecoverableProject() {
-        guard let project = recoverableProject else { return }
-        restoreProject(from: project.folderURL)
-    }
-
-    func closeRecoveredProject() {
-        relocalizationTask?.cancel()
-        relocalizationTask = nil
-        sharedARSession.pause()
-        resetPublishedResults()
-        buildingFolderURL = nil
-        recoverableProject = nil
-        statusMessage = "تم إغلاق المشروع المحفوظ دون حذف ملفاته. يمكنك بدء مبنى جديد."
-    }
-
-    func retryRelocalization() {
-        guard let recoveredWorldMapURL else { return }
-        beginRelocalization(using: recoveredWorldMapURL)
-    }
-
-    func cancelRelocalization() {
-        relocalizationTask?.cancel()
-        relocalizationTask = nil
-        sharedARSession.pause()
-        relocalizationState = .failed
-        relocalizationMessage = "تم إيقاف محاولة مطابقة المكان. ارجع إلى الغرفة أو الباب الظاهر في الصورة ثم أعد المحاولة."
-        relocalizationTrackingStatus = "متوقف"
-    }
-
-    func handleAppBecameInactive() {
-        if isScanning {
-            requestPauseCurrentRoom(reason: .appInterruption)
-        } else if isRelocalizing {
-            relocalizationTask?.cancel()
-            relocalizationTask = nil
-            sharedARSession.pause()
-            relocalizationState = .failed
-            relocalizationMessage = "توقفت مطابقة المكان لأن التطبيق غادر الواجهة. أعد المحاولة بعد العودة."
-            relocalizationTrackingStatus = "متوقف"
-        } else {
-            persistSessionCheckpoint()
-            writeManifest()
-        }
-    }
-
-    func handleAppBecameActive() {
-        if buildingFolderURL == nil, recoverableProject == nil {
-            discoverRecoverableProject()
-        }
-    }
-
-    func suspendForNavigation() {
-        relocalizationTask?.cancel()
-        relocalizationTask = nil
-        sharedARSession.pause()
-        persistSessionCheckpoint()
-        writeManifest()
-    }
-
-    private func restoreProject(from folder: URL) {
-        let checkpointURL = folder.appendingPathComponent("session-checkpoint.json")
-        do {
-            let checkpoint = try configuredDecoder().decode(
-                RoomScanSessionCheckpoint.self,
-                from: Data(contentsOf: checkpointURL)
-            )
-            let manifestURL = folder.appendingPathComponent("manifest.json")
-            let manifest = (try? Data(contentsOf: manifestURL))
-                .flatMap { try? configuredDecoder().decode(MultiRoomScanManifest.self, from: $0) }
-
-            isProcessing = true
-            sharedARSession.pause()
-            resetPublishedResults()
-            buildingFolderURL = folder
-            recoverableProject = nil
-            scanCreatedAt = manifest?.createdAt ?? checkpoint.updatedAt
-            isBuildingFinished = checkpoint.isBuildingFinished ?? manifest?.isFinished ?? false
-
-            let wallURL = folder.appendingPathComponent("wall-metadata.json")
-            if let wallData = try? Data(contentsOf: wallURL),
-               let wallDocument = try? configuredDecoder().decode(BuildingWallMetadataDocument.self, from: wallData) {
-                buildingDefaultWallThicknessMeters = wallDocument.buildingDefaultThicknessMeters
-                roomWallConfigurations = wallDocument.roomConfigurations
-                buildingWallRecords = wallDocument.wallRecords
-                roomWallAssignments = wallDocument.assignments
-            } else {
-                buildingDefaultWallThicknessMeters = checkpoint.buildingDefaultWallThicknessMeters
-                    ?? manifest?.buildingDefaultWallThicknessMeters
-                    ?? 0.15
-            }
-
-            var loadedFragments: [CapturedFragment] = []
-            var loadedMetadataByID: [UUID: RoomScanFragmentMetadata] = [:]
-            var primaryRoomsByIndex: [Int: CapturedRoom] = [:]
-            let frozenRoot = folder.appendingPathComponent("FrozenRooms", isDirectory: true)
-            let roomFolders = (try? FileManager.default.contentsOfDirectory(
-                at: frozenRoot,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
-
-            for roomFolder in roomFolders.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                guard (try? roomFolder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
-                let fallbackRoomIndex = Int(roomFolder.lastPathComponent.split(separator: "-").last ?? "")
-
-                let fragmentsURL = roomFolder.appendingPathComponent("fragments.json")
-                if let fragmentsData = try? Data(contentsOf: fragmentsURL),
-                   let document = try? configuredDecoder().decode(RoomFragmentsDocument.self, from: fragmentsData) {
-                    for metadata in document.fragments {
-                        loadedMetadataByID[metadata.id] = metadata
-                        let fragmentURL = folder.appendingPathComponent(metadata.relativeJSONPath)
-                        if let data = try? Data(contentsOf: fragmentURL),
-                           let room = try? configuredDecoder().decode(CapturedRoom.self, from: data) {
-                            loadedFragments.append(CapturedFragment(metadata: metadata, room: room))
-                        }
-                    }
-                }
-
-                let primaryURL = roomFolder.appendingPathComponent("room.json")
-                if let roomIndex = fallbackRoomIndex,
-                   roomIndex <= checkpoint.completedRoomCount,
-                   let roomData = try? Data(contentsOf: primaryURL),
-                   let room = try? configuredDecoder().decode(CapturedRoom.self, from: roomData) {
-                    primaryRoomsByIndex[roomIndex] = room
-                }
-            }
-
-            fragmentMetadata = loadedMetadataByID.values.sorted {
-                ($0.roomIndex, $0.fragmentIndex) < ($1.roomIndex, $1.fragmentIndex)
-            }
-            capturedFragments = loadedFragments.sorted {
-                ($0.metadata.roomIndex, $0.metadata.fragmentIndex)
-                    < ($1.metadata.roomIndex, $1.metadata.fragmentIndex)
-            }
-            if checkpoint.completedRoomCount > 0 {
-                capturedRooms = (1...checkpoint.completedRoomCount).compactMap { primaryRoomsByIndex[$0] }
-            }
-            capturedRoom = capturedRooms.last
-
-            activeRoomNumber = checkpoint.activeRoomNumber
-            activeRoomFragmentCount = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count
-            activeRoomDefaultThicknessMeters = checkpoint.activeRoomDefaultThicknessMeters
-                ?? roomWallConfigurations.first(where: { $0.roomIndex == activeRoomNumber })?.defaultThicknessMeters
-                ?? roomWallConfigurations.last?.defaultThicknessMeters
-                ?? buildingDefaultWallThicknessMeters
-            isPaused = activeRoomNumber > 0
-            isScanning = false
-            isProcessing = false
-
-            let mapPath = checkpoint.worldMapRelativePath ?? worldMapRelativePath
-            let snapshotPath = checkpoint.referenceSnapshotRelativePath ?? referenceSnapshotRelativePath
-            let mapURL = folder.appendingPathComponent(mapPath)
-            let snapshotURL = folder.appendingPathComponent(snapshotPath)
-            recoveredWorldMapURL = FileManager.default.fileExists(atPath: mapURL.path) ? mapURL : nil
-            hasSavedWorldMapCheckpoint = recoveredWorldMapURL != nil
-            worldMapSavedAt = checkpoint.worldMapSavedAt
-            latestWorldMappingStatus = checkpoint.worldMappingStatus ?? "unknown"
-            referenceSnapshotImage = UIImage(contentsOfFile: snapshotURL.path)
-            recoveredProjectRequiresRelocalization = !isBuildingFinished
-
-            if let recoveredWorldMapURL, recoveredProjectRequiresRelocalization {
-                statusMessage = "تم تحميل المشروع المحفوظ. طابق المكان قبل استكمال المسح."
-                beginRelocalization(using: recoveredWorldMapURL)
-            } else if recoveredProjectRequiresRelocalization {
-                relocalizationState = .failed
-                relocalizationMessage = "تم تحميل بيانات المشروع، لكن لا توجد خريطة مكان صالحة. يمكن مراجعة البيانات أو اعتماد أجزاء الغرفة، ولا يمكن إضافة مسح مرتبط مكانيًا."
-                relocalizationTrackingStatus = "خريطة المكان غير موجودة"
-                statusMessage = "المشروع مفتوح للمراجعة فقط لعدم وجود ARWorldMap محفوظة."
-            } else {
-                relocalizationState = .idle
-                statusMessage = "تم تحميل المشروع المكتمل من الملفات."
-            }
-        } catch {
-            isProcessing = false
-            errorMessage = "تعذر استعادة مشروع المسح: \(error.localizedDescription)"
-        }
-    }
-
-    private func beginRelocalization(using worldMapURL: URL) {
-        guard ARWorldTrackingConfiguration.isSupported else {
-            relocalizationState = .failed
-            relocalizationMessage = "تتبع العالم غير مدعوم على هذا الجهاز."
-            return
-        }
-
-        do {
-            relocalizationTask?.cancel()
-            relocalizationTask = nil
-            relocalizationState = .preparing
-            relocalizationMessage = "جارٍ تحميل خريطة المكان المحفوظة…"
-            relocalizationTrackingStatus = "تحضير"
-            relocalizationNormalFrameCount = 0
-
-            let data = try Data(contentsOf: worldMapURL)
-            guard let worldMap = try NSKeyedUnarchiver.unarchivedObject(
-                ofClass: ARWorldMap.self,
-                from: data
-            ) else {
-                throw CocoaError(.coderReadCorrupt)
-            }
-
-            let configuration = ARWorldTrackingConfiguration()
-            configuration.initialWorldMap = worldMap
-            configuration.planeDetection = [.horizontal, .vertical]
-            sharedARSession.run(
-                configuration,
-                options: [.resetTracking, .removeExistingAnchors]
-            )
-
-            recoveredProjectRequiresRelocalization = true
-            relocalizationState = .relocalizing
-            relocalizationMessage = "قف قرب آخر غرفة أو باب، وحرّك الهاتف ببطء حتى يتعرف على المكان."
-            relocalizationTrackingStatus = "جارٍ البحث عن المكان"
-
-            relocalizationTask = Task { [weak self] in
-                guard let self else { return }
-                let deadline = Date().addingTimeInterval(60)
-                while !Task.isCancelled, Date() < deadline {
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                    if self.evaluateRelocalizationFrame() { return }
-                }
-
-                guard !Task.isCancelled,
-                      self.relocalizationState == .relocalizing else { return }
-                self.sharedARSession.pause()
-                self.relocalizationState = .failed
-                self.relocalizationMessage = "لم يتم التعرف على المكان خلال دقيقة. ارجع إلى الموضع الظاهر في الصورة، حسّن الإضاءة، ثم أعد المحاولة."
-                self.relocalizationTrackingStatus = "انتهت المهلة"
-            }
-        } catch {
-            relocalizationState = .failed
-            relocalizationMessage = "تعذر قراءة خريطة المكان المحفوظة: \(error.localizedDescription)"
-            relocalizationTrackingStatus = "فشل تحميل الخريطة"
-        }
-    }
-
-    private func evaluateRelocalizationFrame() -> Bool {
-        guard relocalizationState == .relocalizing else { return true }
-        guard let frame = sharedARSession.currentFrame else {
-            relocalizationTrackingStatus = "في انتظار الكاميرا"
-            relocalizationNormalFrameCount = 0
-            return false
-        }
-
-        latestWorldMappingStatus = worldMappingStatusText(frame.worldMappingStatus)
-        switch frame.camera.trackingState {
-        case .normal:
-            relocalizationNormalFrameCount += 1
-            relocalizationTrackingStatus = "تم العثور على تطابق — جارٍ التثبيت"
-            guard relocalizationNormalFrameCount >= 4 else { return false }
-
-            sharedARSession.pause()
-            recoveredProjectRequiresRelocalization = false
-            relocalizationState = .localized
-            relocalizationMessage = activeRoomNumber > 0
-                ? "تمت مطابقة المكان. يمكنك الآن استكمال الغرفة \(activeRoomNumber) أو اعتماد الأجزاء المحفوظة."
-                : "تمت مطابقة المكان. يمكنك الآن إضافة الغرفة التالية في نفس نظام الإحداثيات."
-            relocalizationTrackingStatus = "تمت المطابقة بنجاح"
-            statusMessage = relocalizationMessage
-            persistSessionCheckpoint()
-            writeManifest()
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            return true
-
-        case .limited(let reason):
-            relocalizationNormalFrameCount = 0
-            switch reason {
-            case .relocalizing:
-                relocalizationTrackingStatus = "مطابقة الخريطة المحفوظة"
-            case .initializing:
-                relocalizationTrackingStatus = "تهيئة الكاميرا"
-            case .excessiveMotion:
-                relocalizationTrackingStatus = "حرّك الهاتف ببطء"
-            case .insufficientFeatures:
-                relocalizationTrackingStatus = "وجّه الهاتف إلى جدار أو باب غني بالتفاصيل"
-            @unknown default:
-                relocalizationTrackingStatus = "التتبع محدود"
-            }
-            return false
-
-        case .notAvailable:
-            relocalizationNormalFrameCount = 0
-            relocalizationTrackingStatus = "التتبع غير متاح"
-            return false
-        }
-    }
-
-    private func saveWorldMapCheckpoint(
-        reason: String,
-        completion: @escaping () -> Void
-    ) {
-        guard let buildingFolderURL,
-              let frame = sharedARSession.currentFrame else {
-            completion()
-            return
-        }
-
-        latestWorldMappingStatus = worldMappingStatusText(frame.worldMappingStatus)
-        let snapshotData = referenceSnapshotJPEGData(from: frame)
-        let resumeFolder = buildingFolderURL.appendingPathComponent("Resume", isDirectory: true)
-        try? FileManager.default.createDirectory(at: resumeFolder, withIntermediateDirectories: true)
-        if let snapshotData {
-            let snapshotURL = buildingFolderURL.appendingPathComponent(referenceSnapshotRelativePath)
-            try? snapshotData.write(to: snapshotURL, options: .atomic)
-            referenceSnapshotImage = UIImage(data: snapshotData)
-        }
-
-        let requestID = UUID()
-        worldMapSaveRequestID = requestID
-        relocalizationMessage = "حفظ نقطة استعادة: \(reason)"
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-            guard let self, self.worldMapSaveRequestID == requestID else { return }
-            self.worldMapSaveRequestID = nil
-            self.persistSessionCheckpoint()
-            self.writeManifest()
-            completion()
-        }
-
-        sharedARSession.getCurrentWorldMap { [weak self] worldMap, _ in
-            DispatchQueue.main.async {
-                guard let self, self.worldMapSaveRequestID == requestID else { return }
-                self.worldMapSaveRequestID = nil
-
-                if let worldMap,
-                   let data = try? NSKeyedArchiver.archivedData(
-                    withRootObject: worldMap,
-                    requiringSecureCoding: true
-                   ) {
-                    let mapURL = buildingFolderURL.appendingPathComponent(self.worldMapRelativePath)
-                    do {
-                        try data.write(to: mapURL, options: .atomic)
-                        self.hasSavedWorldMapCheckpoint = true
-                        self.worldMapSavedAt = Date()
-                        self.recoveredWorldMapURL = mapURL
-                    } catch {
-                        if !self.hasSavedWorldMapCheckpoint {
-                            self.relocalizationMessage = "تعذر كتابة خريطة المكان: \(error.localizedDescription)"
-                        }
-                    }
-                }
-
-                self.persistSessionCheckpoint()
-                self.writeManifest()
-                completion()
-            }
-        }
-    }
-
-    private func referenceSnapshotJPEGData(from frame: ARFrame) -> Data? {
-        let image = CIImage(cvPixelBuffer: frame.capturedImage)
-        guard let cgImage = imageContext.createCGImage(image, from: image.extent) else { return nil }
-        let oriented = UIImage(cgImage: cgImage, scale: 1, orientation: .right)
-        return oriented.jpegData(compressionQuality: 0.72)
-    }
-
-    private func worldMappingStatusText(_ status: ARFrame.WorldMappingStatus) -> String {
-        switch status {
-        case .notAvailable:
-            return "notAvailable"
-        case .limited:
-            return "limited"
-        case .extending:
-            return "extending"
-        case .mapped:
-            return "mapped"
-        @unknown default:
-            return "unknown"
-        }
-    }
-
     // MARK: - Wall thickness metadata
 
     func wallItems(for roomIndex: Int) -> [RoomWallDisplayItem] {
@@ -1046,13 +553,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
 
         let roomIndex = activeRoomNumber
         let fragmentIndex = fragmentMetadata.filter { $0.roomIndex == roomIndex }.count + 1
-        let reason: RoomScanFragmentReason
-        switch stopAction {
-        case .pauseRoom(let pauseReason):
-            reason = pauseReason
-        case .finalizeRoom:
-            reason = .roomCompletion
-        }
+        let reason: RoomScanFragmentReason = stopAction == .pauseRoom ? .manualPause : .roomCompletion
         let metadata = makeFragmentMetadata(
             for: processedResult,
             roomIndex: roomIndex,
@@ -1077,12 +578,10 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         persistRoomFragmentsDocument(roomIndex: roomIndex, isFinalized: stopAction == .finalizeRoom)
 
         switch stopAction {
-        case .pauseRoom(let pauseReason):
+        case .pauseRoom:
             sharedARSession.pause()
             isPaused = true
-            statusMessage = pauseReason == .appInterruption
-                ? "تم الحفظ تلقائيًا عند مغادرة التطبيق. يمكنك العودة لاحقًا واستعادة المكان."
-                : "تم حفظ الجزء \(fragmentIndex) من الغرفة \(roomIndex) وخريطة المكان. يمكنك إغلاق التطبيق والعودة لاحقًا."
+            statusMessage = "تم حفظ الجزء \(fragmentIndex) من الغرفة \(roomIndex) وإغلاق الكاميرا. لا تحرك الهاتف كثيرًا قبل الاستكمال."
             persistSessionCheckpoint()
             writeManifest()
             UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -1470,13 +969,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             .mapValues { assignments in Set(assignments.map(\.roomIndex)).count }
     }
 
-    private var hasReferenceSnapshotCheckpoint: Bool {
-        guard let buildingFolderURL else { return false }
-        return FileManager.default.fileExists(
-            atPath: buildingFolderURL.appendingPathComponent(referenceSnapshotRelativePath).path
-        )
-    }
-
     // MARK: - Persistence and export
 
     private func resetPublishedResults() {
@@ -1495,19 +987,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         buildingWallRecords = []
         roomWallAssignments = []
         latestExport = nil
-        relocalizationTask?.cancel()
-        relocalizationTask = nil
-        worldMapSaveRequestID = nil
-        relocalizationState = .idle
-        relocalizationMessage = ""
-        relocalizationTrackingStatus = ""
-        referenceSnapshotImage = nil
-        recoveredWorldMapURL = nil
-        recoveredProjectRequiresRelocalization = false
-        relocalizationNormalFrameCount = 0
-        hasSavedWorldMapCheckpoint = false
-        worldMapSavedAt = nil
-        latestWorldMappingStatus = "notAvailable"
         shouldAcceptNextProcessedRoom = false
         pendingStopAction = nil
         activeRoomDefaultThicknessMeters = buildingDefaultWallThicknessMeters
@@ -1581,21 +1060,14 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         guard let buildingFolderURL else { return }
 
         let checkpoint = RoomScanSessionCheckpoint(
-            schemaVersion: 2,
+            schemaVersion: 1,
             updatedAt: Date(),
             completedRoomCount: capturedRooms.count,
             totalFragmentCount: fragmentMetadata.count,
             isPaused: isPaused,
             activeRoomNumber: activeRoomNumber,
             activeRoomFragmentCount: activeRoomFragmentCount,
-            resumeScope: "saved-ARWorldMap-across-app-launches",
-            buildingDefaultWallThicknessMeters: buildingDefaultWallThicknessMeters,
-            activeRoomDefaultThicknessMeters: activeRoomDefaultThicknessMeters,
-            isBuildingFinished: isBuildingFinished,
-            worldMapRelativePath: hasSavedWorldMapCheckpoint ? worldMapRelativePath : nil,
-            referenceSnapshotRelativePath: hasReferenceSnapshotCheckpoint ? referenceSnapshotRelativePath : nil,
-            worldMapSavedAt: worldMapSavedAt,
-            worldMappingStatus: latestWorldMappingStatus
+            resumeScope: "same-app-process-shared-ARSession"
         )
 
         do {
@@ -1697,7 +1169,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
 
         do {
             let manifest = MultiRoomScanManifest(
-                schemaVersion: 4,
+                schemaVersion: 3,
                 createdAt: scanCreatedAt,
                 updatedAt: Date(),
                 roomCount: capturedRooms.count,
@@ -1709,10 +1181,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
                 buildingDefaultWallThicknessMeters: buildingDefaultWallThicknessMeters,
                 physicalWallCount: physicalWallCount,
                 sharedPhysicalWallCount: sharedPhysicalWallCount,
-                wallMetadataFile: "wall-metadata.json",
-                worldMapFile: hasSavedWorldMapCheckpoint ? worldMapRelativePath : nil,
-                referenceSnapshotFile: hasReferenceSnapshotCheckpoint ? referenceSnapshotRelativePath : nil,
-                resumeCapability: hasSavedWorldMapCheckpoint ? "ARWorldMap-relocalization" : "project-data-only"
+                wallMetadataFile: "wall-metadata.json"
             )
             let url = buildingFolderURL.appendingPathComponent("manifest.json")
             try configuredEncoder().encode(manifest).write(to: url, options: .atomic)
@@ -1779,12 +1248,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         return encoder
-    }
-
-    private func configuredDecoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
     }
 
     private func validatedThicknessMeters(fromCentimeters centimeters: Double) -> Double {

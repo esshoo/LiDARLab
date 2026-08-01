@@ -1,9 +1,8 @@
 import RoomPlan
 import SwiftUI
 
-/// Keeps one RoomCaptureView and one app-owned ARSession alive for the whole workflow.
-/// The same ARSession is reused for separate rooms and is also loaded with a saved
-/// ARWorldMap when an unfinished project is reopened.
+/// Keeps one RoomCaptureView and one ARSession alive for the whole multi-room workflow.
+/// Every room is still captured as a separate RoomPlan scan.
 struct RoomCaptureViewContainer: UIViewRepresentable {
     @ObservedObject var model: RoomScanViewModel
 

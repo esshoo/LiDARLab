@@ -4,15 +4,12 @@ import Foundation
 /// so the app freezes the current partial result and starts another fragment later.
 enum RoomScanFragmentReason: String, Codable, Equatable {
     case manualPause
-    case appInterruption
     case roomCompletion
 
     var arabicTitle: String {
         switch self {
         case .manualPause:
             return "توقف مؤقت"
-        case .appInterruption:
-            return "حفظ تلقائي عند مغادرة التطبيق"
         case .roomCompletion:
             return "إنهاء الغرفة"
         }
@@ -44,8 +41,8 @@ struct RoomFragmentsDocument: Codable, Equatable {
     let fragments: [RoomScanFragmentMetadata]
 }
 
-/// Durable checkpoint for reopening an unfinished scan after the app process ends.
-/// New optional fields keep checkpoints from Phase 3 readable.
+/// Phase 3 writes this checkpoint to prepare for Phase 4 persistence. In this phase,
+/// resuming is supported only while the same app process and shared ARSession remain alive.
 struct RoomScanSessionCheckpoint: Codable, Equatable {
     let schemaVersion: Int
     let updatedAt: Date
@@ -55,33 +52,4 @@ struct RoomScanSessionCheckpoint: Codable, Equatable {
     let activeRoomNumber: Int
     let activeRoomFragmentCount: Int
     let resumeScope: String
-
-    let buildingDefaultWallThicknessMeters: Double?
-    let activeRoomDefaultThicknessMeters: Double?
-    let isBuildingFinished: Bool?
-    let worldMapRelativePath: String?
-    let referenceSnapshotRelativePath: String?
-    let worldMapSavedAt: Date?
-    let worldMappingStatus: String?
-}
-
-/// Lightweight summary shown before loading an unfinished project from disk.
-struct RecoverableRoomScanProject: Identifiable, Equatable {
-    var id: String { folderURL.path }
-    let folderURL: URL
-    let updatedAt: Date
-    let completedRoomCount: Int
-    let totalFragmentCount: Int
-    let activeRoomNumber: Int
-    let isPaused: Bool
-    let hasWorldMap: Bool
-    let hasReferenceSnapshot: Bool
-}
-
-enum RoomScanRelocalizationState: String, Equatable {
-    case idle
-    case preparing
-    case relocalizing
-    case localized
-    case failed
 }

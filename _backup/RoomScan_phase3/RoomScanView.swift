@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct RoomScanView: View {
-    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = RoomScanViewModel()
     @State private var showingShareSheet = false
     @State private var showingResetConfirmation = false
@@ -16,12 +15,8 @@ struct RoomScanView: View {
             RoomCaptureViewContainer(model: model)
                 .ignoresSafeArea(edges: .bottom)
 
-            if model.isPaused && !model.isRelocalizing && !model.requiresRelocalization {
+            if model.isPaused {
                 pausedCameraOverlay
-            }
-
-            if model.isRelocalizing || model.requiresRelocalization {
-                relocalizationOverlay
             }
 
             VStack(spacing: 12) {
@@ -35,19 +30,7 @@ struct RoomScanView: View {
         .background(.black)
         .navigationTitle("مسح متعدد الغرف")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(model.isScanning || model.isProcessing || model.isRelocalizing)
-        .onAppear { model.handleAppBecameActive() }
-        .onDisappear { model.suspendForNavigation() }
-        .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
-                model.handleAppBecameActive()
-            case .inactive, .background:
-                model.handleAppBecameInactive()
-            @unknown default:
-                break
-            }
-        }
+        .onDisappear { model.stopWithoutProcessing() }
         .sheet(isPresented: $showingShareSheet) {
             ActivityView(items: shareItems)
         }
@@ -79,19 +62,6 @@ struct RoomScanView: View {
                     roomIndex: model.roomCount
                 )
             }
-        }
-        .sheet(item: Binding(
-            get: { model.recoverableProject },
-            set: { value in
-                if value == nil { model.dismissRecoverySuggestion() }
-            }
-        )) { project in
-            RoomScanRecoverySheet(
-                project: project,
-                onRestore: { model.restoreRecoverableProject() },
-                onDismiss: { model.dismissRecoverySuggestion() }
-            )
-            .presentationDetents([.medium, .large])
         }
         .alert("حذف جلسة المسح الحالية؟", isPresented: $showingResetConfirmation) {
             Button("حذف وبدء جديد", role: .destructive) {
@@ -140,20 +110,6 @@ struct RoomScanView: View {
                 .foregroundStyle(.yellow)
             }
 
-            if model.isRelocalizing || model.requiresRelocalization {
-                VStack(alignment: .leading, spacing: 5) {
-                    Label(
-                        model.relocalizationMessage,
-                        systemImage: model.isRelocalizing ? "location.magnifyingglass" : "exclamationmark.triangle.fill"
-                    )
-                    if !model.relocalizationTrackingStatus.isEmpty {
-                        Label(model.relocalizationTrackingStatus, systemImage: "wave.3.right")
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(model.isRelocalizing ? .yellow : .orange)
-            }
-
             if model.isPaused {
                 VStack(alignment: .leading, spacing: 5) {
                     Label(
@@ -161,9 +117,7 @@ struct RoomScanView: View {
                         systemImage: "pause.circle.fill"
                     )
                     Label(
-                        model.hasSavedWorldMapCheckpoint
-                            ? "الأجزاء المحفوظة: \(model.activeRoomFragmentCount). خريطة المكان محفوظة للاستكمال بعد إغلاق التطبيق."
-                            : "الأجزاء المحفوظة: \(model.activeRoomFragmentCount). خريطة المكان غير متاحة بعد.",
+                        "الأجزاء المحفوظة: \(model.activeRoomFragmentCount). الاستكمال متاح ما دامت شاشة التطبيق الحالية مفتوحة.",
                         systemImage: "square.stack.3d.up.fill"
                     )
                 }
@@ -259,66 +213,7 @@ struct RoomScanView: View {
 
     @ViewBuilder
     private var primaryControls: some View {
-        if model.isRelocalizing {
-            VStack(spacing: 10) {
-                Button {} label: {
-                    Label("جارٍ مطابقة المكان المحفوظ…", systemImage: "location.magnifyingglass")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(true)
-
-                Button(role: .cancel) {
-                    model.cancelRelocalization()
-                } label: {
-                    Label("إيقاف محاولة المطابقة", systemImage: "xmark.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-        } else if model.requiresRelocalization {
-            VStack(spacing: 10) {
-                if model.canRetryRelocalization {
-                    Button {
-                        model.retryRelocalization()
-                    } label: {
-                        Label("إعادة محاولة مطابقة المكان", systemImage: "arrow.clockwise.circle.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-
-                if model.isPaused && model.activeRoomFragmentCount > 0 {
-                    Button {
-                        model.finishPausedRoom()
-                    } label: {
-                        Label("اعتماد الأجزاء دون استكمال مكاني", systemImage: "checkmark.seal")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if !model.isPaused && model.roomCount > 0 {
-                    Button {
-                        model.finishBuilding()
-                    } label: {
-                        Label("إنهاء المبنى بالبيانات المحفوظة", systemImage: "checkmark.seal.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Button(role: .destructive) {
-                    model.closeRecoveredProject()
-                } label: {
-                    Label("إغلاق المشروع المحفوظ", systemImage: "xmark.rectangle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-        } else if model.isScanning {
+        if model.isScanning {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) { activeScanControls }
                 VStack(spacing: 10) { activeScanControls }
@@ -343,9 +238,7 @@ struct RoomScanView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
-                Text(model.hasSavedWorldMapCheckpoint
-                     ? "تم حفظ خريطة المكان. يمكنك إغلاق التطبيق، ثم اختيار استكمال المشروع عند العودة."
-                     : "لم تُحفظ خريطة مكان موثوقة بعد؛ استكمال الجلسة الحالية هو الخيار الأكثر أمانًا.")
+                Text("لا تغلق التطبيق في هذه المرحلة؛ الاستكمال بعد إغلاق التطبيق سيُضاف في المرحلة التالية.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -367,14 +260,6 @@ struct RoomScanView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-
-            Button {
-                model.discoverRecoverableProject()
-            } label: {
-                Label("البحث عن مشروع غير مكتمل", systemImage: "clock.arrow.circlepath")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
         } else if !model.isBuildingFinished {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) { continuationControls }
@@ -482,55 +367,7 @@ struct RoomScanView: View {
         }
     }
 
-    private var relocalizationOverlay: some View {
-        VStack {
-            Spacer(minLength: 150)
-
-            VStack(spacing: 12) {
-                if let image = model.referenceSnapshotImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: 300, maxHeight: 180)
-                        .clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(alignment: .bottom) {
-                            Text("الصورة المرجعية لآخر موضع محفوظ")
-                                .font(.caption2.bold())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(.ultraThinMaterial, in: Capsule())
-                                .padding(8)
-                        }
-                } else {
-                    Image(systemName: "location.viewfinder")
-                        .font(.system(size: 44))
-                        .foregroundStyle(.yellow)
-                }
-
-                Text(model.relocalizationMessage)
-                    .font(.caption.bold())
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 310)
-
-                if !model.relocalizationTrackingStatus.isEmpty {
-                    Text(model.relocalizationTrackingStatus)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(14)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-            .padding(.horizontal, 18)
-
-            Spacer(minLength: 220)
-        }
-        .allowsHitTesting(false)
-    }
-
     private var stateIcon: String {
-        if model.isRelocalizing { return "location.magnifyingglass" }
-        if model.requiresRelocalization { return "exclamationmark.triangle.fill" }
         if model.isProcessing { return "gearshape.2.fill" }
         if model.isBuildingFinished { return "checkmark.seal.fill" }
         if model.isPaused { return "pause.circle.fill" }
@@ -540,8 +377,6 @@ struct RoomScanView: View {
     }
 
     private var stateColor: Color {
-        if model.isRelocalizing { return .yellow }
-        if model.requiresRelocalization { return .orange }
         if model.isBuildingFinished { return .green }
         if model.isPaused { return .orange }
         if model.isScanning { return .red }
@@ -819,71 +654,5 @@ private struct RoomWallThicknessRow: View {
             return String(Int(value.rounded()))
         }
         return String(format: "%.1f", value)
-    }
-}
-
-private struct RoomScanRecoverySheet: View {
-    let project: RecoverableRoomScanProject
-    let onRestore: () -> Void
-    let onDismiss: () -> Void
-
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 18) {
-                Image(systemName: project.hasWorldMap ? "location.fill.viewfinder" : "externaldrive.badge.exclamationmark")
-                    .font(.system(size: 48))
-                    .foregroundStyle(project.hasWorldMap ? .cyan : .orange)
-
-                Text("تم العثور على مشروع مسح غير مكتمل")
-                    .font(.title3.bold())
-                    .multilineTextAlignment(.center)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("غرف مثبتة: \(project.completedRoomCount)", systemImage: "square.grid.2x2")
-                    Label("أجزاء محفوظة: \(project.totalFragmentCount)", systemImage: "square.stack.3d.up")
-                    if project.activeRoomNumber > 0 {
-                        Label("الغرفة الحالية: \(project.activeRoomNumber)", systemImage: "door.left.hand.closed")
-                    }
-                    Label(
-                        project.hasWorldMap
-                            ? "توجد خريطة مكان للاستكمال بعد مطابقة الكاميرا."
-                            : "لا توجد خريطة مكان؛ سيفتح المشروع للمراجعة فقط.",
-                        systemImage: project.hasWorldMap ? "checkmark.icloud" : "exclamationmark.icloud"
-                    )
-                    Label(
-                        project.updatedAt.formatted(date: .abbreviated, time: .shortened),
-                        systemImage: "clock"
-                    )
-                }
-                .font(.callout)
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
-
-                Button {
-                    onRestore()
-                    dismiss()
-                } label: {
-                    Label("تحميل واستكمال المشروع", systemImage: "arrow.clockwise.icloud.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-
-                Button {
-                    onDismiss()
-                    dismiss()
-                } label: {
-                    Text("ليس الآن")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding(20)
-            .navigationTitle("استعادة جلسة المسح")
-            .navigationBarTitleDisplayMode(.inline)
-        }
     }
 }

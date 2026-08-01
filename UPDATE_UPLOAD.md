@@ -1,4 +1,4 @@
-# رفع تحديث 3ELiDAR 0.11.0
+# رفع تحديث 3ELiDAR 0.12.0
 
 ## الطريقة الأسرع
 
@@ -8,15 +8,15 @@
 4. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
 5. نزّل ملف IPA وثبّته بالطريقة التجريبية المعتادة.
 
-## أهم ملفات مرحلة التوقف المؤقت
+## أهم ملفات مرحلة الاستعادة الدائمة
 
 - `project.yml`
 - `LiDARLab/Features/RoomScan/RoomScanView.swift`
 - `LiDARLab/Features/RoomScan/RoomScanViewModel.swift`
-- `LiDARLab/Features/RoomScan/RoomWallMetadata.swift`
 - `LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift`
-- `ROOMSCAN_PAUSE_RESUME_PHASE3.md`
+- `LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift`
+- `ROOMSCAN_WORLD_MAP_PHASE4.md`
 
-يمكن استخدام `PAUSE_RESUME_PHASE3.patch` بدل استبدال المشروع الكامل عند العمل داخل Git.
+يمكن استخدام `WORLD_MAP_RECOVERY_PHASE4.patch` بدل استبدال المشروع الكامل عند العمل داخل Git.
 
 لا تضف ملف Entitlements ولا تفعّل App Groups في Signing & Capabilities عند استخدام التوقيع المجاني.
