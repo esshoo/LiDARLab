@@ -1,0 +1,1882 @@
+diff -ruN a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md	2026-07-31 20:13:54.000000000 +0000
++++ b/CHANGELOG.md	2026-08-01 11:09:56.404838294 +0000
+@@ -1,5 +1,16 @@
+ # Changelog
+ 
++## 0.9.0
++
++- تحويل وظيفة مسح الغرفة إلى تجربة تجريبية لمسح مبنى متعدد الغرف.
++- استخدام `ARSession` واحدة مشتركة طوال جلسة المبنى للحفاظ على نظام إحداثيات موحد.
++- إنهاء كل غرفة عبر `stop(pauseARSession: false)` ثم حفظ `CapturedRoom` منفصلة ومجمدة قبل الانتقال.
++- منع نتيجة الغرفة التالية من استبدال الغرف السابقة داخل التطبيق.
++- حفظ JSON تلقائي لكل غرفة داخل `Rooms/MultiRoom-<timestamp>/FrozenRooms`.
++- إنشاء `CapturedStructure` بواسطة `StructureBuilder` كنموذج دمج للمقارنة مع الاحتفاظ بالغرف الأصلية كمصدر الحقيقة.
++- إضافة واجهة لعدد الغرف المثبتة، بدء الغرفة التالية، إنهاء المبنى، وتصدير آخر غرفة أو النموذج المجمّع.
++- تحديث الإصدار إلى `0.9.0` ورقم البناء إلى `12`.
++
+ ## 0.8.2
+ 
+ - إصلاح تعذر ربط مجلد 3E عندما يكون الحقل `apps` داخل `registry.json` كائنًا مفهرسًا بدل قائمة.
+diff -ruN a/LiDARLab/Core/Models/LiDARFeature.swift b/LiDARLab/Core/Models/LiDARFeature.swift
+--- a/LiDARLab/Core/Models/LiDARFeature.swift	2026-07-31 17:33:28.000000000 +0000
++++ b/LiDARLab/Core/Models/LiDARFeature.swift	2026-08-01 11:09:09.620838294 +0000
+@@ -45,7 +45,7 @@
+         case .planeDetection: "اكتشاف المستويات"
+         case .arPlayground: "مختبر الواقع المعزز"
+         case .depthPhoto: "صورة مع العمق"
+-        case .roomScan: "مسح الغرفة"
++        case .roomScan: "مسح الغرف"
+         case .sensorTests: "اختبارات الحساس"
+         case .recordings: "تسجيل الجلسات"
+         case .exportCenter: "مركز التصدير"
+@@ -65,7 +65,7 @@
+         case .planeDetection: "اكتشاف الأسطح الأفقية والرأسية"
+         case .arPlayground: "وضع وتحريك مجسمات داخل المكان"
+         case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
+-        case .roomScan: "تجربة RoomPlan لمسح غرفة"
++        case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
+         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
+         case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
+         case .exportCenter: "إدارة الصور والغرف والجلسات المحفوظة"
+@@ -150,7 +150,7 @@
+         case .depthPhoto:
+             ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
+         case .roomScan:
+-            ["الجدران والأبواب والنوافذ", "أبعاد الغرفة", "نموذج RoomPlan ثلاثي الأبعاد"]
++            ["جلسة مستقلة لكل غرفة", "ARSession مشتركة بين الغرف", "حفظ الغرف المجمدة ونموذج دمج للمقارنة"]
+         case .recordings:
+             ["تسجيل الصورة والعمق وحركة الكاميرا", "تشغيل مرئي للإطارات", "مشاركة ملفات الجلسة"]
+         case .exportCenter:
+diff -ruN a/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift b/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift
+--- a/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift	2026-07-31 17:02:17.000000000 +0000
++++ b/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift	2026-08-01 11:08:53.096838294 +0000
+@@ -1,11 +1,13 @@
+ import RoomPlan
+ import SwiftUI
+ 
++/// Keeps one RoomCaptureView and one ARSession alive for the whole multi-room workflow.
++/// Every room is still captured as a separate RoomPlan scan.
+ struct RoomCaptureViewContainer: UIViewRepresentable {
+     @ObservedObject var model: RoomScanViewModel
+ 
+     func makeUIView(context: Context) -> RoomCaptureView {
+-        let view = RoomCaptureView(frame: .zero)
++        let view = RoomCaptureView(frame: .zero, arSession: model.sharedARSession)
+         view.isModelEnabled = true
+         model.attach(to: view)
+         return view
+diff -ruN a/LiDARLab/Features/RoomScan/RoomScanView.swift b/LiDARLab/Features/RoomScan/RoomScanView.swift
+--- a/LiDARLab/Features/RoomScan/RoomScanView.swift	2026-07-31 17:02:17.000000000 +0000
++++ b/LiDARLab/Features/RoomScan/RoomScanView.swift	2026-08-01 11:08:53.116838294 +0000
+@@ -3,6 +3,7 @@
+ struct RoomScanView: View {
+     @StateObject private var model = RoomScanViewModel()
+     @State private var showingShareSheet = false
++    @State private var showingResetConfirmation = false
+     @State private var shareItems: [Any] = []
+ 
+     var body: some View {
+@@ -19,12 +20,20 @@
+             .padding(.bottom, 14)
+         }
+         .background(.black)
+-        .navigationTitle("مسح الغرفة")
++        .navigationTitle("مسح متعدد الغرف")
+         .navigationBarTitleDisplayMode(.inline)
+         .onDisappear { model.stopWithoutProcessing() }
+         .sheet(isPresented: $showingShareSheet) {
+             ActivityView(items: shareItems)
+         }
++        .alert("حذف جلسة المسح الحالية؟", isPresented: $showingResetConfirmation) {
++            Button("حذف وبدء جديد", role: .destructive) {
++                model.resetBuilding()
++            }
++            Button("إلغاء", role: .cancel) {}
++        } message: {
++            Text("سيتم حذف الغرف الموجودة في ذاكرة الجلسة الحالية. ملفات JSON التي حُفظت بالفعل ستظل داخل مجلد Rooms.")
++        }
+         .alert("تعذر إكمال العملية", isPresented: Binding(
+             get: { model.errorMessage != nil },
+             set: { if !$0 { model.clearError() } }
+@@ -49,11 +58,33 @@
+                 }
+             }
+ 
++            if model.isScanning {
++                Label(
++                    "الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.",
++                    systemImage: "door.left.hand.closed"
++                )
++                .font(.caption)
++                .foregroundStyle(.yellow)
++            }
++
++            if model.roomCount > 0 {
++                LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
++                    MetricChip(title: "غرف مثبتة", value: "\(model.roomCount)", systemImage: "square.grid.2x2")
++                    MetricChip(title: "كل الجدران", value: "\(model.totalWallCount)", systemImage: "rectangle.split.3x1")
++                    MetricChip(title: "كل الأبواب", value: "\(model.totalDoorCount)", systemImage: "door.left.hand.open")
++                    MetricChip(title: "كل النوافذ", value: "\(model.totalWindowCount)", systemImage: "window.vertical.closed")
++                }
++            }
++
+             if model.capturedRoom != nil {
++                Divider()
++                Text("آخر غرفة مثبتة")
++                    .font(.caption2.bold())
++                    .foregroundStyle(.secondary)
++
+                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
+                     MetricChip(title: "جدران", value: "\(model.wallCount)", systemImage: "rectangle.split.3x1")
+                     MetricChip(title: "أبواب", value: "\(model.doorCount)", systemImage: "door.left.hand.open")
+-                    MetricChip(title: "نوافذ", value: "\(model.windowCount)", systemImage: "window.vertical.closed")
+                     MetricChip(title: "فتحات", value: "\(model.openingCount)", systemImage: "rectangle.dashed")
+                     MetricChip(title: "عناصر", value: "\(model.objectCount)", systemImage: "chair.lounge")
+                 }
+@@ -65,18 +96,25 @@
+ 
+     private var controls: some View {
+         VStack(spacing: 10) {
+-            ViewThatFits(in: .horizontal) {
+-                HStack(spacing: 10) { primaryControls }
+-                VStack(spacing: 10) { primaryControls }
+-            }
++            primaryControls
+ 
+-            if model.capturedRoom != nil {
++            if model.capturedRoom != nil, !model.isScanning, !model.isProcessing {
+                 ViewThatFits(in: .horizontal) {
+-                    HStack(spacing: 10) { exportControls }
+-                    VStack(spacing: 10) { exportControls }
++                    HStack(spacing: 10) { roomExportControls }
++                    VStack(spacing: 10) { roomExportControls }
+                 }
+             }
+ 
++            if model.capturedStructure != nil, !model.isProcessing {
++                Button {
++                    model.exportMergedStructure()
++                } label: {
++                    Label("تصدير المبنى المجمّع", systemImage: "building.2.crop.circle")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++            }
++
+             if let export = model.latestExport {
+                 Button {
+                     shareItems = export.shareItems
+@@ -86,10 +124,16 @@
+                         .frame(maxWidth: .infinity)
+                 }
+                 .buttonStyle(.bordered)
++
+                 Text(export.folderURL.lastPathComponent)
+                     .font(.caption2.monospaced())
+                     .foregroundStyle(.secondary)
+                     .lineLimit(1)
++            } else if let folder = model.buildingFolderURL {
++                Text("الحفظ التلقائي: \(folder.lastPathComponent)")
++                    .font(.caption2.monospaced())
++                    .foregroundStyle(.secondary)
++                    .lineLimit(1)
+             }
+         }
+         .padding(12)
+@@ -100,40 +144,90 @@
+     private var primaryControls: some View {
+         if model.isScanning {
+             Button {
+-                model.stopScan()
++                model.finishCurrentRoom()
+             } label: {
+-                Label("إنهاء ومعالجة", systemImage: "stop.fill")
++                Label("إنهاء وتثبيت الغرفة \(model.activeRoomNumber)", systemImage: "stop.fill")
+                     .frame(maxWidth: .infinity)
+             }
+             .buttonStyle(.borderedProminent)
+             .controlSize(.large)
+-        } else {
++        } else if model.isProcessing {
++            Button {} label: {
++                Label("جارٍ المعالجة…", systemImage: "gearshape.2.fill")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.borderedProminent)
++            .controlSize(.large)
++            .disabled(true)
++        } else if model.roomCount == 0 {
+             Button {
+-                model.startScan()
++                model.startBuildingScan()
+             } label: {
+-                Label(model.capturedRoom == nil ? "بدء المسح" : "مسح جديد", systemImage: "viewfinder")
++                Label("بدء مسح المبنى", systemImage: "viewfinder")
+                     .frame(maxWidth: .infinity)
+             }
+             .buttonStyle(.borderedProminent)
+             .controlSize(.large)
+-            .disabled(model.isProcessing)
++        } else if !model.isBuildingFinished {
++            ViewThatFits(in: .horizontal) {
++                HStack(spacing: 10) { continuationControls }
++                VStack(spacing: 10) { continuationControls }
++            }
++
++            Button(role: .destructive) {
++                showingResetConfirmation = true
++            } label: {
++                Label("إلغاء الجلسة وبدء جديد", systemImage: "arrow.counterclockwise")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.bordered)
++        } else {
++            Button {
++                showingResetConfirmation = true
++            } label: {
++                Label("بدء مبنى جديد", systemImage: "plus.rectangle.on.rectangle")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.bordered)
++            .controlSize(.large)
+         }
+     }
+ 
+     @ViewBuilder
+-    private var exportControls: some View {
++    private var continuationControls: some View {
++        Button {
++            model.startNextRoomScan()
++        } label: {
++            Label("مسح الغرفة \(model.nextRoomNumber)", systemImage: "plus.viewfinder")
++                .frame(maxWidth: .infinity)
++        }
++        .buttonStyle(.borderedProminent)
++        .controlSize(.large)
++
++        Button {
++            model.finishBuilding()
++        } label: {
++            Label("إنهاء المبنى", systemImage: "checkmark.seal.fill")
++                .frame(maxWidth: .infinity)
++        }
++        .buttonStyle(.bordered)
++        .controlSize(.large)
++    }
++
++    @ViewBuilder
++    private var roomExportControls: some View {
+         Button {
+-            model.exportParametric()
++            model.exportLatestRoomParametric()
+         } label: {
+-            Label("USDZ بارامتري", systemImage: "cube")
++            Label("آخر غرفة Parametric", systemImage: "cube")
+                 .frame(maxWidth: .infinity)
+         }
+         .buttonStyle(.bordered)
+ 
+         Button {
+-            model.exportMesh()
++            model.exportLatestRoomMesh()
+         } label: {
+-            Label("USDZ Mesh", systemImage: "triangle")
++            Label("آخر غرفة Mesh", systemImage: "triangle")
+                 .frame(maxWidth: .infinity)
+         }
+         .buttonStyle(.bordered)
+@@ -141,13 +235,15 @@
+ 
+     private var stateIcon: String {
+         if model.isProcessing { return "gearshape.2.fill" }
+-        if model.capturedRoom != nil { return "checkmark.circle.fill" }
++        if model.isBuildingFinished { return "checkmark.seal.fill" }
++        if model.roomCount > 0 { return "square.grid.2x2.fill" }
+         if model.isScanning { return "record.circle" }
+-        return "house.lodge"
++        return "building.2"
+     }
+ 
+     private var stateColor: Color {
+-        if model.capturedRoom != nil { return .green }
++        if model.isBuildingFinished { return .green }
++        if model.roomCount > 0 { return .cyan }
+         if model.isScanning { return .red }
+         return .cyan
+     }
+diff -ruN a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
+--- a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-07-31 18:30:59.000000000 +0000
++++ b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-08-01 11:08:53.108838294 +0000
+@@ -1,3 +1,4 @@
++import ARKit
+ import Combine
+ import RoomPlan
+ import UIKit
+@@ -12,17 +13,42 @@
+     var shareItems: [Any] { [jsonURL, usdzURL] }
+ }
+ 
++private struct MultiRoomScanManifest: Codable {
++    let schemaVersion: Int
++    let createdAt: Date
++    let updatedAt: Date
++    let roomCount: Int
++    let isFinished: Bool
++    let coordinateSpace: String
++}
++
+ @MainActor
+ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate {
++    // A single ARSession is intentionally reused across every individual room scan.
++    // This keeps all CapturedRoom results in one common world coordinate system.
++    let sharedARSession = ARSession()
++
+     @Published private(set) var isScanning = false
+     @Published private(set) var isProcessing = false
++    @Published private(set) var isBuildingFinished = false
++    @Published private(set) var activeRoomNumber = 0
++
++    /// The last finalized room, kept for the existing metrics and room export controls.
+     @Published private(set) var capturedRoom: CapturedRoom?
++
++    /// Frozen value-type results. Later scans never replace or mutate previous entries.
++    @Published private(set) var capturedRooms: [CapturedRoom] = []
++    @Published private(set) var capturedStructure: CapturedStructure?
++
+     @Published private(set) var latestExport: RoomScanExport?
+-    @Published private(set) var statusMessage = "ابدأ المسح وتحرك ببطء حول الغرفة."
++    @Published private(set) var buildingFolderURL: URL?
++    @Published private(set) var statusMessage = "ابدأ مسح المبنى، وامسح كل غرفة منفصلة."
+     @Published private(set) var errorMessage: String?
+ 
+     private weak var captureView: RoomCaptureView?
+     private var pendingStart = false
++    private var shouldAcceptNextProcessedRoom = false
++    private var scanCreatedAt = Date()
+ 
+     override init() {
+         super.init()
+@@ -33,120 +59,352 @@
+     }
+ 
+     func encode(with coder: NSCoder) {
+-        // RoomScanViewModel owns live scan state only; there is no persistent state to encode.
++        // The view model owns live AR and RoomPlan state only.
+     }
+ 
++    var roomCount: Int { capturedRooms.count }
++    var nextRoomNumber: Int { capturedRooms.count + 1 }
+     var wallCount: Int { capturedRoom?.walls.count ?? 0 }
+     var doorCount: Int { capturedRoom?.doors.count ?? 0 }
+     var windowCount: Int { capturedRoom?.windows.count ?? 0 }
+     var openingCount: Int { capturedRoom?.openings.count ?? 0 }
+     var objectCount: Int { capturedRoom?.objects.count ?? 0 }
+ 
++    var totalWallCount: Int { capturedRooms.reduce(0) { $0 + $1.walls.count } }
++    var totalDoorCount: Int { capturedRooms.reduce(0) { $0 + $1.doors.count } }
++    var totalWindowCount: Int { capturedRooms.reduce(0) { $0 + $1.windows.count } }
++
++    var canStartNextRoom: Bool {
++        !isScanning && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
++    }
++
++    var canFinishBuilding: Bool {
++        !isScanning && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
++    }
++
+     func attach(to view: RoomCaptureView) {
+         captureView = view
+         view.delegate = self
++
+         if pendingStart {
+             pendingStart = false
+-            startScan()
++            startBuildingScan()
+         }
+     }
+ 
+-    func startScan() {
++    /// Starts a fresh building workflow and immediately begins room 1.
++    func startBuildingScan() {
+         guard RoomCaptureSession.isSupported else {
+             errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
+             return
+         }
++        guard captureView != nil else {
++            pendingStart = true
++            return
++        }
++
++        resetPublishedResults()
++        scanCreatedAt = Date()
++        prepareBuildingFolder()
++        startNextRoomScan()
++    }
++
++    /// Starts another independent RoomPlan scan while preserving the shared ARSession.
++    func startNextRoomScan() {
++        guard RoomCaptureSession.isSupported else {
++            errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
++            return
++        }
++        guard !isScanning, !isProcessing, !isBuildingFinished else { return }
+         guard let captureView else {
+             pendingStart = true
+             return
+         }
+ 
+-        capturedRoom = nil
+         latestExport = nil
+-        isProcessing = false
+-        statusMessage = "امسح الجدران والأبواب والنوافذ بحركة بطيئة."
++        capturedStructure = nil
++        activeRoomNumber = capturedRooms.count + 1
++        shouldAcceptNextProcessedRoom = false
++        statusMessage = "امسح الغرفة رقم \(activeRoomNumber) فقط. قبل عبور أي باب اضغط «إنهاء الغرفة»."
++
+         captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
+         isScanning = true
+     }
+ 
+-    func stopScan() {
++    /// Finalizes only the current room. The underlying ARSession remains alive so the
++    /// following room stays in the same world coordinate system.
++    func finishCurrentRoom() {
+         guard isScanning else { return }
+         isScanning = false
+         isProcessing = true
+-        statusMessage = "جارٍ معالجة نموذج الغرفة…"
+-        captureView?.captureSession.stop()
++        shouldAcceptNextProcessedRoom = true
++        statusMessage = "جارٍ تثبيت الغرفة رقم \(activeRoomNumber) بدون إيقاف تتبع المكان…"
++        captureView?.captureSession.stop(pauseARSession: false)
++    }
++
++    /// Ends the multi-room workflow, pauses AR tracking, and creates a comparison merge.
++    /// The original frozen rooms remain the source of truth even after StructureBuilder runs.
++    func finishBuilding() {
++        guard canFinishBuilding else { return }
++
++        sharedARSession.pause()
++        isBuildingFinished = true
++
++        guard capturedRooms.count > 1 else {
++            statusMessage = "انتهى المسح بغرفة واحدة. تم حفظ الغرفة كما هي."
++            writeManifest()
++            return
++        }
++
++        isProcessing = true
++        statusMessage = "جارٍ إنشاء نموذج مجمّع للمقارنة مع الغرف المجمدة…"
++        let frozenRooms = capturedRooms
++
++        Task {
++            do {
++                let builder = StructureBuilder(options: [])
++                let structure = try await builder.capturedStructure(from: frozenRooms)
++                capturedStructure = structure
++                isProcessing = false
++                statusMessage = "تم إنهاء المبنى: \(capturedRooms.count) غرف مجمدة + نموذج مجمّع للمقارنة."
++                persistStructureJSON(structure)
++                writeManifest()
++                UINotificationFeedbackGenerator().notificationOccurred(.success)
++            } catch {
++                isProcessing = false
++                errorMessage = "تم حفظ الغرف منفصلة، لكن تعذر دمجها: \(error.localizedDescription)"
++                statusMessage = "الغرف المجمدة سليمة، وفشل النموذج المجمّع فقط."
++                writeManifest()
++            }
++        }
++    }
++
++    func resetBuilding() {
++        shouldAcceptNextProcessedRoom = false
++        pendingStart = false
++
++        if isScanning {
++            captureView?.captureSession.stop(pauseARSession: true)
++        } else {
++            sharedARSession.pause()
++        }
++
++        resetPublishedResults()
++        buildingFolderURL = nil
++        statusMessage = "ابدأ مسح المبنى، وامسح كل غرفة منفصلة."
+     }
+ 
+     func stopWithoutProcessing() {
++        shouldAcceptNextProcessedRoom = false
++        pendingStart = false
+         isScanning = false
++        isProcessing = false
+         captureView?.captureSession.stop(pauseARSession: true)
++        sharedARSession.pause()
+     }
+ 
+-    func exportParametric() {
+-        export(options: .parametric, kind: "Parametric")
++    func exportLatestRoomParametric() {
++        exportLatestRoom(options: .parametric, kind: "Room-Parametric")
+     }
+ 
+-    func exportMesh() {
+-        export(options: .mesh, kind: "Mesh")
++    func exportLatestRoomMesh() {
++        exportLatestRoom(options: .mesh, kind: "Room-Mesh")
++    }
++
++    func exportMergedStructure() {
++        guard let capturedStructure else {
++            errorMessage = "أنهِ مسح غرفتين على الأقل وانتظر اكتمال الدمج أولًا."
++            return
++        }
++
++        do {
++            let folder = try makeExportFolder(name: "Merged-Structure")
++            let jsonURL = folder.appendingPathComponent("structure.json")
++            let usdzURL = folder.appendingPathComponent("structure.usdz")
++            let encoder = configuredEncoder()
++            try encoder.encode(capturedStructure).write(to: jsonURL, options: .atomic)
++            try capturedStructure.export(to: usdzURL)
++
++            latestExport = RoomScanExport(
++                folderURL: folder,
++                jsonURL: jsonURL,
++                usdzURL: usdzURL,
++                kind: "Merged-Structure"
++            )
++            statusMessage = "تم تصدير النموذج المجمّع. الغرف الأصلية ما زالت محفوظة منفصلة."
++            UINotificationFeedbackGenerator().notificationOccurred(.success)
++        } catch {
++            errorMessage = error.localizedDescription
++        }
+     }
+ 
+     func clearError() {
+         errorMessage = nil
+     }
+ 
++    // MARK: - RoomCaptureViewDelegate
++
+     func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
++        guard shouldAcceptNextProcessedRoom else {
++            isProcessing = false
++            return false
++        }
++
+         if let error {
++            shouldAcceptNextProcessedRoom = false
+             isProcessing = false
+             errorMessage = error.localizedDescription
+-            statusMessage = "حدث خطأ أثناء إنهاء المسح."
++            statusMessage = "حدث خطأ أثناء تثبيت الغرفة."
+             return false
+         }
++
+         isScanning = false
+         isProcessing = true
+-        statusMessage = "جارٍ إنشاء النموذج النهائي…"
++        statusMessage = "جارٍ إنشاء النتيجة النهائية للغرفة رقم \(activeRoomNumber)…"
+         return true
+     }
+ 
+     func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
++        guard shouldAcceptNextProcessedRoom else { return }
++        shouldAcceptNextProcessedRoom = false
+         isProcessing = false
++
+         if let error {
+             errorMessage = error.localizedDescription
+-            statusMessage = "تعذر معالجة الغرفة."
++            statusMessage = "تعذر معالجة الغرفة رقم \(activeRoomNumber)."
+             return
+         }
++
++        // CapturedRoom is a value result. Appending it freezes this scan independently
++        // from all later RoomPlan sessions.
++        capturedRooms.append(processedResult)
+         capturedRoom = processedResult
+-        statusMessage = "اكتمل المسح. راجع النموذج ثم صدّره."
++        activeRoomNumber = 0
++        persistFrozenRoom(processedResult, index: capturedRooms.count)
++        writeManifest()
++
++        statusMessage = "تم تثبيت الغرفة رقم \(capturedRooms.count). تحرك نحو الباب ثم ابدأ الغرفة التالية."
+         UINotificationFeedbackGenerator().notificationOccurred(.success)
+     }
+ 
+-    private func export(options: CapturedRoom.USDExportOptions, kind: String) {
+-        guard let capturedRoom else {
+-            errorMessage = "أنهِ مسح الغرفة أولًا."
+-            return
+-        }
++    // MARK: - Persistence and export
++
++    private func resetPublishedResults() {
++        isScanning = false
++        isProcessing = false
++        isBuildingFinished = false
++        activeRoomNumber = 0
++        capturedRoom = nil
++        capturedRooms = []
++        capturedStructure = nil
++        latestExport = nil
++        shouldAcceptNextProcessedRoom = false
++    }
+ 
++    private func prepareBuildingFolder() {
+         do {
+-            let formatter = DateFormatter()
+-            formatter.locale = Locale(identifier: "en_US_POSIX")
+-            formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+-            let name = "Room-\(formatter.string(from: Date()))-\(kind)"
+             let storage = LiDARLabStorage.shared
+             try storage.ensureDirectories()
+-            let folder = storage.roomsURL.appendingPathComponent(name, isDirectory: true)
++            let folderName = storage.timestampedName(prefix: "MultiRoom")
++            let folder = storage.roomsURL.appendingPathComponent(folderName, isDirectory: true)
+             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
++            try FileManager.default.createDirectory(
++                at: folder.appendingPathComponent("FrozenRooms", isDirectory: true),
++                withIntermediateDirectories: true
++            )
++            buildingFolderURL = folder
++            writeManifest()
++        } catch {
++            buildingFolderURL = nil
++            errorMessage = "سيعمل المسح، لكن تعذر إنشاء مجلد الحفظ: \(error.localizedDescription)"
++        }
++    }
++
++    private func persistFrozenRoom(_ room: CapturedRoom, index: Int) {
++        guard let buildingFolderURL else { return }
++
++        do {
++            let roomFolder = buildingFolderURL
++                .appendingPathComponent("FrozenRooms", isDirectory: true)
++                .appendingPathComponent(String(format: "Room-%02d", index), isDirectory: true)
++            try FileManager.default.createDirectory(at: roomFolder, withIntermediateDirectories: true)
+ 
++            let jsonURL = roomFolder.appendingPathComponent("room.json")
++            try configuredEncoder().encode(room).write(to: jsonURL, options: .atomic)
++        } catch {
++            errorMessage = "تم تثبيت الغرفة داخل الجلسة، لكن تعذر حفظ JSON: \(error.localizedDescription)"
++        }
++    }
++
++    private func persistStructureJSON(_ structure: CapturedStructure) {
++        guard let buildingFolderURL else { return }
++
++        do {
++            let jsonURL = buildingFolderURL.appendingPathComponent("structure.json")
++            try configuredEncoder().encode(structure).write(to: jsonURL, options: .atomic)
++        } catch {
++            errorMessage = "اكتمل الدمج، لكن تعذر حفظ structure.json: \(error.localizedDescription)"
++        }
++    }
++
++    private func writeManifest() {
++        guard let buildingFolderURL else { return }
++
++        do {
++            let manifest = MultiRoomScanManifest(
++                schemaVersion: 1,
++                createdAt: scanCreatedAt,
++                updatedAt: Date(),
++                roomCount: capturedRooms.count,
++                isFinished: isBuildingFinished,
++                coordinateSpace: "continuous-shared-ARSession"
++            )
++            let url = buildingFolderURL.appendingPathComponent("manifest.json")
++            try configuredEncoder().encode(manifest).write(to: url, options: .atomic)
++        } catch {
++            // Manifest failure must not interrupt or invalidate a room scan.
++        }
++    }
++
++    private func exportLatestRoom(options: CapturedRoom.USDExportOptions, kind: String) {
++        guard let capturedRoom else {
++            errorMessage = "أنهِ مسح غرفة واحدة على الأقل أولًا."
++            return
++        }
++
++        do {
++            let folder = try makeExportFolder(name: kind)
+             let jsonURL = folder.appendingPathComponent("room.json")
+             let usdzURL = folder.appendingPathComponent("room.usdz")
+-            let encoder = JSONEncoder()
+-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+-            try encoder.encode(capturedRoom).write(to: jsonURL, options: .atomic)
++            try configuredEncoder().encode(capturedRoom).write(to: jsonURL, options: .atomic)
+             try capturedRoom.export(to: usdzURL, exportOptions: options)
+ 
+-            latestExport = RoomScanExport(folderURL: folder, jsonURL: jsonURL, usdzURL: usdzURL, kind: kind)
+-            statusMessage = "تم تصدير JSON وUSDZ بنمط \(kind)."
++            latestExport = RoomScanExport(
++                folderURL: folder,
++                jsonURL: jsonURL,
++                usdzURL: usdzURL,
++                kind: kind
++            )
++            statusMessage = "تم تصدير آخر غرفة بنمط \(kind)."
+             UINotificationFeedbackGenerator().notificationOccurred(.success)
+         } catch {
+             errorMessage = error.localizedDescription
+         }
+     }
++
++    private func makeExportFolder(name: String) throws -> URL {
++        let storage = LiDARLabStorage.shared
++        try storage.ensureDirectories()
++        let folderName = storage.timestampedName(prefix: name)
++        let folder = storage.roomsURL.appendingPathComponent(folderName, isDirectory: true)
++        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
++        return folder
++    }
++
++    private func configuredEncoder() -> JSONEncoder {
++        let encoder = JSONEncoder()
++        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++        encoder.dateEncodingStrategy = .iso8601
++        return encoder
++    }
+ }
+diff -ruN a/MULTIROOM_PHASE1.patch b/MULTIROOM_PHASE1.patch
+--- a/MULTIROOM_PHASE1.patch	1970-01-01 00:00:00.000000000 +0000
++++ b/MULTIROOM_PHASE1.patch	2026-08-01 11:10:08.260838294 +0000
+@@ -0,0 +1,744 @@
++diff -ruN a/CHANGELOG.md b/CHANGELOG.md
++--- a/CHANGELOG.md	2026-07-31 20:13:54.000000000 +0000
+++++ b/CHANGELOG.md	2026-08-01 11:09:56.404838294 +0000
++@@ -1,5 +1,16 @@
++ # Changelog
++ 
+++## 0.9.0
+++
+++- تحويل وظيفة مسح الغرفة إلى تجربة تجريبية لمسح مبنى متعدد الغرف.
+++- استخدام `ARSession` واحدة مشتركة طوال جلسة المبنى للحفاظ على نظام إحداثيات موحد.
+++- إنهاء كل غرفة عبر `stop(pauseARSession: false)` ثم حفظ `CapturedRoom` منفصلة ومجمدة قبل الانتقال.
+++- منع نتيجة الغرفة التالية من استبدال الغرف السابقة داخل التطبيق.
+++- حفظ JSON تلقائي لكل غرفة داخل `Rooms/MultiRoom-<timestamp>/FrozenRooms`.
+++- إنشاء `CapturedStructure` بواسطة `StructureBuilder` كنموذج دمج للمقارنة مع الاحتفاظ بالغرف الأصلية كمصدر الحقيقة.
+++- إضافة واجهة لعدد الغرف المثبتة، بدء الغرفة التالية، إنهاء المبنى، وتصدير آخر غرفة أو النموذج المجمّع.
+++- تحديث الإصدار إلى `0.9.0` ورقم البناء إلى `12`.
+++
++ ## 0.8.2
++ 
++ - إصلاح تعذر ربط مجلد 3E عندما يكون الحقل `apps` داخل `registry.json` كائنًا مفهرسًا بدل قائمة.
++diff -ruN a/LiDARLab/Core/Models/LiDARFeature.swift b/LiDARLab/Core/Models/LiDARFeature.swift
++--- a/LiDARLab/Core/Models/LiDARFeature.swift	2026-07-31 17:33:28.000000000 +0000
+++++ b/LiDARLab/Core/Models/LiDARFeature.swift	2026-08-01 11:09:09.620838294 +0000
++@@ -45,7 +45,7 @@
++         case .planeDetection: "اكتشاف المستويات"
++         case .arPlayground: "مختبر الواقع المعزز"
++         case .depthPhoto: "صورة مع العمق"
++-        case .roomScan: "مسح الغرفة"
+++        case .roomScan: "مسح الغرف"
++         case .sensorTests: "اختبارات الحساس"
++         case .recordings: "تسجيل الجلسات"
++         case .exportCenter: "مركز التصدير"
++@@ -65,7 +65,7 @@
++         case .planeDetection: "اكتشاف الأسطح الأفقية والرأسية"
++         case .arPlayground: "وضع وتحريك مجسمات داخل المكان"
++         case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
++-        case .roomScan: "تجربة RoomPlan لمسح غرفة"
+++        case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
++         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
++         case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
++         case .exportCenter: "إدارة الصور والغرف والجلسات المحفوظة"
++@@ -150,7 +150,7 @@
++         case .depthPhoto:
++             ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
++         case .roomScan:
++-            ["الجدران والأبواب والنوافذ", "أبعاد الغرفة", "نموذج RoomPlan ثلاثي الأبعاد"]
+++            ["جلسة مستقلة لكل غرفة", "ARSession مشتركة بين الغرف", "حفظ الغرف المجمدة ونموذج دمج للمقارنة"]
++         case .recordings:
++             ["تسجيل الصورة والعمق وحركة الكاميرا", "تشغيل مرئي للإطارات", "مشاركة ملفات الجلسة"]
++         case .exportCenter:
++diff -ruN a/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift b/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift
++--- a/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift	2026-07-31 17:02:17.000000000 +0000
+++++ b/LiDARLab/Features/RoomScan/RoomCaptureViewContainer.swift	2026-08-01 11:08:53.096838294 +0000
++@@ -1,11 +1,13 @@
++ import RoomPlan
++ import SwiftUI
++ 
+++/// Keeps one RoomCaptureView and one ARSession alive for the whole multi-room workflow.
+++/// Every room is still captured as a separate RoomPlan scan.
++ struct RoomCaptureViewContainer: UIViewRepresentable {
++     @ObservedObject var model: RoomScanViewModel
++ 
++     func makeUIView(context: Context) -> RoomCaptureView {
++-        let view = RoomCaptureView(frame: .zero)
+++        let view = RoomCaptureView(frame: .zero, arSession: model.sharedARSession)
++         view.isModelEnabled = true
++         model.attach(to: view)
++         return view
++diff -ruN a/LiDARLab/Features/RoomScan/RoomScanView.swift b/LiDARLab/Features/RoomScan/RoomScanView.swift
++--- a/LiDARLab/Features/RoomScan/RoomScanView.swift	2026-07-31 17:02:17.000000000 +0000
+++++ b/LiDARLab/Features/RoomScan/RoomScanView.swift	2026-08-01 11:08:53.116838294 +0000
++@@ -3,6 +3,7 @@
++ struct RoomScanView: View {
++     @StateObject private var model = RoomScanViewModel()
++     @State private var showingShareSheet = false
+++    @State private var showingResetConfirmation = false
++     @State private var shareItems: [Any] = []
++ 
++     var body: some View {
++@@ -19,12 +20,20 @@
++             .padding(.bottom, 14)
++         }
++         .background(.black)
++-        .navigationTitle("مسح الغرفة")
+++        .navigationTitle("مسح متعدد الغرف")
++         .navigationBarTitleDisplayMode(.inline)
++         .onDisappear { model.stopWithoutProcessing() }
++         .sheet(isPresented: $showingShareSheet) {
++             ActivityView(items: shareItems)
++         }
+++        .alert("حذف جلسة المسح الحالية؟", isPresented: $showingResetConfirmation) {
+++            Button("حذف وبدء جديد", role: .destructive) {
+++                model.resetBuilding()
+++            }
+++            Button("إلغاء", role: .cancel) {}
+++        } message: {
+++            Text("سيتم حذف الغرف الموجودة في ذاكرة الجلسة الحالية. ملفات JSON التي حُفظت بالفعل ستظل داخل مجلد Rooms.")
+++        }
++         .alert("تعذر إكمال العملية", isPresented: Binding(
++             get: { model.errorMessage != nil },
++             set: { if !$0 { model.clearError() } }
++@@ -49,11 +58,33 @@
++                 }
++             }
++ 
+++            if model.isScanning {
+++                Label(
+++                    "الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.",
+++                    systemImage: "door.left.hand.closed"
+++                )
+++                .font(.caption)
+++                .foregroundStyle(.yellow)
+++            }
+++
+++            if model.roomCount > 0 {
+++                LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
+++                    MetricChip(title: "غرف مثبتة", value: "\(model.roomCount)", systemImage: "square.grid.2x2")
+++                    MetricChip(title: "كل الجدران", value: "\(model.totalWallCount)", systemImage: "rectangle.split.3x1")
+++                    MetricChip(title: "كل الأبواب", value: "\(model.totalDoorCount)", systemImage: "door.left.hand.open")
+++                    MetricChip(title: "كل النوافذ", value: "\(model.totalWindowCount)", systemImage: "window.vertical.closed")
+++                }
+++            }
+++
++             if model.capturedRoom != nil {
+++                Divider()
+++                Text("آخر غرفة مثبتة")
+++                    .font(.caption2.bold())
+++                    .foregroundStyle(.secondary)
+++
++                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
++                     MetricChip(title: "جدران", value: "\(model.wallCount)", systemImage: "rectangle.split.3x1")
++                     MetricChip(title: "أبواب", value: "\(model.doorCount)", systemImage: "door.left.hand.open")
++-                    MetricChip(title: "نوافذ", value: "\(model.windowCount)", systemImage: "window.vertical.closed")
++                     MetricChip(title: "فتحات", value: "\(model.openingCount)", systemImage: "rectangle.dashed")
++                     MetricChip(title: "عناصر", value: "\(model.objectCount)", systemImage: "chair.lounge")
++                 }
++@@ -65,18 +96,25 @@
++ 
++     private var controls: some View {
++         VStack(spacing: 10) {
++-            ViewThatFits(in: .horizontal) {
++-                HStack(spacing: 10) { primaryControls }
++-                VStack(spacing: 10) { primaryControls }
++-            }
+++            primaryControls
++ 
++-            if model.capturedRoom != nil {
+++            if model.capturedRoom != nil, !model.isScanning, !model.isProcessing {
++                 ViewThatFits(in: .horizontal) {
++-                    HStack(spacing: 10) { exportControls }
++-                    VStack(spacing: 10) { exportControls }
+++                    HStack(spacing: 10) { roomExportControls }
+++                    VStack(spacing: 10) { roomExportControls }
++                 }
++             }
++ 
+++            if model.capturedStructure != nil, !model.isProcessing {
+++                Button {
+++                    model.exportMergedStructure()
+++                } label: {
+++                    Label("تصدير المبنى المجمّع", systemImage: "building.2.crop.circle")
+++                        .frame(maxWidth: .infinity)
+++                }
+++                .buttonStyle(.borderedProminent)
+++            }
+++
++             if let export = model.latestExport {
++                 Button {
++                     shareItems = export.shareItems
++@@ -86,10 +124,16 @@
++                         .frame(maxWidth: .infinity)
++                 }
++                 .buttonStyle(.bordered)
+++
++                 Text(export.folderURL.lastPathComponent)
++                     .font(.caption2.monospaced())
++                     .foregroundStyle(.secondary)
++                     .lineLimit(1)
+++            } else if let folder = model.buildingFolderURL {
+++                Text("الحفظ التلقائي: \(folder.lastPathComponent)")
+++                    .font(.caption2.monospaced())
+++                    .foregroundStyle(.secondary)
+++                    .lineLimit(1)
++             }
++         }
++         .padding(12)
++@@ -100,40 +144,90 @@
++     private var primaryControls: some View {
++         if model.isScanning {
++             Button {
++-                model.stopScan()
+++                model.finishCurrentRoom()
++             } label: {
++-                Label("إنهاء ومعالجة", systemImage: "stop.fill")
+++                Label("إنهاء وتثبيت الغرفة \(model.activeRoomNumber)", systemImage: "stop.fill")
++                     .frame(maxWidth: .infinity)
++             }
++             .buttonStyle(.borderedProminent)
++             .controlSize(.large)
++-        } else {
+++        } else if model.isProcessing {
+++            Button {} label: {
+++                Label("جارٍ المعالجة…", systemImage: "gearshape.2.fill")
+++                    .frame(maxWidth: .infinity)
+++            }
+++            .buttonStyle(.borderedProminent)
+++            .controlSize(.large)
+++            .disabled(true)
+++        } else if model.roomCount == 0 {
++             Button {
++-                model.startScan()
+++                model.startBuildingScan()
++             } label: {
++-                Label(model.capturedRoom == nil ? "بدء المسح" : "مسح جديد", systemImage: "viewfinder")
+++                Label("بدء مسح المبنى", systemImage: "viewfinder")
++                     .frame(maxWidth: .infinity)
++             }
++             .buttonStyle(.borderedProminent)
++             .controlSize(.large)
++-            .disabled(model.isProcessing)
+++        } else if !model.isBuildingFinished {
+++            ViewThatFits(in: .horizontal) {
+++                HStack(spacing: 10) { continuationControls }
+++                VStack(spacing: 10) { continuationControls }
+++            }
+++
+++            Button(role: .destructive) {
+++                showingResetConfirmation = true
+++            } label: {
+++                Label("إلغاء الجلسة وبدء جديد", systemImage: "arrow.counterclockwise")
+++                    .frame(maxWidth: .infinity)
+++            }
+++            .buttonStyle(.bordered)
+++        } else {
+++            Button {
+++                showingResetConfirmation = true
+++            } label: {
+++                Label("بدء مبنى جديد", systemImage: "plus.rectangle.on.rectangle")
+++                    .frame(maxWidth: .infinity)
+++            }
+++            .buttonStyle(.bordered)
+++            .controlSize(.large)
++         }
++     }
++ 
++     @ViewBuilder
++-    private var exportControls: some View {
+++    private var continuationControls: some View {
+++        Button {
+++            model.startNextRoomScan()
+++        } label: {
+++            Label("مسح الغرفة \(model.nextRoomNumber)", systemImage: "plus.viewfinder")
+++                .frame(maxWidth: .infinity)
+++        }
+++        .buttonStyle(.borderedProminent)
+++        .controlSize(.large)
+++
+++        Button {
+++            model.finishBuilding()
+++        } label: {
+++            Label("إنهاء المبنى", systemImage: "checkmark.seal.fill")
+++                .frame(maxWidth: .infinity)
+++        }
+++        .buttonStyle(.bordered)
+++        .controlSize(.large)
+++    }
+++
+++    @ViewBuilder
+++    private var roomExportControls: some View {
++         Button {
++-            model.exportParametric()
+++            model.exportLatestRoomParametric()
++         } label: {
++-            Label("USDZ بارامتري", systemImage: "cube")
+++            Label("آخر غرفة Parametric", systemImage: "cube")
++                 .frame(maxWidth: .infinity)
++         }
++         .buttonStyle(.bordered)
++ 
++         Button {
++-            model.exportMesh()
+++            model.exportLatestRoomMesh()
++         } label: {
++-            Label("USDZ Mesh", systemImage: "triangle")
+++            Label("آخر غرفة Mesh", systemImage: "triangle")
++                 .frame(maxWidth: .infinity)
++         }
++         .buttonStyle(.bordered)
++@@ -141,13 +235,15 @@
++ 
++     private var stateIcon: String {
++         if model.isProcessing { return "gearshape.2.fill" }
++-        if model.capturedRoom != nil { return "checkmark.circle.fill" }
+++        if model.isBuildingFinished { return "checkmark.seal.fill" }
+++        if model.roomCount > 0 { return "square.grid.2x2.fill" }
++         if model.isScanning { return "record.circle" }
++-        return "house.lodge"
+++        return "building.2"
++     }
++ 
++     private var stateColor: Color {
++-        if model.capturedRoom != nil { return .green }
+++        if model.isBuildingFinished { return .green }
+++        if model.roomCount > 0 { return .cyan }
++         if model.isScanning { return .red }
++         return .cyan
++     }
++diff -ruN a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
++--- a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-07-31 18:30:59.000000000 +0000
+++++ b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-08-01 11:08:53.108838294 +0000
++@@ -1,3 +1,4 @@
+++import ARKit
++ import Combine
++ import RoomPlan
++ import UIKit
++@@ -12,17 +13,42 @@
++     var shareItems: [Any] { [jsonURL, usdzURL] }
++ }
++ 
+++private struct MultiRoomScanManifest: Codable {
+++    let schemaVersion: Int
+++    let createdAt: Date
+++    let updatedAt: Date
+++    let roomCount: Int
+++    let isFinished: Bool
+++    let coordinateSpace: String
+++}
+++
++ @MainActor
++ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate {
+++    // A single ARSession is intentionally reused across every individual room scan.
+++    // This keeps all CapturedRoom results in one common world coordinate system.
+++    let sharedARSession = ARSession()
+++
++     @Published private(set) var isScanning = false
++     @Published private(set) var isProcessing = false
+++    @Published private(set) var isBuildingFinished = false
+++    @Published private(set) var activeRoomNumber = 0
+++
+++    /// The last finalized room, kept for the existing metrics and room export controls.
++     @Published private(set) var capturedRoom: CapturedRoom?
+++
+++    /// Frozen value-type results. Later scans never replace or mutate previous entries.
+++    @Published private(set) var capturedRooms: [CapturedRoom] = []
+++    @Published private(set) var capturedStructure: CapturedStructure?
+++
++     @Published private(set) var latestExport: RoomScanExport?
++-    @Published private(set) var statusMessage = "ابدأ المسح وتحرك ببطء حول الغرفة."
+++    @Published private(set) var buildingFolderURL: URL?
+++    @Published private(set) var statusMessage = "ابدأ مسح المبنى، وامسح كل غرفة منفصلة."
++     @Published private(set) var errorMessage: String?
++ 
++     private weak var captureView: RoomCaptureView?
++     private var pendingStart = false
+++    private var shouldAcceptNextProcessedRoom = false
+++    private var scanCreatedAt = Date()
++ 
++     override init() {
++         super.init()
++@@ -33,120 +59,352 @@
++     }
++ 
++     func encode(with coder: NSCoder) {
++-        // RoomScanViewModel owns live scan state only; there is no persistent state to encode.
+++        // The view model owns live AR and RoomPlan state only.
++     }
++ 
+++    var roomCount: Int { capturedRooms.count }
+++    var nextRoomNumber: Int { capturedRooms.count + 1 }
++     var wallCount: Int { capturedRoom?.walls.count ?? 0 }
++     var doorCount: Int { capturedRoom?.doors.count ?? 0 }
++     var windowCount: Int { capturedRoom?.windows.count ?? 0 }
++     var openingCount: Int { capturedRoom?.openings.count ?? 0 }
++     var objectCount: Int { capturedRoom?.objects.count ?? 0 }
++ 
+++    var totalWallCount: Int { capturedRooms.reduce(0) { $0 + $1.walls.count } }
+++    var totalDoorCount: Int { capturedRooms.reduce(0) { $0 + $1.doors.count } }
+++    var totalWindowCount: Int { capturedRooms.reduce(0) { $0 + $1.windows.count } }
+++
+++    var canStartNextRoom: Bool {
+++        !isScanning && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
+++    }
+++
+++    var canFinishBuilding: Bool {
+++        !isScanning && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
+++    }
+++
++     func attach(to view: RoomCaptureView) {
++         captureView = view
++         view.delegate = self
+++
++         if pendingStart {
++             pendingStart = false
++-            startScan()
+++            startBuildingScan()
++         }
++     }
++ 
++-    func startScan() {
+++    /// Starts a fresh building workflow and immediately begins room 1.
+++    func startBuildingScan() {
++         guard RoomCaptureSession.isSupported else {
++             errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
++             return
++         }
+++        guard captureView != nil else {
+++            pendingStart = true
+++            return
+++        }
+++
+++        resetPublishedResults()
+++        scanCreatedAt = Date()
+++        prepareBuildingFolder()
+++        startNextRoomScan()
+++    }
+++
+++    /// Starts another independent RoomPlan scan while preserving the shared ARSession.
+++    func startNextRoomScan() {
+++        guard RoomCaptureSession.isSupported else {
+++            errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
+++            return
+++        }
+++        guard !isScanning, !isProcessing, !isBuildingFinished else { return }
++         guard let captureView else {
++             pendingStart = true
++             return
++         }
++ 
++-        capturedRoom = nil
++         latestExport = nil
++-        isProcessing = false
++-        statusMessage = "امسح الجدران والأبواب والنوافذ بحركة بطيئة."
+++        capturedStructure = nil
+++        activeRoomNumber = capturedRooms.count + 1
+++        shouldAcceptNextProcessedRoom = false
+++        statusMessage = "امسح الغرفة رقم \(activeRoomNumber) فقط. قبل عبور أي باب اضغط «إنهاء الغرفة»."
+++
++         captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
++         isScanning = true
++     }
++ 
++-    func stopScan() {
+++    /// Finalizes only the current room. The underlying ARSession remains alive so the
+++    /// following room stays in the same world coordinate system.
+++    func finishCurrentRoom() {
++         guard isScanning else { return }
++         isScanning = false
++         isProcessing = true
++-        statusMessage = "جارٍ معالجة نموذج الغرفة…"
++-        captureView?.captureSession.stop()
+++        shouldAcceptNextProcessedRoom = true
+++        statusMessage = "جارٍ تثبيت الغرفة رقم \(activeRoomNumber) بدون إيقاف تتبع المكان…"
+++        captureView?.captureSession.stop(pauseARSession: false)
+++    }
+++
+++    /// Ends the multi-room workflow, pauses AR tracking, and creates a comparison merge.
+++    /// The original frozen rooms remain the source of truth even after StructureBuilder runs.
+++    func finishBuilding() {
+++        guard canFinishBuilding else { return }
+++
+++        sharedARSession.pause()
+++        isBuildingFinished = true
+++
+++        guard capturedRooms.count > 1 else {
+++            statusMessage = "انتهى المسح بغرفة واحدة. تم حفظ الغرفة كما هي."
+++            writeManifest()
+++            return
+++        }
+++
+++        isProcessing = true
+++        statusMessage = "جارٍ إنشاء نموذج مجمّع للمقارنة مع الغرف المجمدة…"
+++        let frozenRooms = capturedRooms
+++
+++        Task {
+++            do {
+++                let builder = StructureBuilder(options: [])
+++                let structure = try await builder.capturedStructure(from: frozenRooms)
+++                capturedStructure = structure
+++                isProcessing = false
+++                statusMessage = "تم إنهاء المبنى: \(capturedRooms.count) غرف مجمدة + نموذج مجمّع للمقارنة."
+++                persistStructureJSON(structure)
+++                writeManifest()
+++                UINotificationFeedbackGenerator().notificationOccurred(.success)
+++            } catch {
+++                isProcessing = false
+++                errorMessage = "تم حفظ الغرف منفصلة، لكن تعذر دمجها: \(error.localizedDescription)"
+++                statusMessage = "الغرف المجمدة سليمة، وفشل النموذج المجمّع فقط."
+++                writeManifest()
+++            }
+++        }
+++    }
+++
+++    func resetBuilding() {
+++        shouldAcceptNextProcessedRoom = false
+++        pendingStart = false
+++
+++        if isScanning {
+++            captureView?.captureSession.stop(pauseARSession: true)
+++        } else {
+++            sharedARSession.pause()
+++        }
+++
+++        resetPublishedResults()
+++        buildingFolderURL = nil
+++        statusMessage = "ابدأ مسح المبنى، وامسح كل غرفة منفصلة."
++     }
++ 
++     func stopWithoutProcessing() {
+++        shouldAcceptNextProcessedRoom = false
+++        pendingStart = false
++         isScanning = false
+++        isProcessing = false
++         captureView?.captureSession.stop(pauseARSession: true)
+++        sharedARSession.pause()
++     }
++ 
++-    func exportParametric() {
++-        export(options: .parametric, kind: "Parametric")
+++    func exportLatestRoomParametric() {
+++        exportLatestRoom(options: .parametric, kind: "Room-Parametric")
++     }
++ 
++-    func exportMesh() {
++-        export(options: .mesh, kind: "Mesh")
+++    func exportLatestRoomMesh() {
+++        exportLatestRoom(options: .mesh, kind: "Room-Mesh")
+++    }
+++
+++    func exportMergedStructure() {
+++        guard let capturedStructure else {
+++            errorMessage = "أنهِ مسح غرفتين على الأقل وانتظر اكتمال الدمج أولًا."
+++            return
+++        }
+++
+++        do {
+++            let folder = try makeExportFolder(name: "Merged-Structure")
+++            let jsonURL = folder.appendingPathComponent("structure.json")
+++            let usdzURL = folder.appendingPathComponent("structure.usdz")
+++            let encoder = configuredEncoder()
+++            try encoder.encode(capturedStructure).write(to: jsonURL, options: .atomic)
+++            try capturedStructure.export(to: usdzURL)
+++
+++            latestExport = RoomScanExport(
+++                folderURL: folder,
+++                jsonURL: jsonURL,
+++                usdzURL: usdzURL,
+++                kind: "Merged-Structure"
+++            )
+++            statusMessage = "تم تصدير النموذج المجمّع. الغرف الأصلية ما زالت محفوظة منفصلة."
+++            UINotificationFeedbackGenerator().notificationOccurred(.success)
+++        } catch {
+++            errorMessage = error.localizedDescription
+++        }
++     }
++ 
++     func clearError() {
++         errorMessage = nil
++     }
++ 
+++    // MARK: - RoomCaptureViewDelegate
+++
++     func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
+++        guard shouldAcceptNextProcessedRoom else {
+++            isProcessing = false
+++            return false
+++        }
+++
++         if let error {
+++            shouldAcceptNextProcessedRoom = false
++             isProcessing = false
++             errorMessage = error.localizedDescription
++-            statusMessage = "حدث خطأ أثناء إنهاء المسح."
+++            statusMessage = "حدث خطأ أثناء تثبيت الغرفة."
++             return false
++         }
+++
++         isScanning = false
++         isProcessing = true
++-        statusMessage = "جارٍ إنشاء النموذج النهائي…"
+++        statusMessage = "جارٍ إنشاء النتيجة النهائية للغرفة رقم \(activeRoomNumber)…"
++         return true
++     }
++ 
++     func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
+++        guard shouldAcceptNextProcessedRoom else { return }
+++        shouldAcceptNextProcessedRoom = false
++         isProcessing = false
+++
++         if let error {
++             errorMessage = error.localizedDescription
++-            statusMessage = "تعذر معالجة الغرفة."
+++            statusMessage = "تعذر معالجة الغرفة رقم \(activeRoomNumber)."
++             return
++         }
+++
+++        // CapturedRoom is a value result. Appending it freezes this scan independently
+++        // from all later RoomPlan sessions.
+++        capturedRooms.append(processedResult)
++         capturedRoom = processedResult
++-        statusMessage = "اكتمل المسح. راجع النموذج ثم صدّره."
+++        activeRoomNumber = 0
+++        persistFrozenRoom(processedResult, index: capturedRooms.count)
+++        writeManifest()
+++
+++        statusMessage = "تم تثبيت الغرفة رقم \(capturedRooms.count). تحرك نحو الباب ثم ابدأ الغرفة التالية."
++         UINotificationFeedbackGenerator().notificationOccurred(.success)
++     }
++ 
++-    private func export(options: CapturedRoom.USDExportOptions, kind: String) {
++-        guard let capturedRoom else {
++-            errorMessage = "أنهِ مسح الغرفة أولًا."
++-            return
++-        }
+++    // MARK: - Persistence and export
+++
+++    private func resetPublishedResults() {
+++        isScanning = false
+++        isProcessing = false
+++        isBuildingFinished = false
+++        activeRoomNumber = 0
+++        capturedRoom = nil
+++        capturedRooms = []
+++        capturedStructure = nil
+++        latestExport = nil
+++        shouldAcceptNextProcessedRoom = false
+++    }
++ 
+++    private func prepareBuildingFolder() {
++         do {
++-            let formatter = DateFormatter()
++-            formatter.locale = Locale(identifier: "en_US_POSIX")
++-            formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
++-            let name = "Room-\(formatter.string(from: Date()))-\(kind)"
++             let storage = LiDARLabStorage.shared
++             try storage.ensureDirectories()
++-            let folder = storage.roomsURL.appendingPathComponent(name, isDirectory: true)
+++            let folderName = storage.timestampedName(prefix: "MultiRoom")
+++            let folder = storage.roomsURL.appendingPathComponent(folderName, isDirectory: true)
++             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+++            try FileManager.default.createDirectory(
+++                at: folder.appendingPathComponent("FrozenRooms", isDirectory: true),
+++                withIntermediateDirectories: true
+++            )
+++            buildingFolderURL = folder
+++            writeManifest()
+++        } catch {
+++            buildingFolderURL = nil
+++            errorMessage = "سيعمل المسح، لكن تعذر إنشاء مجلد الحفظ: \(error.localizedDescription)"
+++        }
+++    }
+++
+++    private func persistFrozenRoom(_ room: CapturedRoom, index: Int) {
+++        guard let buildingFolderURL else { return }
+++
+++        do {
+++            let roomFolder = buildingFolderURL
+++                .appendingPathComponent("FrozenRooms", isDirectory: true)
+++                .appendingPathComponent(String(format: "Room-%02d", index), isDirectory: true)
+++            try FileManager.default.createDirectory(at: roomFolder, withIntermediateDirectories: true)
++ 
+++            let jsonURL = roomFolder.appendingPathComponent("room.json")
+++            try configuredEncoder().encode(room).write(to: jsonURL, options: .atomic)
+++        } catch {
+++            errorMessage = "تم تثبيت الغرفة داخل الجلسة، لكن تعذر حفظ JSON: \(error.localizedDescription)"
+++        }
+++    }
+++
+++    private func persistStructureJSON(_ structure: CapturedStructure) {
+++        guard let buildingFolderURL else { return }
+++
+++        do {
+++            let jsonURL = buildingFolderURL.appendingPathComponent("structure.json")
+++            try configuredEncoder().encode(structure).write(to: jsonURL, options: .atomic)
+++        } catch {
+++            errorMessage = "اكتمل الدمج، لكن تعذر حفظ structure.json: \(error.localizedDescription)"
+++        }
+++    }
+++
+++    private func writeManifest() {
+++        guard let buildingFolderURL else { return }
+++
+++        do {
+++            let manifest = MultiRoomScanManifest(
+++                schemaVersion: 1,
+++                createdAt: scanCreatedAt,
+++                updatedAt: Date(),
+++                roomCount: capturedRooms.count,
+++                isFinished: isBuildingFinished,
+++                coordinateSpace: "continuous-shared-ARSession"
+++            )
+++            let url = buildingFolderURL.appendingPathComponent("manifest.json")
+++            try configuredEncoder().encode(manifest).write(to: url, options: .atomic)
+++        } catch {
+++            // Manifest failure must not interrupt or invalidate a room scan.
+++        }
+++    }
+++
+++    private func exportLatestRoom(options: CapturedRoom.USDExportOptions, kind: String) {
+++        guard let capturedRoom else {
+++            errorMessage = "أنهِ مسح غرفة واحدة على الأقل أولًا."
+++            return
+++        }
+++
+++        do {
+++            let folder = try makeExportFolder(name: kind)
++             let jsonURL = folder.appendingPathComponent("room.json")
++             let usdzURL = folder.appendingPathComponent("room.usdz")
++-            let encoder = JSONEncoder()
++-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++-            try encoder.encode(capturedRoom).write(to: jsonURL, options: .atomic)
+++            try configuredEncoder().encode(capturedRoom).write(to: jsonURL, options: .atomic)
++             try capturedRoom.export(to: usdzURL, exportOptions: options)
++ 
++-            latestExport = RoomScanExport(folderURL: folder, jsonURL: jsonURL, usdzURL: usdzURL, kind: kind)
++-            statusMessage = "تم تصدير JSON وUSDZ بنمط \(kind)."
+++            latestExport = RoomScanExport(
+++                folderURL: folder,
+++                jsonURL: jsonURL,
+++                usdzURL: usdzURL,
+++                kind: kind
+++            )
+++            statusMessage = "تم تصدير آخر غرفة بنمط \(kind)."
++             UINotificationFeedbackGenerator().notificationOccurred(.success)
++         } catch {
++             errorMessage = error.localizedDescription
++         }
++     }
+++
+++    private func makeExportFolder(name: String) throws -> URL {
+++        let storage = LiDARLabStorage.shared
+++        try storage.ensureDirectories()
+++        let folderName = storage.timestampedName(prefix: name)
+++        let folder = storage.roomsURL.appendingPathComponent(folderName, isDirectory: true)
+++        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+++        return folder
+++    }
+++
+++    private func configuredEncoder() -> JSONEncoder {
+++        let encoder = JSONEncoder()
+++        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+++        encoder.dateEncodingStrategy = .iso8601
+++        return encoder
+++    }
++ }
+diff -ruN a/ROOMSCAN_MULTIROOM_PHASE1.md b/ROOMSCAN_MULTIROOM_PHASE1.md
+--- a/ROOMSCAN_MULTIROOM_PHASE1.md	1970-01-01 00:00:00.000000000 +0000
++++ b/ROOMSCAN_MULTIROOM_PHASE1.md	2026-08-01 11:08:53.120838294 +0000
+@@ -0,0 +1,35 @@
++# RoomScan Multi-Room — Phase 1
++
++This test changes only the existing `LiDARLab/Features/RoomScan` feature.
++
++## Goal
++
++Prevent a later room scan from continuously reshaping walls and ceiling heights that were already accepted in an earlier room.
++
++## Implemented workflow
++
++1. One shared `ARSession` is created for the whole building workflow.
++2. Each room is scanned as a separate RoomPlan session.
++3. The user must finish the current room before crossing its door.
++4. `stop(pauseARSession: false)` keeps world tracking alive between rooms.
++5. Every processed `CapturedRoom` is appended to a frozen array and automatically saved as JSON.
++6. At the end, `StructureBuilder` creates a merged comparison model, but it does not replace the frozen room results.
++
++## Automatic files
++
++`Rooms/MultiRoom-<timestamp>/`
++
++- `manifest.json`
++- `FrozenRooms/Room-01/room.json`
++- `FrozenRooms/Room-02/room.json`
++- `structure.json` after a successful merge
++
++## Not implemented yet
++
++- Manual door/portal anchors from both sides.
++- Wall thickness estimation from two opposite wall faces.
++- Independent ceiling zones and gypsum detection.
++- Rigid-room alignment solver outside StructureBuilder.
++- ARKit mesh evidence and confidence scoring.
++
++Those belong to the next test after confirming that separate frozen room scans improve stability.
+diff -ruN a/_backup/RoomScan_original/RoomCaptureViewContainer.swift b/_backup/RoomScan_original/RoomCaptureViewContainer.swift
+--- a/_backup/RoomScan_original/RoomCaptureViewContainer.swift	1970-01-01 00:00:00.000000000 +0000
++++ b/_backup/RoomScan_original/RoomCaptureViewContainer.swift	2026-07-31 17:02:17.000000000 +0000
+@@ -0,0 +1,19 @@
++import RoomPlan
++import SwiftUI
++
++struct RoomCaptureViewContainer: UIViewRepresentable {
++    @ObservedObject var model: RoomScanViewModel
++
++    func makeUIView(context: Context) -> RoomCaptureView {
++        let view = RoomCaptureView(frame: .zero)
++        view.isModelEnabled = true
++        model.attach(to: view)
++        return view
++    }
++
++    func updateUIView(_ uiView: RoomCaptureView, context: Context) {}
++
++    static func dismantleUIView(_ uiView: RoomCaptureView, coordinator: Void) {
++        uiView.captureSession.stop(pauseARSession: true)
++    }
++}
+diff -ruN a/_backup/RoomScan_original/RoomScanView.swift b/_backup/RoomScan_original/RoomScanView.swift
+--- a/_backup/RoomScan_original/RoomScanView.swift	1970-01-01 00:00:00.000000000 +0000
++++ b/_backup/RoomScan_original/RoomScanView.swift	2026-07-31 17:02:17.000000000 +0000
+@@ -0,0 +1,154 @@
++import SwiftUI
++
++struct RoomScanView: View {
++    @StateObject private var model = RoomScanViewModel()
++    @State private var showingShareSheet = false
++    @State private var shareItems: [Any] = []
++
++    var body: some View {
++        ZStack {
++            RoomCaptureViewContainer(model: model)
++                .ignoresSafeArea(edges: .bottom)
++
++            VStack(spacing: 12) {
++                statusPanel
++                Spacer(minLength: 10)
++                controls
++            }
++            .padding(.horizontal, 14)
++            .padding(.bottom, 14)
++        }
++        .background(.black)
++        .navigationTitle("مسح الغرفة")
++        .navigationBarTitleDisplayMode(.inline)
++        .onDisappear { model.stopWithoutProcessing() }
++        .sheet(isPresented: $showingShareSheet) {
++            ActivityView(items: shareItems)
++        }
++        .alert("تعذر إكمال العملية", isPresented: Binding(
++            get: { model.errorMessage != nil },
++            set: { if !$0 { model.clearError() } }
++        )) {
++            Button("حسنًا", role: .cancel) {}
++        } message: {
++            Text(model.errorMessage ?? "خطأ غير معروف")
++        }
++    }
++
++    private var statusPanel: some View {
++        VStack(alignment: .leading, spacing: 10) {
++            HStack(spacing: 9) {
++                Image(systemName: stateIcon)
++                    .foregroundStyle(stateColor)
++                Text(model.statusMessage)
++                    .font(.caption.bold())
++                    .fixedSize(horizontal: false, vertical: true)
++                Spacer(minLength: 0)
++                if model.isProcessing {
++                    ProgressView()
++                }
++            }
++
++            if model.capturedRoom != nil {
++                LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
++                    MetricChip(title: "جدران", value: "\(model.wallCount)", systemImage: "rectangle.split.3x1")
++                    MetricChip(title: "أبواب", value: "\(model.doorCount)", systemImage: "door.left.hand.open")
++                    MetricChip(title: "نوافذ", value: "\(model.windowCount)", systemImage: "window.vertical.closed")
++                    MetricChip(title: "فتحات", value: "\(model.openingCount)", systemImage: "rectangle.dashed")
++                    MetricChip(title: "عناصر", value: "\(model.objectCount)", systemImage: "chair.lounge")
++                }
++            }
++        }
++        .padding(12)
++        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 17))
++    }
++
++    private var controls: some View {
++        VStack(spacing: 10) {
++            ViewThatFits(in: .horizontal) {
++                HStack(spacing: 10) { primaryControls }
++                VStack(spacing: 10) { primaryControls }
++            }
++
++            if model.capturedRoom != nil {
++                ViewThatFits(in: .horizontal) {
++                    HStack(spacing: 10) { exportControls }
++                    VStack(spacing: 10) { exportControls }
++                }
++            }
++
++            if let export = model.latestExport {
++                Button {
++                    shareItems = export.shareItems
++                    showingShareSheet = true
++                } label: {
++                    Label("مشاركة JSON وUSDZ", systemImage: "square.and.arrow.up")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++                Text(export.folderURL.lastPathComponent)
++                    .font(.caption2.monospaced())
++                    .foregroundStyle(.secondary)
++                    .lineLimit(1)
++            }
++        }
++        .padding(12)
++        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
++    }
++
++    @ViewBuilder
++    private var primaryControls: some View {
++        if model.isScanning {
++            Button {
++                model.stopScan()
++            } label: {
++                Label("إنهاء ومعالجة", systemImage: "stop.fill")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.borderedProminent)
++            .controlSize(.large)
++        } else {
++            Button {
++                model.startScan()
++            } label: {
++                Label(model.capturedRoom == nil ? "بدء المسح" : "مسح جديد", systemImage: "viewfinder")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.borderedProminent)
++            .controlSize(.large)
++            .disabled(model.isProcessing)
++        }
++    }
++
++    @ViewBuilder
++    private var exportControls: some View {
++        Button {
++            model.exportParametric()
++        } label: {
++            Label("USDZ بارامتري", systemImage: "cube")
++                .frame(maxWidth: .infinity)
++        }
++        .buttonStyle(.bordered)
++
++        Button {
++            model.exportMesh()
++        } label: {
++            Label("USDZ Mesh", systemImage: "triangle")
++                .frame(maxWidth: .infinity)
++        }
++        .buttonStyle(.bordered)
++    }
++
++    private var stateIcon: String {
++        if model.isProcessing { return "gearshape.2.fill" }
++        if model.capturedRoom != nil { return "checkmark.circle.fill" }
++        if model.isScanning { return "record.circle" }
++        return "house.lodge"
++    }
++
++    private var stateColor: Color {
++        if model.capturedRoom != nil { return .green }
++        if model.isScanning { return .red }
++        return .cyan
++    }
++}
+diff -ruN a/_backup/RoomScan_original/RoomScanViewModel.swift b/_backup/RoomScan_original/RoomScanViewModel.swift
+--- a/_backup/RoomScan_original/RoomScanViewModel.swift	1970-01-01 00:00:00.000000000 +0000
++++ b/_backup/RoomScan_original/RoomScanViewModel.swift	2026-07-31 18:30:59.000000000 +0000
+@@ -0,0 +1,152 @@
++import Combine
++import RoomPlan
++import UIKit
++
++struct RoomScanExport: Identifiable {
++    let id = UUID()
++    let folderURL: URL
++    let jsonURL: URL
++    let usdzURL: URL
++    let kind: String
++
++    var shareItems: [Any] { [jsonURL, usdzURL] }
++}
++
++@MainActor
++final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate {
++    @Published private(set) var isScanning = false
++    @Published private(set) var isProcessing = false
++    @Published private(set) var capturedRoom: CapturedRoom?
++    @Published private(set) var latestExport: RoomScanExport?
++    @Published private(set) var statusMessage = "ابدأ المسح وتحرك ببطء حول الغرفة."
++    @Published private(set) var errorMessage: String?
++
++    private weak var captureView: RoomCaptureView?
++    private var pendingStart = false
++
++    override init() {
++        super.init()
++    }
++
++    required init?(coder: NSCoder) {
++        super.init()
++    }
++
++    func encode(with coder: NSCoder) {
++        // RoomScanViewModel owns live scan state only; there is no persistent state to encode.
++    }
++
++    var wallCount: Int { capturedRoom?.walls.count ?? 0 }
++    var doorCount: Int { capturedRoom?.doors.count ?? 0 }
++    var windowCount: Int { capturedRoom?.windows.count ?? 0 }
++    var openingCount: Int { capturedRoom?.openings.count ?? 0 }
++    var objectCount: Int { capturedRoom?.objects.count ?? 0 }
++
++    func attach(to view: RoomCaptureView) {
++        captureView = view
++        view.delegate = self
++        if pendingStart {
++            pendingStart = false
++            startScan()
++        }
++    }
++
++    func startScan() {
++        guard RoomCaptureSession.isSupported else {
++            errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
++            return
++        }
++        guard let captureView else {
++            pendingStart = true
++            return
++        }
++
++        capturedRoom = nil
++        latestExport = nil
++        isProcessing = false
++        statusMessage = "امسح الجدران والأبواب والنوافذ بحركة بطيئة."
++        captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
++        isScanning = true
++    }
++
++    func stopScan() {
++        guard isScanning else { return }
++        isScanning = false
++        isProcessing = true
++        statusMessage = "جارٍ معالجة نموذج الغرفة…"
++        captureView?.captureSession.stop()
++    }
++
++    func stopWithoutProcessing() {
++        isScanning = false
++        captureView?.captureSession.stop(pauseARSession: true)
++    }
++
++    func exportParametric() {
++        export(options: .parametric, kind: "Parametric")
++    }
++
++    func exportMesh() {
++        export(options: .mesh, kind: "Mesh")
++    }
++
++    func clearError() {
++        errorMessage = nil
++    }
++
++    func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
++        if let error {
++            isProcessing = false
++            errorMessage = error.localizedDescription
++            statusMessage = "حدث خطأ أثناء إنهاء المسح."
++            return false
++        }
++        isScanning = false
++        isProcessing = true
++        statusMessage = "جارٍ إنشاء النموذج النهائي…"
++        return true
++    }
++
++    func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
++        isProcessing = false
++        if let error {
++            errorMessage = error.localizedDescription
++            statusMessage = "تعذر معالجة الغرفة."
++            return
++        }
++        capturedRoom = processedResult
++        statusMessage = "اكتمل المسح. راجع النموذج ثم صدّره."
++        UINotificationFeedbackGenerator().notificationOccurred(.success)
++    }
++
++    private func export(options: CapturedRoom.USDExportOptions, kind: String) {
++        guard let capturedRoom else {
++            errorMessage = "أنهِ مسح الغرفة أولًا."
++            return
++        }
++
++        do {
++            let formatter = DateFormatter()
++            formatter.locale = Locale(identifier: "en_US_POSIX")
++            formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
++            let name = "Room-\(formatter.string(from: Date()))-\(kind)"
++            let storage = LiDARLabStorage.shared
++            try storage.ensureDirectories()
++            let folder = storage.roomsURL.appendingPathComponent(name, isDirectory: true)
++            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
++
++            let jsonURL = folder.appendingPathComponent("room.json")
++            let usdzURL = folder.appendingPathComponent("room.usdz")
++            let encoder = JSONEncoder()
++            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++            try encoder.encode(capturedRoom).write(to: jsonURL, options: .atomic)
++            try capturedRoom.export(to: usdzURL, exportOptions: options)
++
++            latestExport = RoomScanExport(folderURL: folder, jsonURL: jsonURL, usdzURL: usdzURL, kind: kind)
++            statusMessage = "تم تصدير JSON وUSDZ بنمط \(kind)."
++            UINotificationFeedbackGenerator().notificationOccurred(.success)
++        } catch {
++            errorMessage = error.localizedDescription
++        }
++    }
++}
+diff -ruN a/project.yml b/project.yml
+--- a/project.yml	2026-07-31 20:13:54.000000000 +0000
++++ b/project.yml	2026-08-01 11:09:56.404838294 +0000
+@@ -9,8 +9,8 @@
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.8.2"
+-    CURRENT_PROJECT_VERSION: "11"
++    MARKETING_VERSION: "0.9.0"
++    CURRENT_PROJECT_VERSION: "12"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar

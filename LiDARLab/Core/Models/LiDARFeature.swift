@@ -45,7 +45,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "اكتشاف المستويات"
         case .arPlayground: "مختبر الواقع المعزز"
         case .depthPhoto: "صورة مع العمق"
-        case .roomScan: "مسح الغرفة"
+        case .roomScan: "مسح الغرف"
         case .sensorTests: "اختبارات الحساس"
         case .recordings: "تسجيل الجلسات"
         case .exportCenter: "مركز التصدير"
@@ -65,7 +65,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "اكتشاف الأسطح الأفقية والرأسية"
         case .arPlayground: "وضع وتحريك مجسمات داخل المكان"
         case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
-        case .roomScan: "تجربة RoomPlan لمسح غرفة"
+        case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
         case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
         case .exportCenter: "إدارة الصور والغرف والجلسات المحفوظة"
@@ -150,7 +150,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .depthPhoto:
             ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
         case .roomScan:
-            ["الجدران والأبواب والنوافذ", "أبعاد الغرفة", "نموذج RoomPlan ثلاثي الأبعاد"]
+            ["جلسة مستقلة لكل غرفة", "ARSession مشتركة بين الغرف", "حفظ الغرف المجمدة ونموذج دمج للمقارنة"]
         case .recordings:
             ["تسجيل الصورة والعمق وحركة الكاميرا", "تشغيل مرئي للإطارات", "مشاركة ملفات الجلسة"]
         case .exportCenter:
