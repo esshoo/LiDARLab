@@ -98,10 +98,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     @Published private(set) var manualOpeningRecords: [ManualOpeningRecord] = []
     @Published private(set) var suppressedDetectedSurfaces: [SuppressedDetectedSurfaceRecord] = []
 
-    /// Phase 5E/5F: non-destructive wall geometry corrections and automatic project checks.
-    @Published private(set) var wallGeometryOverrides: [WallGeometryOverrideRecord] = []
-    @Published private(set) var projectReviewIssues: [ProjectReviewIssue] = []
-
     private weak var captureView: RoomCaptureView?
     private var pendingStartRequest: PendingStartRequest?
     private var shouldAcceptNextProcessedRoom = false
@@ -669,7 +665,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
 
         // Remove only the old face assignments for this room. Shared physical wall
         // records used by other rooms remain, then the new faces match against them.
-        wallGeometryOverrides.removeAll { $0.roomIndex == roomIndex }
         roomWallAssignments.removeAll { $0.roomIndex == roomIndex }
         roomWallConfigurations.removeAll { $0.roomIndex == roomIndex }
         removeOrphanedBuildingWallRecords()
@@ -684,8 +679,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         persistFrozenRoom(pending.candidateRoom, index: roomIndex)
         persistWallMetadata()
         persistRoomWallMetadata(roomIndex: roomIndex)
-        persistWallGeometryOverrideDocument()
-        refreshProjectReviewIssues()
 
         updateRevisionDecision(id: pending.id, decision: .accepted)
         pendingRoomRevision = nil
@@ -951,7 +944,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         isBuildingFinished = true
         statusMessage = "تم اعتماد الجزء الناقص للغرفة \(acceptedRecord.roomIndex) كطبقة مكملة دون استبدال المسح الأصلي."
         persistRoomCorrectionDocument()
-        refreshProjectReviewIssues()
         persistSessionCheckpoint()
         writeManifest()
         UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -1125,7 +1117,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     }
 
     var manualOpeningOverlays: [ProjectOpeningOverlay] {
-        resolvedManualOpeningRecords.map { record in
+        manualOpeningRecords.map { record in
             let tangent = normalized2D(SIMD2<Float>(record.tangentX, record.tangentZ))
             let center = SIMD2<Float>(record.centerX, record.centerZ)
             let halfWidth = Float(record.widthMeters) / 2
@@ -1201,7 +1193,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         sillHeightCentimeters: Double,
         connectsRoomIndex: Int?
     ) -> UUID {
-        let geometry = effectiveWallGeometry(for: selection)
+        let geometry = selection.geometry
         let tangent = normalized2D(SIMD2<Float>(geometry.tangentX, geometry.tangentZ))
         let normal = normalized2D(SIMD2<Float>(geometry.normalX, geometry.normalZ))
         let ratio = min(max(positionPercent / 100.0, 0), 1)
@@ -1268,7 +1260,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             )
             try configuredEncoder().encode(document)
                 .write(to: reviewFolder.appendingPathComponent("manual-openings.json"), options: .atomic)
-            refreshProjectReviewIssues()
         } catch {
             errorMessage = "تعذر حفظ تعديلات الأبواب والفتحات: \(error.localizedDescription)"
         }
@@ -1537,8 +1528,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             loadRoomRevisionHistory(from: folder)
             loadRoomCorrectionHistory(from: folder)
             loadManualOpeningDocument(from: folder)
-            loadWallGeometryOverrideDocument(from: folder)
-            refreshProjectReviewIssues()
 
             activeRoomNumber = checkpoint.activeRoomNumber
             activeRoomFragmentCount = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count
@@ -1833,7 +1822,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
 
         persistWallMetadata()
         persistRoomWallMetadataFilesForWall(buildingWallID)
-        refreshProjectReviewIssues()
         writeManifest()
     }
 
@@ -1857,7 +1845,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
 
         persistWallMetadata()
         persistRoomWallMetadata(roomIndex: roomIndex)
-        refreshProjectReviewIssues()
         writeManifest()
     }
 
@@ -2420,8 +2407,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         roomCorrectionTargetIndex = nil
         manualOpeningRecords = []
         suppressedDetectedSurfaces = []
-        wallGeometryOverrides = []
-        projectReviewIssues = []
         buildingWasFinishedBeforeRescan = false
         shouldAcceptNextProcessedRoom = false
         pendingStopAction = nil
@@ -2443,8 +2428,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             persistWallMetadata()
             persistRoomCorrectionDocument()
             persistManualOpeningDocument()
-            persistWallGeometryOverrideDocument()
-            refreshProjectReviewIssues()
             persistSessionCheckpoint()
             writeManifest()
         } catch {
@@ -2715,258 +2698,5 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             return String(Int(centimeters.rounded()))
         }
         return String(format: "%.1f", centimeters)
-    }
-}
-
-// MARK: - Phase 5E/5F automatic review and non-destructive geometry editing
-
-extension RoomScanViewModel {
-    var criticalProjectIssueCount: Int {
-        projectReviewIssues.filter { $0.severity == .critical }.count
-    }
-
-    var warningProjectIssueCount: Int {
-        projectReviewIssues.filter { $0.severity == .warning }.count
-    }
-
-    var informationalProjectIssueCount: Int {
-        projectReviewIssues.filter { $0.severity == .information }.count
-    }
-
-    var issueWallIdentifiers: Set<UUID> {
-        Set(
-            projectReviewIssues
-                .filter { $0.severity != .information }
-                .compactMap(\.wallIdentifier)
-        )
-    }
-
-    func geometryOverride(for assignmentID: UUID) -> WallGeometryOverrideRecord? {
-        wallGeometryOverrides.first { $0.assignmentID == assignmentID }
-    }
-
-    func effectiveWallGeometry(for selection: RoomWallSelection) -> EffectiveWallGeometry {
-        EffectiveWallGeometry(
-            base: selection.geometry,
-            adjustment: geometryOverride(for: selection.assignmentID)
-        )
-    }
-
-    func effectiveWallGeometry(for assignment: RoomWallAssignment) -> EffectiveWallGeometry {
-        EffectiveWallGeometry(
-            base: assignment.geometry,
-            adjustment: geometryOverride(for: assignment.id)
-        )
-    }
-
-    var resolvedManualOpeningRecords: [ManualOpeningRecord] {
-        manualOpeningRecords.map { original in
-            guard let assignment = roomWallAssignments.first(where: {
-                $0.wallIdentifier == original.sourceWallIdentifier
-                    && $0.roomIndex == original.sourceRoomIndex
-            }) ?? roomWallAssignments.first(where: {
-                $0.buildingWallID == original.buildingWallID
-                    && $0.roomIndex == original.sourceRoomIndex
-            }) ?? roomWallAssignments.first(where: { $0.buildingWallID == original.buildingWallID }) else {
-                return original
-            }
-
-            let geometry = effectiveWallGeometry(for: assignment)
-            let ratio = min(max(original.positionRatio, 0), 1)
-            let horizontalOffset = Float((ratio - 0.5) * Double(geometry.widthMeters))
-            let center = geometry.center2D + geometry.tangent2D * horizontalOffset
-            let wallBottomY = Double(geometry.centerY) - Double(geometry.heightMeters) / 2
-            var resolved = original
-            resolved.centerX = center.x
-            resolved.centerZ = center.y
-            resolved.centerY = Float(wallBottomY + original.sillHeightMeters + original.heightMeters / 2)
-            resolved.tangentX = geometry.tangentX
-            resolved.tangentZ = geometry.tangentZ
-            resolved.normalX = geometry.normalX
-            resolved.normalZ = geometry.normalZ
-            return resolved
-        }
-    }
-
-    func saveWallGeometryOverride(
-        selection: RoomWallSelection,
-        lengthCentimeters: Double,
-        heightCentimeters: Double,
-        centerOffsetAlongCentimeters: Double,
-        centerOffsetNormalCentimeters: Double,
-        rotationDegrees: Double,
-        applyHorizontalToSharedWall: Bool,
-        applyHeightToSharedWall: Bool
-    ) {
-        let selectedAssignment = roomWallAssignments.first { $0.id == selection.assignmentID }
-        guard let selectedAssignment else { return }
-
-        let selectedTangent = normalized2D(
-            SIMD2<Float>(selectedAssignment.geometry.tangentX, selectedAssignment.geometry.tangentZ)
-        )
-        let selectedNormal = normalized2D(
-            SIMD2<Float>(selectedAssignment.geometry.normalX, selectedAssignment.geometry.normalZ)
-        )
-        let targetAssignments = applyHorizontalToSharedWall
-            ? roomWallAssignments.filter { $0.buildingWallID == selection.buildingWallID }
-            : [selectedAssignment]
-        let now = Date()
-        let lengthMeters = min(max(lengthCentimeters / 100, 0.20), 100)
-        let heightMeters = min(max(heightCentimeters / 100, 0.20), 20)
-        let alongMeters = min(max(centerOffsetAlongCentimeters / 100, -10), 10)
-        let normalMeters = min(max(centerOffsetNormalCentimeters / 100, -10), 10)
-        let safeRotation = min(max(rotationDegrees, -180), 180)
-
-        for assignment in targetAssignments {
-            let targetTangent = normalized2D(
-                SIMD2<Float>(assignment.geometry.tangentX, assignment.geometry.tangentZ)
-            )
-            let targetNormal = normalized2D(
-                SIMD2<Float>(assignment.geometry.normalX, assignment.geometry.normalZ)
-            )
-            let alongSign = simd_dot(selectedTangent, targetTangent) < 0 ? -1.0 : 1.0
-            let normalSign = simd_dot(selectedNormal, targetNormal) < 0 ? -1.0 : 1.0
-            let existing = geometryOverride(for: assignment.id)
-            let targetHeight = (assignment.id == selection.assignmentID || applyHeightToSharedWall)
-                ? heightMeters
-                : existing?.heightMeters ?? Double(assignment.geometry.heightMeters)
-            let record = WallGeometryOverrideRecord(
-                id: existing?.id ?? UUID(),
-                assignmentID: assignment.id,
-                buildingWallID: assignment.buildingWallID,
-                roomIndex: assignment.roomIndex,
-                wallIdentifier: assignment.wallIdentifier,
-                centerOffsetAlongMeters: alongMeters * alongSign,
-                centerOffsetNormalMeters: normalMeters * normalSign,
-                rotationDegrees: safeRotation,
-                widthMeters: lengthMeters,
-                heightMeters: targetHeight,
-                createdAt: existing?.createdAt ?? now,
-                updatedAt: now
-            )
-            if let index = wallGeometryOverrides.firstIndex(where: { $0.assignmentID == assignment.id }) {
-                wallGeometryOverrides[index] = record
-            } else {
-                wallGeometryOverrides.append(record)
-            }
-        }
-
-        persistWallGeometryOverrideDocument()
-        refreshProjectReviewIssues()
-        statusMessage = applyHorizontalToSharedWall
-            ? "تم تحديث هندسة الحائط المشترك دون تعديل ملف RoomPlan الأصلي."
-            : "تم تحديث وجه الحائط في الغرفة دون تعديل ملف RoomPlan الأصلي."
-    }
-
-    func resetWallGeometryOverride(selection: RoomWallSelection, includeSharedFaces: Bool) {
-        let assignmentIDs: Set<UUID>
-        if includeSharedFaces {
-            assignmentIDs = Set(
-                roomWallAssignments
-                    .filter { $0.buildingWallID == selection.buildingWallID }
-                    .map(\.id)
-            )
-        } else {
-            assignmentIDs = [selection.assignmentID]
-        }
-        wallGeometryOverrides.removeAll { assignmentIDs.contains($0.assignmentID) }
-        persistWallGeometryOverrideDocument()
-        refreshProjectReviewIssues()
-        statusMessage = "تمت استعادة هندسة RoomPlan الأصلية للحائط المحدد."
-    }
-
-    func suggestedBuildingSnapRotationDegrees(for selection: RoomWallSelection) -> Double {
-        guard !roomWallAssignments.isEmpty else { return 0 }
-        var sumX = 0.0
-        var sumY = 0.0
-        for assignment in roomWallAssignments {
-            let geometry = effectiveWallGeometry(for: assignment)
-            let angle = atan2(Double(geometry.tangentZ), Double(geometry.tangentX))
-            let weight = max(Double(geometry.widthMeters), 0.1)
-            sumX += cos(angle * 4) * weight
-            sumY += sin(angle * 4) * weight
-        }
-        let dominant = atan2(sumY, sumX) / 4
-        let original = atan2(Double(selection.geometry.tangentZ), Double(selection.geometry.tangentX))
-        let current = original + (geometryOverride(for: selection.assignmentID)?.rotationDegrees ?? 0) * .pi / 180
-        let quarterTurn = Double.pi / 2
-        let nearestIndex = ((current - dominant) / quarterTurn).rounded()
-        let target = dominant + nearestIndex * quarterTurn
-        return Self.normalizedDegrees((target - original) * 180 / .pi)
-    }
-
-    func refreshProjectReviewIssues() {
-        projectReviewIssues = RoomScanProjectReviewEngine(
-            rooms: capturedRooms,
-            wallRecords: buildingWallRecords,
-            assignments: roomWallAssignments,
-            geometryOverrides: wallGeometryOverrides,
-            manualOpenings: manualOpeningRecords,
-            suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers
-        ).makeIssues()
-        persistProjectReviewIssueDocument()
-    }
-
-    private func persistWallGeometryOverrideDocument() {
-        guard let buildingFolderURL else { return }
-        do {
-            let reviewFolder = buildingFolderURL.appendingPathComponent("Review", isDirectory: true)
-            try FileManager.default.createDirectory(at: reviewFolder, withIntermediateDirectories: true)
-            let document = WallGeometryOverrideDocument(
-                schemaVersion: 1,
-                updatedAt: Date(),
-                overrides: wallGeometryOverrides
-            )
-            try configuredEncoder().encode(document)
-                .write(to: reviewFolder.appendingPathComponent("wall-geometry-overrides.json"), options: .atomic)
-        } catch {
-            errorMessage = "تعذر حفظ تعديلات هندسة الحوائط: \(error.localizedDescription)"
-        }
-    }
-
-    private func loadWallGeometryOverrideDocument(from folder: URL) {
-        let url = folder
-            .appendingPathComponent("Review", isDirectory: true)
-            .appendingPathComponent("wall-geometry-overrides.json")
-        guard let data = try? Data(contentsOf: url),
-              let document = try? configuredDecoder().decode(WallGeometryOverrideDocument.self, from: data) else {
-            wallGeometryOverrides = []
-            return
-        }
-        let validAssignmentIDs = Set(roomWallAssignments.map(\.id))
-        var latestByAssignment: [UUID: WallGeometryOverrideRecord] = [:]
-        for record in document.overrides where validAssignmentIDs.contains(record.assignmentID) {
-            if let existing = latestByAssignment[record.assignmentID], existing.updatedAt > record.updatedAt {
-                continue
-            }
-            latestByAssignment[record.assignmentID] = record
-        }
-        wallGeometryOverrides = Array(latestByAssignment.values).sorted {
-            ($0.roomIndex, $0.wallIdentifier.uuidString) < ($1.roomIndex, $1.wallIdentifier.uuidString)
-        }
-    }
-
-    private func persistProjectReviewIssueDocument() {
-        guard let buildingFolderURL else { return }
-        do {
-            let reviewFolder = buildingFolderURL.appendingPathComponent("Review", isDirectory: true)
-            try FileManager.default.createDirectory(at: reviewFolder, withIntermediateDirectories: true)
-            let document = ProjectReviewIssueDocument(
-                schemaVersion: 1,
-                generatedAt: Date(),
-                issues: projectReviewIssues
-            )
-            try configuredEncoder().encode(document)
-                .write(to: reviewFolder.appendingPathComponent("project-issues.json"), options: .atomic)
-        } catch {
-            // The live issue list remains usable even if its report cannot be written.
-        }
-    }
-
-    private static func normalizedDegrees(_ degrees: Double) -> Double {
-        var value = degrees.truncatingRemainder(dividingBy: 360)
-        if value > 180 { value -= 360 }
-        if value < -180 { value += 360 }
-        return value
     }
 }

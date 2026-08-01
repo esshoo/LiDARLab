@@ -14,8 +14,6 @@ struct RoomScanProject3DView: UIViewRepresentable {
     let wallRecords: [BuildingWallRecord]
     let manualOpenings: [ManualOpeningRecord]
     let suppressedSurfaceIdentifiers: Set<UUID>
-    let geometryOverrides: [WallGeometryOverrideRecord]
-    let issueWallIdentifiers: Set<UUID>
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
@@ -39,9 +37,6 @@ struct RoomScanProject3DView: UIViewRepresentable {
 
         let thicknessByWallID = Dictionary(uniqueKeysWithValues: wallRecords.map { ($0.id, $0.thicknessMeters) })
         var assignmentByFace: [FaceKey: RoomWallAssignment] = [:]
-        let overrideByAssignment = Dictionary(
-            uniqueKeysWithValues: geometryOverrides.map { ($0.assignmentID, $0) }
-        )
         for assignment in wallAssignments {
             let key = FaceKey(roomIndex: assignment.roomIndex, wallIdentifier: assignment.wallIdentifier)
             if assignmentByFace[key] == nil {
@@ -56,8 +51,7 @@ struct RoomScanProject3DView: UIViewRepresentable {
                 isCorrection: false,
                 to: modelRoot,
                 assignmentByFace: assignmentByFace,
-                thicknessByWallID: thicknessByWallID,
-                overrideByAssignment: overrideByAssignment
+                thicknessByWallID: thicknessByWallID
             )
         }
 
@@ -68,8 +62,7 @@ struct RoomScanProject3DView: UIViewRepresentable {
                 isCorrection: true,
                 to: modelRoot,
                 assignmentByFace: assignmentByFace,
-                thicknessByWallID: thicknessByWallID,
-                overrideByAssignment: overrideByAssignment
+                thicknessByWallID: thicknessByWallID
             )
         }
 
@@ -88,39 +81,22 @@ struct RoomScanProject3DView: UIViewRepresentable {
         isCorrection: Bool,
         to root: SCNNode,
         assignmentByFace: [FaceKey: RoomWallAssignment],
-        thicknessByWallID: [UUID: Double],
-        overrideByAssignment: [UUID: WallGeometryOverrideRecord]
+        thicknessByWallID: [UUID: Double]
     ) {
         for wall in room.walls {
             let key = FaceKey(roomIndex: roomIndex, wallIdentifier: wall.identifier)
             let assignment = assignmentByFace[key]
             let thickness = assignment.flatMap { thicknessByWallID[$0.buildingWallID] } ?? 0.12
-            let hasIssue = issueWallIdentifiers.contains(wall.identifier)
-            let wallMaterial = material(
-                color: hasIssue ? .systemRed : (isCorrection ? .systemPurple : .systemGray),
-                opacity: hasIssue ? 0.88 : (isCorrection ? 0.35 : 0.72)
+            root.addChildNode(
+                surfaceNode(
+                    wall,
+                    depth: max(thickness, 0.03),
+                    material: material(
+                        color: isCorrection ? .systemPurple : .systemGray,
+                        opacity: isCorrection ? 0.35 : 0.72
+                    )
+                )
             )
-            if let assignment {
-                let geometry = EffectiveWallGeometry(
-                    base: assignment.geometry,
-                    adjustment: overrideByAssignment[assignment.id]
-                )
-                root.addChildNode(
-                    wallNode(
-                        geometry: geometry,
-                        depth: max(thickness, 0.03),
-                        material: wallMaterial
-                    )
-                )
-            } else {
-                root.addChildNode(
-                    surfaceNode(
-                        wall,
-                        depth: max(thickness, 0.03),
-                        material: wallMaterial
-                    )
-                )
-            }
         }
 
         addDetectedSurfaces(room.doors, color: .systemOrange, isCorrection: isCorrection, to: root)
@@ -143,23 +119,6 @@ struct RoomScanProject3DView: UIViewRepresentable {
                 )
             )
         }
-    }
-
-    private func wallNode(
-        geometry: EffectiveWallGeometry,
-        depth: Double,
-        material: SCNMaterial
-    ) -> SCNNode {
-        let box = SCNBox(
-            width: CGFloat(max(geometry.widthMeters, 0.03)),
-            height: CGFloat(max(geometry.heightMeters, 0.03)),
-            length: CGFloat(max(depth, 0.01)),
-            chamferRadius: 0.005
-        )
-        box.materials = [material]
-        let node = SCNNode(geometry: box)
-        node.simdTransform = geometry.transform
-        return node
     }
 
     private func surfaceNode(

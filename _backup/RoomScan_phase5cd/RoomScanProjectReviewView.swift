@@ -11,7 +11,6 @@ struct RoomScanProjectReviewView: View {
     @State private var selectedWall: RoomWallSelection?
     @State private var showingWallEditor = false
     @State private var showingOpeningsManager = false
-    @State private var showingGeometryEditor = false
     @State private var previewURL: URL?
     @State private var rescanConfirmationRoom: Int?
     @State private var correctionConfirmationRoom: Int?
@@ -19,7 +18,6 @@ struct RoomScanProjectReviewView: View {
     private enum ReviewTab: String, CaseIterable, Identifiable {
         case plan2D = "2D"
         case preview3D = "3D"
-        case issues = "المشكلات"
         case rooms = "الغرف"
 
         var id: String { rawValue }
@@ -52,8 +50,6 @@ struct RoomScanProjectReviewView: View {
                         planView
                     case .preview3D:
                         previewView
-                    case .issues:
-                        issuesView
                     case .rooms:
                         roomListView
                     }
@@ -81,13 +77,6 @@ struct RoomScanProjectReviewView: View {
                             roomIndex: selectedRoomIndex,
                             initialSelection: selectedWall
                         )
-                    }
-                }
-            }
-            .sheet(isPresented: $showingGeometryEditor) {
-                if let selectedWall {
-                    NavigationStack {
-                        RoomWallGeometryEditorView(model: model, selection: selectedWall)
                     }
                 }
             }
@@ -139,7 +128,6 @@ struct RoomScanProjectReviewView: View {
                 Text("امسح المنطقة المفقودة فقط. ستُحفظ كطبقة مكملة ولن تستبدل الغرفة الأصلية.")
             }
             .onAppear {
-                model.refreshProjectReviewIssues()
                 if selectedRoomIndex == nil {
                     selectedRoomIndex = model.roomReviewSummaries.first?.roomIndex
                 }
@@ -160,8 +148,6 @@ struct RoomScanProjectReviewView: View {
                 wallAssignments: model.roomWallAssignments,
                 manualOpenings: model.manualOpeningOverlays,
                 suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
-                geometryOverrides: model.wallGeometryOverrides,
-                issueWallIdentifiers: model.issueWallIdentifiers,
                 selectedRoomIndex: $selectedRoomIndex,
                 selectedWall: $selectedWall
             )
@@ -201,10 +187,8 @@ struct RoomScanProjectReviewView: View {
                     corrections: model.acceptedRoomCorrections,
                     wallAssignments: model.roomWallAssignments,
                     wallRecords: model.buildingWallRecords,
-                    manualOpenings: model.resolvedManualOpeningRecords,
-                    suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
-                    geometryOverrides: model.wallGeometryOverrides,
-                    issueWallIdentifiers: model.issueWallIdentifiers
+                    manualOpenings: model.manualOpeningRecords,
+                    suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers
                 )
                 .frame(height: 380)
                 .clipShape(RoundedRectangle(cornerRadius: 18))
@@ -266,102 +250,6 @@ struct RoomScanProjectReviewView: View {
         }
     }
 
-    private var issuesView: some View {
-        List {
-            Section {
-                HStack(spacing: 14) {
-                    issueMetric(title: "مهم", value: model.criticalProjectIssueCount, color: .red)
-                    issueMetric(title: "مراجعة", value: model.warningProjectIssueCount, color: .orange)
-                    issueMetric(title: "معلومات", value: model.informationalProjectIssueCount, color: .blue)
-                }
-                .padding(.vertical, 6)
-
-                Button {
-                    model.refreshProjectReviewIssues()
-                } label: {
-                    Label("إعادة فحص المشروع", systemImage: "arrow.clockwise")
-                }
-            } header: {
-                Text("الفحص الهندسي")
-            } footer: {
-                Text("الفحص لا يغيّر RoomPlan تلقائيًا. كل نتيجة تقودك إلى الغرفة أو الحائط لمراجعتها يدويًا.")
-            }
-
-            ForEach(ProjectReviewIssueSeverity.allCases.reversed(), id: \.self) { severity in
-                let items = model.projectReviewIssues.filter { $0.severity == severity }
-                if !items.isEmpty {
-                    Section(severity.arabicTitle) {
-                        ForEach(items) { issue in
-                            Button {
-                                navigate(to: issue)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 7) {
-                                    HStack(alignment: .top) {
-                                        Image(systemName: severity.systemImage)
-                                            .foregroundStyle(issueColor(severity))
-                                        Text(issue.title)
-                                            .font(.headline)
-                                            .foregroundStyle(.primary)
-                                        Spacer()
-                                        if let roomIndex = issue.roomIndex {
-                                            Text("غرفة \(roomIndex)")
-                                                .font(.caption2.bold())
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    Text(issue.details)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Label(issue.suggestedAction, systemImage: "wrench.and.screwdriver")
-                                        .font(.caption2)
-                                        .foregroundStyle(.primary)
-                                }
-                                .padding(.vertical, 5)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-
-            if model.projectReviewIssues.isEmpty {
-                ContentUnavailableView(
-                    "لا توجد تعارضات ظاهرة",
-                    systemImage: "checkmark.seal.fill",
-                    description: Text("لم يكتشف الفحص الحالي مشكلات هندسية في البيانات المتاحة.")
-                )
-            }
-        }
-    }
-
-    private func issueMetric(title: String, value: Int, color: Color) -> some View {
-        VStack(spacing: 4) {
-            Text("\(value)").font(.title2.bold()).foregroundStyle(color)
-            Text(title).font(.caption2).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func issueColor(_ severity: ProjectReviewIssueSeverity) -> Color {
-        switch severity {
-        case .critical: return .red
-        case .warning: return .orange
-        case .information: return .blue
-        }
-    }
-
-    private func navigate(to issue: ProjectReviewIssue) {
-        if let roomIndex = issue.roomIndex {
-            selectedRoomIndex = roomIndex
-        }
-        if let roomIndex = issue.roomIndex, let wallIdentifier = issue.wallIdentifier {
-            selectedWall = model.wallSelection(roomIndex: roomIndex, wallIdentifier: wallIdentifier)
-        } else {
-            selectedWall = nil
-        }
-        selectedTab = .plan2D
-    }
-
     private var roomListView: some View {
         List {
             Section("ملخص المشروع") {
@@ -371,8 +259,6 @@ struct RoomScanProjectReviewView: View {
                 LabeledContent("إعادات المسح", value: "\(model.roomRevisionRecords.count)")
                 LabeledContent("الأجزاء المكملة", value: "\(model.acceptedRoomCorrections.count)")
                 LabeledContent("العناصر اليدوية", value: "\(model.manualOpeningRecords.count)")
-                LabeledContent("تعارضات مهمة", value: "\(model.criticalProjectIssueCount)")
-                LabeledContent("تحتاج مراجعة", value: "\(model.warningProjectIssueCount)")
             }
 
             Section("الغرف") {
@@ -482,31 +368,20 @@ struct RoomScanProjectReviewView: View {
                 Button {
                     showingWallEditor = true
                 } label: {
-                    Label("السماكة", systemImage: "ruler")
+                    Label("السماكات", systemImage: "ruler")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
 
                 Button {
-                    showingGeometryEditor = true
-                } label: {
-                    Label("الهندسة", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.indigo)
-                .disabled(selectedWall == nil)
-
-                Button {
                     showingOpeningsManager = true
                 } label: {
-                    Label("الفتحات", systemImage: "door.left.hand.open")
+                    Label("الأبواب", systemImage: "door.left.hand.open")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.cyan)
             }
-            .font(.caption)
 
             HStack(spacing: 8) {
                 Button {
@@ -618,8 +493,6 @@ private struct RoomPlan2DCanvas: View {
     let wallAssignments: [RoomWallAssignment]
     let manualOpenings: [ProjectOpeningOverlay]
     let suppressedSurfaceIdentifiers: Set<UUID>
-    let geometryOverrides: [WallGeometryOverrideRecord]
-    let issueWallIdentifiers: Set<UUID>
     @Binding var selectedRoomIndex: Int?
     @Binding var selectedWall: RoomWallSelection?
 
@@ -634,8 +507,7 @@ private struct RoomPlan2DCanvas: View {
             corrections: corrections,
             wallAssignments: wallAssignments,
             manualOpenings: manualOpenings,
-            suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers,
-            geometryOverrides: geometryOverrides
+            suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers
         )
     }
 
@@ -674,7 +546,6 @@ private struct RoomPlan2DCanvas: View {
                     Label("اسحب للتحريك • كبّر بإصبعين", systemImage: "hand.draw")
                     Label("اضغط على حائط لاختياره", systemImage: "cursorarrow.click")
                     Label("البنفسجي = جزء مكمل • الأحمر/السماوي = يدوي", systemImage: "paintpalette")
-                    Label("الحائط الأحمر المتقطع = يحتاج مراجعة", systemImage: "exclamationmark.triangle")
                 }
                 .font(.caption2)
                 .padding(8)
@@ -746,12 +617,6 @@ private struct RoomPlan2DCanvas: View {
                     color = .purple
                     width = 3
                     stroke.dash = [7, 5]
-                } else if let wallIdentifier = segment.wallIdentifier,
-                          issueWallIdentifiers.contains(wallIdentifier),
-                          !selected {
-                    color = .red
-                    width = 4
-                    stroke.dash = [8, 4]
                 } else {
                     color = selected ? .cyan : .primary
                     width = selected ? 6 : 3
@@ -856,8 +721,7 @@ private struct FloorPlanSnapshot {
         corrections: [AcceptedRoomCorrectionLayer],
         wallAssignments: [RoomWallAssignment],
         manualOpenings: [ProjectOpeningOverlay],
-        suppressedSurfaceIdentifiers: Set<UUID>,
-        geometryOverrides: [WallGeometryOverrideRecord]
+        suppressedSurfaceIdentifiers: Set<UUID>
     ) {
         var newSegments: [Segment] = []
         var newLabels: [Label] = []
@@ -868,38 +732,21 @@ private struct FloorPlanSnapshot {
                 assignmentByKey[key] = assignment
             }
         }
-        let overrideByAssignment = Dictionary(
-            uniqueKeysWithValues: geometryOverrides.map { ($0.assignmentID, $0) }
-        )
 
         func appendRoom(_ room: CapturedRoom, roomIndex: Int, source: SegmentSource, addLabel: Bool) {
             var wallCenters: [SIMD2<Float>] = []
 
             func append(_ surfaces: [CapturedRoom.Surface], kind: SegmentKind) {
                 for surface in surfaces where !suppressedSurfaceIdentifiers.contains(surface.identifier) {
+                    let transform = surface.transform
+                    let center = SIMD2<Float>(transform.columns.3.x, transform.columns.3.z)
+                    var tangent = SIMD2<Float>(transform.columns.0.x, transform.columns.0.z)
+                    let tangentLength = simd_length(tangent)
+                    tangent = tangentLength > 0.0001 ? tangent / tangentLength : SIMD2<Float>(1, 0)
+                    let halfWidth = max(surface.dimensions.x, 0.05) / 2
                     let assignment = kind == .wall
                         ? assignmentByKey[WallKey(roomIndex: roomIndex, wallIdentifier: surface.identifier)]
                         : nil
-                    let center: SIMD2<Float>
-                    let tangent: SIMD2<Float>
-                    let halfWidth: Float
-                    if let assignment {
-                        let geometry = EffectiveWallGeometry(
-                            base: assignment.geometry,
-                            adjustment: overrideByAssignment[assignment.id]
-                        )
-                        center = geometry.center2D
-                        tangent = geometry.tangent2D
-                        halfWidth = geometry.widthMeters / 2
-                    } else {
-                        let transform = surface.transform
-                        center = SIMD2<Float>(transform.columns.3.x, transform.columns.3.z)
-                        var rawTangent = SIMD2<Float>(transform.columns.0.x, transform.columns.0.z)
-                        let tangentLength = simd_length(rawTangent)
-                        rawTangent = tangentLength > 0.0001 ? rawTangent / tangentLength : SIMD2<Float>(1, 0)
-                        tangent = rawTangent
-                        halfWidth = max(surface.dimensions.x, 0.05) / 2
-                    }
                     let selection = assignment.map {
                         RoomWallSelection(
                             assignmentID: $0.id,
