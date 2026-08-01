@@ -116,3 +116,15 @@
 - التحقق من حفظ واستعادة `Review/room-levels.json`.
 - التحقق من تمرير بيانات المناسيب إلى مخطط 2D وعارض SceneKit.
 - التحقق من الإصدار `0.16.0` ورقم البناء `20`.
+
+
+## Integrated Measurement Merge — 0.17.0
+
+- مقارنة ملفات تحديث القياس مع نسخة RoomScan 0.16.1 ملفًا بملف.
+- عدم استبدال أو تعديل أي ملف داخل `LiDARLab/Features/RoomScan`.
+- دمج التغييرات المشتركة يدويًا في `LiDARFeature.swift` للحفاظ على أوصاف RoomScan الحديثة.
+- إضافة مجلد `Measurements` إلى التخزين ومركز التصدير.
+- تحليل Syntax لجميع ملفات Swift بعد الدمج.
+- التحقق من صحة `project.yml` و`Info.plist`.
+- التحقق من الإصدار `0.17.0` ورقم البناء `22`.
+- يلزم تشغيل GitHub Actions للتأكد من Type-check والربط النهائي مع Apple SDKs.

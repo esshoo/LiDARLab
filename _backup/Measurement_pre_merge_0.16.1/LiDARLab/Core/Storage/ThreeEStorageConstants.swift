@@ -16,7 +16,6 @@ enum ThreeEStorageConstants {
         "Captures",
         "Rooms",
         "Recordings",
-        "Measurements",
         "Exports",
         "Projects"
     ]

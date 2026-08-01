@@ -6,7 +6,6 @@ struct ExportCenterItem: Identifiable, Hashable {
         case capture
         case room
         case recording
-        case measurement
         case report
 
         var id: String { rawValue }
@@ -15,7 +14,6 @@ struct ExportCenterItem: Identifiable, Hashable {
             case .capture: "صور العمق"
             case .room: "مسح الغرف"
             case .recording: "الجلسات"
-            case .measurement: "القياسات"
             case .report: "التقارير"
             }
         }
@@ -24,7 +22,6 @@ struct ExportCenterItem: Identifiable, Hashable {
             case .capture: "camera.filters"
             case .room: "house.lodge.fill"
             case .recording: "record.circle.fill"
-            case .measurement: "ruler.fill"
             case .report: "doc.text.fill"
             }
         }
@@ -84,7 +81,6 @@ final class ExportCenterViewModel: ObservableObject {
             scanned += scan(root: storage.capturesURL, kind: .capture)
             scanned += scan(root: storage.roomsURL, kind: .room)
             scanned += scan(root: storage.recordingsURL, kind: .recording)
-            scanned += scan(root: storage.measurementsURL, kind: .measurement)
             scanned += scan(root: storage.exportsURL, kind: .report)
             items = scanned.sorted { $0.modifiedAt > $1.modifiedAt }
             statusMessage = items.isEmpty

@@ -1,0 +1,2448 @@
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/CHANGELOG.md /mnt/data/merge_work/3ELiDAR-0.17.0/CHANGELOG.md
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/CHANGELOG.md	2026-08-01 18:33:35.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/CHANGELOG.md	2026-08-01 18:46:07.288501596 +0000
+@@ -1,3 +1,13 @@
++## 0.17.0
++
++- دمج وظيفة **القياس المتعدد** المرسلة من المستخدم مع أحدث نسخة RoomScan 0.16.1 دون استبدال أي ملف داخل `Features/RoomScan`.
++- استبدال شاشة قياس المسافة القديمة بمسارات متعددة النقاط تدعم الطول المباشر والأفقي والرأسي.
++- إضافة الحفظ بصيغ `measurement.json` و`segments.csv` وصورة معاينة للمشهد.
++- إضافة مجلد `Measurements` إلى بنية تخزين 3E وإظهاره داخل مركز التصدير تحت قسم **القياسات**.
++- إضافة ملفات `MeasurementARViewContainer.swift` و`MeasurementModels.swift` و`MeasurementViewModel.swift`.
++- الإبقاء على جميع تعديلات المسح متعدد الغرف والمراجعة 2D و3D والمناسيب والأسقف دون تغيير.
++- تحديث الإصدار إلى `0.17.0` ورقم البناء إلى `22`.
++
+ ## 0.16.1
+ 
+ - إصلاح فشل بناء Xcode 16.4 في مخطط المراجعة ثنائي الأبعاد.
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Core/Models/LiDARFeature.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Core/Models/LiDARFeature.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Core/Models/LiDARFeature.swift	2026-08-01 11:09:09.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Core/Models/LiDARFeature.swift	2026-08-01 18:46:06.704501619 +0000
+@@ -36,7 +36,7 @@
+     var title: String {
+         switch self {
+         case .depthCamera: "كاميرا العمق"
+-        case .distanceMeasure: "قياس المسافة"
++        case .distanceMeasure: "القياس المتعدد"
+         case .angleMeasure: "قياس الزوايا"
+         case .levelTool: "ميزان الميل والزاوية"
+         case .pointCloud: "السحابة النقطية"
+@@ -56,7 +56,7 @@
+     var subtitle: String {
+         switch self {
+         case .depthCamera: "خريطة حرارية وقراءات عمق مباشرة"
+-        case .distanceMeasure: "قراءة المسافة من مركز الشاشة"
++        case .distanceMeasure: "مسارات متعددة وأطوال أفقية ورأسية مع الحفظ"
+         case .angleMeasure: "قياس زاوية بين ثلاثة مواضع حقيقية"
+         case .levelTool: "تثبيت العنصر على الحائط وقياس ميله بالنسبة للجاذبية"
+         case .pointCloud: "تحويل العمق إلى نقاط ثلاثية الأبعاد"
+@@ -68,7 +68,7 @@
+         case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
+         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
+         case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
+-        case .exportCenter: "إدارة الصور والغرف والجلسات المحفوظة"
++        case .exportCenter: "إدارة الصور والغرف والقياسات والجلسات المحفوظة"
+         case .deviceInfo: "فحص دعم LiDAR وخصائص ARKit"
+         }
+     }
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Core/Storage/LiDARLabStorage.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Core/Storage/LiDARLabStorage.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Core/Storage/LiDARLabStorage.swift	2026-07-31 18:48:12.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Core/Storage/LiDARLabStorage.swift	2026-08-01 18:46:06.704501619 +0000
+@@ -86,6 +86,7 @@
+     var capturesURL: URL { rootURL.appendingPathComponent("Captures", isDirectory: true) }
+     var roomsURL: URL { rootURL.appendingPathComponent("Rooms", isDirectory: true) }
+     var recordingsURL: URL { rootURL.appendingPathComponent("Recordings", isDirectory: true) }
++    var measurementsURL: URL { rootURL.appendingPathComponent("Measurements", isDirectory: true) }
+     var exportsURL: URL { rootURL.appendingPathComponent("Exports", isDirectory: true) }
+     var projectsURL: URL { rootURL.appendingPathComponent("Projects", isDirectory: true) }
+ 
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Core/Storage/ThreeEStorageConstants.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Core/Storage/ThreeEStorageConstants.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Core/Storage/ThreeEStorageConstants.swift	2026-07-31 18:29:49.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Core/Storage/ThreeEStorageConstants.swift	2026-08-01 18:46:06.704501619 +0000
+@@ -16,6 +16,7 @@
+         "Captures",
+         "Rooms",
+         "Recordings",
++        "Measurements",
+         "Exports",
+         "Projects"
+     ]
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Export/ExportCenterView.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Export/ExportCenterView.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Export/ExportCenterView.swift	2026-07-31 18:33:19.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Export/ExportCenterView.swift	2026-08-01 18:46:06.232501637 +0000
+@@ -6,6 +6,7 @@
+         case capture
+         case room
+         case recording
++        case measurement
+         case report
+ 
+         var id: String { rawValue }
+@@ -15,6 +16,7 @@
+             case .capture: "الصور"
+             case .room: "الغرف"
+             case .recording: "الجلسات"
++            case .measurement: "القياسات"
+             case .report: "التقارير"
+             }
+         }
+@@ -24,6 +26,7 @@
+             case .capture: .capture
+             case .room: .room
+             case .recording: .recording
++            case .measurement: .measurement
+             case .report: .report
+             }
+         }
+@@ -68,7 +71,7 @@
+                     ContentUnavailableView(
+                         searchText.isEmpty ? "لا توجد نتائج محفوظة" : "لا توجد نتائج مطابقة",
+                         systemImage: "externaldrive.badge.questionmark",
+-                        description: Text(searchText.isEmpty ? "استخدم أدوات التطبيق لحفظ صور أو غرف أو جلسات." : "جرّب تغيير البحث أو الفلتر.")
++                        description: Text(searchText.isEmpty ? "استخدم أدوات التطبيق لحفظ صور أو غرف أو قياسات أو جلسات." : "جرّب تغيير البحث أو الفلتر.")
+                     )
+                     .frame(maxWidth: .infinity)
+                     .listRowBackground(Color.clear)
+@@ -253,6 +256,7 @@
+         case .capture: .cyan
+         case .room: .green
+         case .recording: .red
++        case .measurement: .blue
+         case .report: .orange
+         }
+     }
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Export/ExportCenterViewModel.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Export/ExportCenterViewModel.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Export/ExportCenterViewModel.swift	2026-07-31 18:33:50.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Export/ExportCenterViewModel.swift	2026-08-01 18:46:06.232501637 +0000
+@@ -6,6 +6,7 @@
+         case capture
+         case room
+         case recording
++        case measurement
+         case report
+ 
+         var id: String { rawValue }
+@@ -14,6 +15,7 @@
+             case .capture: "صور العمق"
+             case .room: "مسح الغرف"
+             case .recording: "الجلسات"
++            case .measurement: "القياسات"
+             case .report: "التقارير"
+             }
+         }
+@@ -22,6 +24,7 @@
+             case .capture: "camera.filters"
+             case .room: "house.lodge.fill"
+             case .recording: "record.circle.fill"
++            case .measurement: "ruler.fill"
+             case .report: "doc.text.fill"
+             }
+         }
+@@ -81,6 +84,7 @@
+             scanned += scan(root: storage.capturesURL, kind: .capture)
+             scanned += scan(root: storage.roomsURL, kind: .room)
+             scanned += scan(root: storage.recordingsURL, kind: .recording)
++            scanned += scan(root: storage.measurementsURL, kind: .measurement)
+             scanned += scan(root: storage.exportsURL, kind: .report)
+             items = scanned.sorted { $0.modifiedAt > $1.modifiedAt }
+             statusMessage = items.isEmpty
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Measure/DistanceMeasureView.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Measure/DistanceMeasureView.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Measure/DistanceMeasureView.swift	2026-07-31 09:43:10.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Measure/DistanceMeasureView.swift	2026-08-01 18:46:06.228501637 +0000
+@@ -1,121 +1,269 @@
++import Foundation
+ import SwiftUI
+ 
+ struct DistanceMeasureView: View {
+-    @StateObject private var model = DepthSessionViewModel(generateHeatmap: false)
++    @StateObject private var model = MeasurementViewModel()
+     @State private var useCentimeters = false
++    @State private var showingSaveDialog = false
++    @State private var measurementName = "قياس"
++    @State private var shareItems: [Any] = []
++    @State private var showingShareSheet = false
+ 
+     var body: some View {
+         GeometryReader { geometry in
+             ZStack {
+-                DepthARViewContainer(model: model)
++                MeasurementARViewContainer(model: model)
+                     .ignoresSafeArea(edges: .bottom)
+ 
+-                // The aiming point is always the geometric center of the camera area.
++                MeasurementOverlay(
++                    projection: model.projection,
++                    useCentimeters: useCentimeters
++                )
++                .allowsHitTesting(false)
++
+                 CrosshairView()
+                     .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                     .allowsHitTesting(false)
+ 
+-                VStack(spacing: 12) {
+-                    unitPicker
+-                    Spacer(minLength: 0)
+-                    readingPanel
+-                    actionButtons
++                VStack(spacing: 10) {
++                    topPanel
++                    Spacer(minLength: 120)
++                    resultsPanel
++                    controlsPanel
+                 }
+                 .padding(.horizontal, adaptiveHorizontalPadding(for: geometry.size.width))
+                 .padding(.top, 10)
+-                .padding(.bottom, 14)
++                .padding(.bottom, 12)
+             }
+         }
+         .background(.black)
+-        .navigationTitle("قياس المسافة")
++        .navigationTitle("القياس المتعدد")
+         .navigationBarTitleDisplayMode(.inline)
+-        .onDisappear {
+-            model.stopSession()
++        .onDisappear { model.stop() }
++        .sheet(isPresented: $showingShareSheet) {
++            ActivityView(items: shareItems)
+         }
+-    }
+-
+-    private var unitPicker: some View {
+-        Picker("الوحدة", selection: $useCentimeters) {
+-            Text("متر").tag(false)
+-            Text("سم").tag(true)
++        .alert("حفظ القياس", isPresented: $showingSaveDialog) {
++            TextField("اسم القياس", text: $measurementName)
++            Button("حفظ") {
++                model.saveMeasurement(named: measurementName)
++            }
++            Button("إلغاء", role: .cancel) {}
++        } message: {
++            Text("سيتم حفظ JSON وCSV وصورة للمشهد داخل مجلد Measurements.")
++        }
++        .alert("تعذر إكمال القياس", isPresented: Binding(
++            get: { model.errorMessage != nil },
++            set: { if !$0 { model.clearError() } }
++        )) {
++            Button("حسنًا", role: .cancel) {}
++        } message: {
++            Text(model.errorMessage ?? "خطأ غير معروف")
++        }
++        .onChange(of: model.latestSavedItems.count) { _, count in
++            guard count > 0 else { return }
++            shareItems = model.latestSavedItems
++            showingShareSheet = true
++            model.clearSavedItems()
+         }
+-        .pickerStyle(.segmented)
+-        .padding(10)
+-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+     }
+ 
+-    private var readingPanel: some View {
+-        VStack(spacing: 7) {
+-            Text("المسافة عند مؤشر منتصف الشاشة")
+-                .font(.subheadline)
+-                .foregroundStyle(.secondary)
+-
+-            ViewThatFits(in: .horizontal) {
+-                Text(formattedDistance)
+-                    .font(.system(size: 50, weight: .bold, design: .rounded))
+-                Text(formattedDistance)
+-                    .font(.system(size: 38, weight: .bold, design: .rounded))
+-            }
+-            .monospacedDigit()
+-            .minimumScaleFactor(0.5)
+-            .lineLimit(1)
+-            .contentTransition(.numericText())
++    private var topPanel: some View {
++        VStack(alignment: .leading, spacing: 9) {
++            HStack(spacing: 10) {
++                VStack(alignment: .leading, spacing: 3) {
++                    Text(model.statusMessage)
++                        .font(.headline)
++                    Text("اضغط على أي سطح أو استخدم زر إضافة نقطة عند مؤشر المنتصف.")
++                        .font(.caption)
++                        .foregroundStyle(.secondary)
++                }
++                Spacer(minLength: 8)
++                Text("\(model.pointCount) نقطة")
++                    .font(.caption.monospacedDigit().bold())
++                    .padding(.horizontal, 9)
++                    .padding(.vertical, 5)
++                    .background(.thinMaterial, in: Capsule())
++            }
+ 
+-            Label("مستوى الثقة: \(model.centerConfidence)", systemImage: "checkmark.shield")
+-                .font(.caption.bold())
++            HStack(spacing: 8) {
++                Label("AR: \(model.trackingState)", systemImage: "location.viewfinder")
++                    .font(.caption2.bold())
++                Spacer()
++                Picker("الوحدة", selection: $useCentimeters) {
++                    Text("متر").tag(false)
++                    Text("سم").tag(true)
++                }
++                .pickerStyle(.segmented)
++                .frame(maxWidth: 170)
++            }
+         }
+-        .padding(.vertical, 16)
+-        .padding(.horizontal, 12)
+-        .frame(maxWidth: .infinity)
+-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
++        .padding(12)
++        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+     }
+ 
+-    private var actionButtons: some View {
+-        ViewThatFits(in: .horizontal) {
+-            HStack(spacing: 12) {
+-                freezeButton
+-                restartButton
++    private var resultsPanel: some View {
++        VStack(spacing: 10) {
++            HStack(spacing: 10) {
++                resultMetric(title: "الإجمالي", value: formatted(model.totalDirectMeters), image: "sum")
++                resultMetric(title: "آخر ضلع", value: formatted(model.latestSegment?.directMeters), image: "ruler")
+             }
+-
+-            VStack(spacing: 10) {
+-                freezeButton
+-                restartButton
++            HStack(spacing: 10) {
++                resultMetric(title: "أفقي", value: formatted(model.latestSegment?.horizontalMeters), image: "arrow.left.and.right")
++                resultMetric(title: "رأسي", value: formatted(model.latestSegment?.verticalMeters), image: "arrow.up.and.down")
+             }
+         }
++        .padding(12)
++        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+     }
+ 
+-    private var freezeButton: some View {
+-        Button {
+-            model.isFrozen.toggle()
+-        } label: {
+-            Label(
+-                model.isFrozen ? "متابعة القياس" : "تثبيت القراءة",
+-                systemImage: model.isFrozen ? "play.fill" : "pause.fill"
+-            )
+-            .frame(maxWidth: .infinity)
++    private var controlsPanel: some View {
++        VStack(spacing: 9) {
++            Button {
++                model.addPointAtCenter()
++            } label: {
++                Label("إضافة نقطة عند المؤشر", systemImage: "plus.viewfinder")
++                    .font(.headline)
++                    .frame(maxWidth: .infinity)
++                    .padding(.vertical, 4)
++            }
++            .buttonStyle(.borderedProminent)
++
++            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
++                Button {
++                    model.undo()
++                } label: {
++                    Label("تراجع", systemImage: "arrow.uturn.backward")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++                .disabled(model.pointCount == 0)
++
++                Button {
++                    model.toggleClosedPath()
++                } label: {
++                    Label(model.isClosedPath ? "فتح المسار" : "إغلاق المسار", systemImage: model.isClosedPath ? "lock.open" : "point.3.connected.trianglepath.dotted")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++                .disabled(model.pointCount < 3)
++
++                Button {
++                    showingSaveDialog = true
++                } label: {
++                    Label(model.isSaving ? "جارٍ الحفظ" : "حفظ", systemImage: model.isSaving ? "hourglass" : "square.and.arrow.down")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++                .disabled(model.pointCount < 2 || model.isSaving)
++
++                Menu {
++                    Button(role: .destructive) {
++                        model.clear()
++                    } label: {
++                        Label("مسح القياس", systemImage: "trash")
++                    }
++                    Button {
++                        model.startSession(resetTracking: true)
++                    } label: {
++                        Label("إعادة التتبع", systemImage: "arrow.clockwise")
++                    }
++                } label: {
++                    Label("المزيد", systemImage: "ellipsis.circle")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++            }
++            .font(.caption.bold())
+         }
+-        .buttonStyle(.borderedProminent)
+     }
+ 
+-    private var restartButton: some View {
+-        Button {
+-            model.startSession(resetTracking: true)
+-        } label: {
+-            Label("إعادة التتبع", systemImage: "arrow.clockwise")
+-                .frame(maxWidth: .infinity)
++    private func resultMetric(title: String, value: String, image: String) -> some View {
++        HStack(spacing: 8) {
++            Image(systemName: image)
++                .foregroundStyle(.cyan)
++            VStack(alignment: .leading, spacing: 2) {
++                Text(title)
++                    .font(.caption2)
++                    .foregroundStyle(.secondary)
++                Text(value)
++                    .font(.headline.monospacedDigit())
++                    .minimumScaleFactor(0.65)
++                    .lineLimit(1)
++            }
++            Spacer(minLength: 0)
+         }
+-        .buttonStyle(.bordered)
++        .padding(10)
++        .frame(maxWidth: .infinity)
++        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+     }
+ 
+-    private var formattedDistance: String {
+-        guard let distance = model.centerDistance else { return "—" }
++    private func formatted(_ meters: Double?) -> String {
++        guard let meters else { return "—" }
+         if useCentimeters {
+-            return String(format: "%.1f سم", distance * 100)
++            return String(format: "%.1f سم", meters * 100)
+         }
+-        return String(format: "%.3f م", distance)
++        return String(format: "%.3f م", meters)
+     }
+ 
+     private func adaptiveHorizontalPadding(for width: CGFloat) -> CGFloat {
+         width >= 900 ? 28 : (width >= 600 ? 20 : 12)
+     }
+ }
++
++private struct MeasurementOverlay: View {
++    let projection: MeasurementProjection
++    let useCentimeters: Bool
++
++    var body: some View {
++        ZStack {
++            Canvas { context, _ in
++                for segment in projection.segments {
++                    var path = Path()
++                    path.move(to: segment.start)
++                    path.addLine(to: segment.end)
++                    context.stroke(
++                        path,
++                        with: .color(.cyan),
++                        style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
++                    )
++                }
++
++                for point in projection.points {
++                    let rect = CGRect(
++                        x: point.screenPoint.x - 8,
++                        y: point.screenPoint.y - 8,
++                        width: 16,
++                        height: 16
++                    )
++                    context.fill(Path(ellipseIn: rect), with: .color(.yellow))
++                    context.stroke(Path(ellipseIn: rect), with: .color(.black), lineWidth: 2)
++                    context.draw(
++                        Text("\(point.index + 1)")
++                            .font(.caption2.bold())
++                            .foregroundStyle(.black),
++                        at: point.screenPoint
++                    )
++                }
++            }
++
++            ForEach(projection.segments) { segment in
++                Text(formatted(segment.directMeters))
++                    .font(.caption.monospacedDigit().bold())
++                    .padding(.horizontal, 8)
++                    .padding(.vertical, 4)
++                    .background(.ultraThinMaterial, in: Capsule())
++                    .overlay(Capsule().stroke(.cyan.opacity(0.8), lineWidth: 1))
++                    .position(segment.midpoint)
++                    .offset(y: -14)
++            }
++        }
++    }
++
++    private func formatted(_ meters: Double) -> String {
++        if useCentimeters {
++            return String(format: "%.1f سم", meters * 100)
++        }
++        return String(format: "%.3f م", meters)
++    }
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Measure/MeasurementARViewContainer.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Measure/MeasurementARViewContainer.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Measure/MeasurementARViewContainer.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Measure/MeasurementARViewContainer.swift	2026-08-01 18:46:06.228501637 +0000
+@@ -0,0 +1,40 @@
++import RealityKit
++import SwiftUI
++import UIKit
++
++struct MeasurementARViewContainer: UIViewRepresentable {
++    @ObservedObject var model: MeasurementViewModel
++
++    func makeCoordinator() -> Coordinator {
++        Coordinator(model: model)
++    }
++
++    func makeUIView(context: Context) -> ARView {
++        let arView = ARView(frame: .zero)
++        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didTap(_:)))
++        arView.addGestureRecognizer(tap)
++        context.coordinator.arView = arView
++        model.attach(to: arView)
++        return arView
++    }
++
++    func updateUIView(_ uiView: ARView, context: Context) {}
++
++    static func dismantleUIView(_ uiView: ARView, coordinator: Coordinator) {
++        uiView.session.pause()
++    }
++
++    final class Coordinator: NSObject {
++        let model: MeasurementViewModel
++        weak var arView: ARView?
++
++        init(model: MeasurementViewModel) {
++            self.model = model
++        }
++
++        @objc func didTap(_ recognizer: UITapGestureRecognizer) {
++            guard let arView else { return }
++            model.addPoint(at: recognizer.location(in: arView))
++        }
++    }
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Measure/MeasurementModels.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Measure/MeasurementModels.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Measure/MeasurementModels.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Measure/MeasurementModels.swift	2026-08-01 18:46:06.228501637 +0000
+@@ -0,0 +1,72 @@
++import CoreGraphics
++import Foundation
++import simd
++
++struct MeasurementVector3: Codable, Hashable {
++    let x: Float
++    let y: Float
++    let z: Float
++
++    init(_ value: SIMD3<Float>) {
++        x = value.x
++        y = value.y
++        z = value.z
++    }
++
++    var simdValue: SIMD3<Float> {
++        SIMD3<Float>(x, y, z)
++    }
++}
++
++struct MeasurementSegmentRecord: Codable, Hashable, Identifiable {
++    let index: Int
++    let startPointIndex: Int
++    let endPointIndex: Int
++    let directMeters: Double
++    let horizontalMeters: Double
++    let verticalMeters: Double
++
++    var id: Int { index }
++}
++
++struct MeasurementDocument: Codable {
++    let schemaVersion: Int
++    let measurementId: UUID
++    let name: String
++    let createdAt: Date
++    let updatedAt: Date
++    let appVersion: String
++    let isClosedPath: Bool
++    let points: [MeasurementVector3]
++    let segments: [MeasurementSegmentRecord]
++    let totalDirectMeters: Double
++    let totalHorizontalMeters: Double
++    let totalVerticalMeters: Double
++    let trackingStateAtSave: String
++}
++
++struct ProjectedMeasurementPoint: Equatable, Identifiable {
++    let index: Int
++    let screenPoint: CGPoint
++
++    var id: Int { index }
++}
++
++struct ProjectedMeasurementSegment: Equatable, Identifiable {
++    let index: Int
++    let start: CGPoint
++    let end: CGPoint
++    let directMeters: Double
++    let horizontalMeters: Double
++    let verticalMeters: Double
++
++    var id: Int { index }
++    var midpoint: CGPoint {
++        CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
++    }
++}
++
++struct MeasurementProjection: Equatable {
++    let points: [ProjectedMeasurementPoint]
++    let segments: [ProjectedMeasurementSegment]
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Measure/MeasurementViewModel.swift /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Measure/MeasurementViewModel.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/LiDARLab/Features/Measure/MeasurementViewModel.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/LiDARLab/Features/Measure/MeasurementViewModel.swift	2026-08-01 18:46:06.232501637 +0000
+@@ -0,0 +1,340 @@
++import ARKit
++import Combine
++import Foundation
++import RealityKit
++import UIKit
++import simd
++
++final class MeasurementViewModel: NSObject, ObservableObject, ARSessionDelegate {
++    @Published private(set) var projection = MeasurementProjection(points: [], segments: [])
++    @Published private(set) var pointCount = 0
++    @Published private(set) var totalDirectMeters: Double = 0
++    @Published private(set) var totalHorizontalMeters: Double = 0
++    @Published private(set) var totalVerticalMeters: Double = 0
++    @Published private(set) var latestSegment: MeasurementSegmentRecord?
++    @Published private(set) var trackingState = "تهيئة"
++    @Published private(set) var statusMessage = "حرّك الجهاز ببطء ثم أضف النقطة الأولى"
++    @Published private(set) var isClosedPath = false
++    @Published private(set) var isSaving = false
++    @Published private(set) var latestSavedItems: [Any] = []
++    @Published private(set) var errorMessage: String?
++
++    private weak var arView: ARView?
++    private var worldPoints: [SIMD3<Float>] = []
++
++    func attach(to arView: ARView) {
++        self.arView = arView
++        arView.automaticallyConfigureSession = false
++        arView.session.delegate = self
++        startSession(resetTracking: true)
++    }
++
++    func startSession(resetTracking: Bool) {
++        guard ARWorldTrackingConfiguration.isSupported else {
++            errorMessage = "تتبع الواقع المعزز غير مدعوم على هذا الجهاز."
++            return
++        }
++
++        let configuration = ARWorldTrackingConfiguration()
++        configuration.worldAlignment = .gravity
++        configuration.planeDetection = [.horizontal, .vertical]
++        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
++            configuration.frameSemantics.insert(.sceneDepth)
++        }
++
++        let options: ARSession.RunOptions = resetTracking ? [.resetTracking, .removeExistingAnchors] : []
++        arView?.session.run(configuration, options: options)
++        if resetTracking {
++            clear()
++            statusMessage = "أُعيد التتبع؛ حرّك الجهاز ببطء ثم أضف النقطة الأولى"
++        }
++    }
++
++    func stop() {
++        arView?.session.pause()
++    }
++
++    func addPointAtCenter() {
++        guard let arView else { return }
++        let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
++        addPoint(at: center)
++    }
++
++    func addPoint(at screenPoint: CGPoint) {
++        guard let arView else { return }
++
++        if isClosedPath {
++            clear()
++        }
++
++        let result = arView.raycast(
++            from: screenPoint,
++            allowing: .existingPlaneGeometry,
++            alignment: .any
++        ).first
++            ?? arView.raycast(
++                from: screenPoint,
++                allowing: .existingPlaneInfinite,
++                alignment: .any
++            ).first
++            ?? arView.raycast(
++                from: screenPoint,
++                allowing: .estimatedPlane,
++                alignment: .any
++            ).first
++
++        guard let result else {
++            statusMessage = "لم يُكتشف سطح عند المؤشر. حرّك الجهاز ببطء وحاول مرة أخرى."
++            UINotificationFeedbackGenerator().notificationOccurred(.warning)
++            return
++        }
++
++        let translation = result.worldTransform.columns.3
++        worldPoints.append(SIMD3<Float>(translation.x, translation.y, translation.z))
++        recalculate()
++        updateProjection()
++        UIImpactFeedbackGenerator(style: .light).impactOccurred()
++    }
++
++    func undo() {
++        guard !worldPoints.isEmpty else { return }
++        if isClosedPath {
++            isClosedPath = false
++        } else {
++            worldPoints.removeLast()
++        }
++        recalculate()
++        updateProjection()
++        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
++    }
++
++    func clear() {
++        worldPoints.removeAll()
++        isClosedPath = false
++        projection = MeasurementProjection(points: [], segments: [])
++        recalculate()
++    }
++
++    func toggleClosedPath() {
++        guard worldPoints.count >= 3 else {
++            statusMessage = "تحتاج إلى ثلاث نقاط على الأقل لإغلاق المسار."
++            return
++        }
++        isClosedPath.toggle()
++        recalculate()
++        updateProjection()
++        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
++    }
++
++    func clearError() {
++        errorMessage = nil
++    }
++
++    func clearSavedItems() {
++        latestSavedItems = []
++    }
++
++    func saveMeasurement(named proposedName: String) {
++        guard worldPoints.count >= 2 else {
++            errorMessage = "أضف نقطتين على الأقل قبل الحفظ."
++            return
++        }
++        guard !isSaving else { return }
++
++        isSaving = true
++        latestSavedItems = []
++
++        do {
++            let storage = LiDARLabStorage.shared
++            try storage.ensureDirectories()
++            let cleanName = storage.sanitizedName(proposedName, fallback: "Measurement")
++            let measurementId = UUID()
++            let folderName = "\(storage.timestampedName(prefix: cleanName))-\(measurementId.uuidString.prefix(8))"
++            let folderURL = storage.measurementsURL.appendingPathComponent(folderName, isDirectory: true)
++            try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
++
++            let now = Date()
++            let segmentRecords = makeSegments()
++            let document = MeasurementDocument(
++                schemaVersion: 1,
++                measurementId: measurementId,
++                name: cleanName,
++                createdAt: now,
++                updatedAt: now,
++                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
++                isClosedPath: isClosedPath,
++                points: worldPoints.map { MeasurementVector3($0) },
++                segments: segmentRecords,
++                totalDirectMeters: segmentRecords.reduce(0) { $0 + $1.directMeters },
++                totalHorizontalMeters: segmentRecords.reduce(0) { $0 + $1.horizontalMeters },
++                totalVerticalMeters: segmentRecords.reduce(0) { $0 + $1.verticalMeters },
++                trackingStateAtSave: trackingState
++            )
++
++            let jsonURL = folderURL.appendingPathComponent("measurement.json")
++            let csvURL = folderURL.appendingPathComponent("segments.csv")
++            let encoder = JSONEncoder()
++            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++            encoder.dateEncodingStrategy = .iso8601
++            try encoder.encode(document).write(to: jsonURL, options: .atomic)
++            try makeCSV(document.segments).write(to: csvURL, atomically: true, encoding: .utf8)
++
++            guard let arView else {
++                finishSaving(items: [jsonURL, csvURL], message: "تم حفظ القياس بصيغتي JSON وCSV.")
++                return
++            }
++
++            arView.snapshot(saveToHDR: false) { [weak self] image in
++                guard let self else { return }
++                var items: [Any] = [jsonURL, csvURL]
++                if let image,
++                   let data = image.jpegData(compressionQuality: 0.90) {
++                    let imageURL = folderURL.appendingPathComponent("preview.jpg")
++                    do {
++                        try data.write(to: imageURL, options: .atomic)
++                        items.append(imageURL)
++                    } catch {
++                        DispatchQueue.main.async {
++                            self.errorMessage = "تم حفظ القياس، لكن تعذر حفظ صورة المعاينة: \(error.localizedDescription)"
++                        }
++                    }
++                }
++                self.finishSaving(items: items, message: "تم حفظ القياس وصورة المشهد بنجاح.")
++            }
++        } catch {
++            isSaving = false
++            errorMessage = error.localizedDescription
++        }
++    }
++
++    func session(_ session: ARSession, didUpdate frame: ARFrame) {
++        DispatchQueue.main.async { [weak self] in
++            self?.updateProjection(frame: frame)
++        }
++    }
++
++    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
++        let text: String
++        switch camera.trackingState {
++        case .normal:
++            text = "طبيعي"
++        case .notAvailable:
++            text = "غير متاح"
++        case .limited(let reason):
++            switch reason {
++            case .initializing: text = "تهيئة"
++            case .excessiveMotion: text = "حركة سريعة"
++            case .insufficientFeatures: text = "تفاصيل قليلة"
++            case .relocalizing: text = "إعادة تحديد الموقع"
++            @unknown default: text = "محدود"
++            }
++        }
++
++        DispatchQueue.main.async { [weak self] in
++            self?.trackingState = text
++        }
++    }
++
++    func session(_ session: ARSession, didFailWithError error: Error) {
++        DispatchQueue.main.async { [weak self] in
++            self?.errorMessage = error.localizedDescription
++        }
++    }
++
++    private func recalculate() {
++        pointCount = worldPoints.count
++        let segments = makeSegments()
++        latestSegment = segments.last
++        totalDirectMeters = segments.reduce(0) { $0 + $1.directMeters }
++        totalHorizontalMeters = segments.reduce(0) { $0 + $1.horizontalMeters }
++        totalVerticalMeters = segments.reduce(0) { $0 + $1.verticalMeters }
++
++        switch worldPoints.count {
++        case 0:
++            statusMessage = "حرّك الجهاز ببطء ثم أضف النقطة الأولى"
++        case 1:
++            statusMessage = "أضف النقطة الثانية لبدء القياس"
++        default:
++            statusMessage = isClosedPath
++                ? "المسار مغلق. اضغط إضافة نقطة لبدء قياس جديد."
++                : "أضف نقاطًا أخرى أو احفظ القياس الحالي"
++        }
++    }
++
++    private func makeSegments() -> [MeasurementSegmentRecord] {
++        guard worldPoints.count >= 2 else { return [] }
++        var pairs: [(Int, Int)] = (0..<(worldPoints.count - 1)).map { ($0, $0 + 1) }
++        if isClosedPath, worldPoints.count >= 3 {
++            pairs.append((worldPoints.count - 1, 0))
++        }
++
++        return pairs.enumerated().map { offset, pair in
++            let start = worldPoints[pair.0]
++            let end = worldPoints[pair.1]
++            let delta = end - start
++            return MeasurementSegmentRecord(
++                index: offset + 1,
++                startPointIndex: pair.0,
++                endPointIndex: pair.1,
++                directMeters: Double(simd_length(delta)),
++                horizontalMeters: Double(simd_length(SIMD2<Float>(delta.x, delta.z))),
++                verticalMeters: Double(abs(delta.y))
++            )
++        }
++    }
++
++    private func updateProjection(frame: ARFrame? = nil) {
++        guard let arView,
++              let frame = frame ?? arView.session.currentFrame,
++              arView.bounds.width > 0,
++              arView.bounds.height > 0 else { return }
++
++        let orientation = arView.window?.windowScene?.interfaceOrientation ?? .portrait
++        let viewportSize = arView.bounds.size
++        let projectedPoints = worldPoints.enumerated().compactMap { index, point -> ProjectedMeasurementPoint? in
++            let projected = frame.camera.projectPoint(point, orientation: orientation, viewportSize: viewportSize)
++            guard projected.x.isFinite, projected.y.isFinite else { return nil }
++            return ProjectedMeasurementPoint(index: index, screenPoint: projected)
++        }
++
++        guard projectedPoints.count == worldPoints.count else { return }
++        let byIndex = Dictionary(uniqueKeysWithValues: projectedPoints.map { ($0.index, $0.screenPoint) })
++        let projectedSegments = makeSegments().compactMap { segment -> ProjectedMeasurementSegment? in
++            guard let start = byIndex[segment.startPointIndex],
++                  let end = byIndex[segment.endPointIndex] else { return nil }
++            return ProjectedMeasurementSegment(
++                index: segment.index,
++                start: start,
++                end: end,
++                directMeters: segment.directMeters,
++                horizontalMeters: segment.horizontalMeters,
++                verticalMeters: segment.verticalMeters
++            )
++        }
++        projection = MeasurementProjection(points: projectedPoints, segments: projectedSegments)
++    }
++
++    private func makeCSV(_ segments: [MeasurementSegmentRecord]) -> String {
++        var lines = ["segment,start_point,end_point,direct_m,horizontal_m,vertical_m"]
++        for segment in segments {
++            lines.append([
++                String(segment.index),
++                String(segment.startPointIndex + 1),
++                String(segment.endPointIndex + 1),
++                String(format: "%.6f", segment.directMeters),
++                String(format: "%.6f", segment.horizontalMeters),
++                String(format: "%.6f", segment.verticalMeters)
++            ].joined(separator: ","))
++        }
++        return lines.joined(separator: "\n") + "\n"
++    }
++
++    private func finishSaving(items: [Any], message: String) {
++        DispatchQueue.main.async { [weak self] in
++            self?.isSaving = false
++            self?.latestSavedItems = items
++            self?.statusMessage = message
++            UINotificationFeedbackGenerator().notificationOccurred(.success)
++        }
++    }
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/MEASUREMENT_MERGE_REPORT_0.17.0.md /mnt/data/merge_work/3ELiDAR-0.17.0/MEASUREMENT_MERGE_REPORT_0.17.0.md
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/MEASUREMENT_MERGE_REPORT_0.17.0.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/MEASUREMENT_MERGE_REPORT_0.17.0.md	2026-08-01 18:46:07.288501596 +0000
+@@ -0,0 +1,33 @@
++# تقرير دمج القياس المتعدد — 0.17.0
++
++## المصدران
++
++- قاعدة المشروع: `3ELiDAR 0.16.1` وتشمل جميع تعديلات RoomScan.
++- تحديث المستخدم: `3ELiDAR-v0.9.0-update-only` لوظيفة القياس المتعدد.
++
++## سياسة الدمج
++
++- لم يتم نسخ أي ملف RoomScan من تحديث القياس.
++- الملفات المشتركة دُمجت على مستوى التغيير بدل استبدالها عندما كان ذلك قد يعيد أوصاف RoomScan القديمة.
++- تم الاحتفاظ بنسخ الملفات السابقة في `_backup/Measurement_pre_merge_0.16.1`.
++
++## الملفات الجديدة
++
++- `LiDARLab/Features/Measure/MeasurementARViewContainer.swift`
++- `LiDARLab/Features/Measure/MeasurementModels.swift`
++- `LiDARLab/Features/Measure/MeasurementViewModel.swift`
++- `TEST_MEASUREMENTS.md`
++
++## الملفات المعدلة
++
++- `LiDARLab/Features/Measure/DistanceMeasureView.swift`
++- `LiDARLab/Core/Models/LiDARFeature.swift`
++- `LiDARLab/Core/Storage/LiDARLabStorage.swift`
++- `LiDARLab/Core/Storage/ThreeEStorageConstants.swift`
++- `LiDARLab/Features/Export/ExportCenterView.swift`
++- `LiDARLab/Features/Export/ExportCenterViewModel.swift`
++- `project.yml`
++
++## ملفات RoomScan
++
++لم يتم تعديل أي ملف داخل `LiDARLab/Features/RoomScan`.
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/README.md /mnt/data/merge_work/3ELiDAR-0.17.0/README.md
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/README.md	2026-08-01 18:25:34.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/README.md	2026-08-01 18:46:07.288501596 +0000
+@@ -11,6 +11,18 @@
+ - App Folder: `Apps/LiDARLab`
+ - Future App Group: `group.com.essam.3e`
+ 
++## النسخة 0.17.0 — دمج القياس المتعدد مع RoomScan
++
++تجمع هذه النسخة خط التطوير الكامل لمسح الغرف مع وظيفة القياس المتعدد التي أضيفت بصورة مستقلة. لم يتم استبدال أي ملف داخل `Features/RoomScan`.
++
++وظيفة القياس المتعدد تدعم:
++
++- إضافة نقاط متعددة بالضغط على المشهد أو من مركز الشاشة.
++- حساب طول كل قطعة مباشرة، ومركبتها الأفقية والرأسية.
++- التراجع، مسح النقاط، وإغلاق المسار عند وجود ثلاث نقاط أو أكثر.
++- حفظ النتيجة في مجلد `Measurements` بصيغ JSON وCSV مع صورة معاينة.
++- عرض القياسات المحفوظة وإدارتها داخل مركز التصدير.
++
+ ## النسخة 0.16.0 — مناسيب الأرضيات ومناطق الأسقف
+ 
+ - تستخدم أرضيات RoomPlan كبداية عندما تكون موجودة.
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/TEST_MEASUREMENTS.md /mnt/data/merge_work/3ELiDAR-0.17.0/TEST_MEASUREMENTS.md
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/TEST_MEASUREMENTS.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/TEST_MEASUREMENTS.md	2026-08-01 18:46:06.860501613 +0000
+@@ -0,0 +1,50 @@
++# اختبار القياس المتعدد — 3ELiDAR 0.9.0
++
++## اختبار البناء
++
++1. ارفع حزمة التحديث إلى جذر المستودع.
++2. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
++3. تأكد من نجاح SwiftCompile وربط التطبيق.
++
++## اختبار نقطتين
++
++1. افتح **القياس المتعدد**.
++2. حرّك الهاتف ببطء حتى تصبح حالة AR طبيعية.
++3. وجّه المؤشر إلى نقطة واضحة واضغط **إضافة نقطة عند المؤشر**.
++4. انتقل إلى نقطة ثانية واضغط الزر مرة أخرى.
++5. تأكد من ظهور خط مثبت وطول الضلع فوقه.
++6. قارن القياس بمتر شريطي لمسافة معروفة.
++
++## اختبار المسار
++
++1. أضف أربع نقاط على حدود شكل مستطيل.
++2. تأكد من ظهور طول كل ضلع والإجمالي.
++3. اضغط **إغلاق المسار** وتأكد من إضافة المسافة بين آخر نقطة وأول نقطة إلى الإجمالي.
++4. اضغط **فتح المسار** وتأكد من حذف ضلع الإغلاق فقط.
++5. جرّب **تراجع** وتأكد من إزالة آخر نقطة.
++
++## اختبار المركبات
++
++1. قس خطًا أفقيًا تقريبًا؛ يجب أن تكون القراءة الرأسية قريبة من الصفر.
++2. قس خطًا رأسيًا؛ يجب أن تكون القراءة الأفقية قريبة من الصفر.
++3. قس خطًا مائلًا وتأكد أن المسافة المباشرة أكبر من أو تساوي المركبتين كلًّا على حدة.
++
++## اختبار الحفظ
++
++1. أضف نقطتين أو أكثر واضغط **حفظ**.
++2. أدخل اسمًا للقياس.
++3. تأكد من إنشاء مجلد داخل:
++   `Apps/LiDARLab/Measurements`
++4. تأكد من وجود:
++   - `measurement.json`
++   - `segments.csv`
++   - `preview.jpg`
++5. تأكد من فتح ورؤية القياس داخل **مركز التصدير > القياسات**.
++6. جرّب المشاركة وإعادة التسمية والحذف.
++
++## اختبار مجلد 3E
++
++1. اربط مجلد 3E من Files.
++2. احفظ قياسًا جديدًا.
++3. تأكد من ظهوره داخل `3E/Apps/LiDARLab/Measurements`.
++4. أغلق التطبيق وافتحه ثم احفظ قياسًا آخر للتحقق من استعادة الصلاحية.
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/UPDATE_UPLOAD.md /mnt/data/merge_work/3ELiDAR-0.17.0/UPDATE_UPLOAD.md
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/UPDATE_UPLOAD.md	2026-08-01 16:02:57.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/UPDATE_UPLOAD.md	2026-08-01 18:46:07.288501596 +0000
+@@ -1,3 +1,31 @@
++# رفع نسخة 3ELiDAR 0.17.0 المدمجة
++
++هذه النسخة تحتوي على جميع مراحل RoomScan حتى 0.16.1، بالإضافة إلى وظيفة القياس المتعدد المرسلة في تحديث 0.9.0.
++
++## الطريقة الأسرع
++
++1. فك ضغط ملف المشروع الكامل.
++2. استبدل محتوى مستودع 3ELiDAR بمحتويات المجلد.
++3. ارفع التغييرات إلى GitHub.
++4. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
++5. نزّل ملف IPA وثبّته بالطريقة التجريبية المعتادة.
++
++## أهم ملفات الدمج الجديدة
++
++- `LiDARLab/Features/Measure/DistanceMeasureView.swift`
++- `LiDARLab/Features/Measure/MeasurementARViewContainer.swift`
++- `LiDARLab/Features/Measure/MeasurementModels.swift`
++- `LiDARLab/Features/Measure/MeasurementViewModel.swift`
++- `LiDARLab/Core/Storage/LiDARLabStorage.swift`
++- `LiDARLab/Core/Storage/ThreeEStorageConstants.swift`
++- `LiDARLab/Features/Export/ExportCenterView.swift`
++- `LiDARLab/Features/Export/ExportCenterViewModel.swift`
++- `LiDARLab/Core/Models/LiDARFeature.swift`
++
++لا تضف ملف Entitlements ولا تفعّل App Groups عند استخدام التوقيع المجاني.
++
++---
++
+ # رفع تحديث 3ELiDAR 0.13.0
+ 
+ ## الطريقة الأسرع
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/VALIDATION.md /mnt/data/merge_work/3ELiDAR-0.17.0/VALIDATION.md
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/VALIDATION.md	2026-08-01 18:25:34.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/VALIDATION.md	2026-08-01 18:46:07.288501596 +0000
+@@ -116,3 +116,15 @@
+ - التحقق من حفظ واستعادة `Review/room-levels.json`.
+ - التحقق من تمرير بيانات المناسيب إلى مخطط 2D وعارض SceneKit.
+ - التحقق من الإصدار `0.16.0` ورقم البناء `20`.
++
++
++## Integrated Measurement Merge — 0.17.0
++
++- مقارنة ملفات تحديث القياس مع نسخة RoomScan 0.16.1 ملفًا بملف.
++- عدم استبدال أو تعديل أي ملف داخل `LiDARLab/Features/RoomScan`.
++- دمج التغييرات المشتركة يدويًا في `LiDARFeature.swift` للحفاظ على أوصاف RoomScan الحديثة.
++- إضافة مجلد `Measurements` إلى التخزين ومركز التصدير.
++- تحليل Syntax لجميع ملفات Swift بعد الدمج.
++- التحقق من صحة `project.yml` و`Info.plist`.
++- التحقق من الإصدار `0.17.0` ورقم البناء `22`.
++- يلزم تشغيل GitHub Actions للتأكد من Type-check والربط النهائي مع Apple SDKs.
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Models/LiDARFeature.swift /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Models/LiDARFeature.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Models/LiDARFeature.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Models/LiDARFeature.swift	2026-08-01 18:46:06.220501637 +0000
+@@ -0,0 +1,162 @@
++import Foundation
++
++enum FeaturePhase: String {
++    case ready
++    case comingSoon
++}
++
++enum FeatureRequirement {
++    case none
++    case worldTracking
++    case sceneDepth
++    case sceneMesh
++    case sceneMeshClassification
++    case roomPlan
++}
++
++enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
++    case depthCamera
++    case distanceMeasure
++    case angleMeasure
++    case levelTool
++    case pointCloud
++    case sceneMesh
++    case surfaceClassification
++    case planeDetection
++    case arPlayground
++    case depthPhoto
++    case roomScan
++    case sensorTests
++    case recordings
++    case exportCenter
++    case deviceInfo
++
++    var id: String { rawValue }
++
++    var title: String {
++        switch self {
++        case .depthCamera: "كاميرا العمق"
++        case .distanceMeasure: "قياس المسافة"
++        case .angleMeasure: "قياس الزوايا"
++        case .levelTool: "ميزان الميل والزاوية"
++        case .pointCloud: "السحابة النقطية"
++        case .sceneMesh: "شبكة المكان"
++        case .surfaceClassification: "تصنيف الأسطح"
++        case .planeDetection: "اكتشاف المستويات"
++        case .arPlayground: "مختبر الواقع المعزز"
++        case .depthPhoto: "صورة مع العمق"
++        case .roomScan: "مسح الغرف"
++        case .sensorTests: "اختبارات الحساس"
++        case .recordings: "تسجيل الجلسات"
++        case .exportCenter: "مركز التصدير"
++        case .deviceInfo: "معلومات الجهاز"
++        }
++    }
++
++    var subtitle: String {
++        switch self {
++        case .depthCamera: "خريطة حرارية وقراءات عمق مباشرة"
++        case .distanceMeasure: "قراءة المسافة من مركز الشاشة"
++        case .angleMeasure: "قياس زاوية بين ثلاثة مواضع حقيقية"
++        case .levelTool: "تثبيت العنصر على الحائط وقياس ميله بالنسبة للجاذبية"
++        case .pointCloud: "تحويل العمق إلى نقاط ثلاثية الأبعاد"
++        case .sceneMesh: "عرض شبكة البيئة المحيطة"
++        case .surfaceClassification: "تمييز الجدران والأرضيات والأسقف"
++        case .planeDetection: "اكتشاف الأسطح الأفقية والرأسية"
++        case .arPlayground: "وضع وتحريك مجسمات داخل المكان"
++        case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
++        case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
++        case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
++        case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
++        case .exportCenter: "إدارة الصور والغرف والجلسات المحفوظة"
++        case .deviceInfo: "فحص دعم LiDAR وخصائص ARKit"
++        }
++    }
++
++    var systemImage: String {
++        switch self {
++        case .depthCamera: "camera.metering.matrix"
++        case .distanceMeasure: "ruler"
++        case .angleMeasure: "angle"
++        case .levelTool: "level"
++        case .pointCloud: "circle.grid.3x3.fill"
++        case .sceneMesh: "cube.transparent"
++        case .surfaceClassification: "square.3.layers.3d"
++        case .planeDetection: "viewfinder.rectangular"
++        case .arPlayground: "arkit"
++        case .depthPhoto: "camera.filters"
++        case .roomScan: "house.lodge"
++        case .sensorTests: "waveform.path.ecg"
++        case .recordings: "record.circle"
++        case .exportCenter: "square.and.arrow.up"
++        case .deviceInfo: "iphone.gen3"
++        }
++    }
++
++    var phase: FeaturePhase {
++        switch self {
++        case .depthCamera, .distanceMeasure, .angleMeasure, .levelTool, .pointCloud, .sceneMesh,
++             .surfaceClassification, .planeDetection, .arPlayground, .depthPhoto, .roomScan,
++             .sensorTests, .recordings, .exportCenter, .deviceInfo:
++            .ready
++        default:
++            .comingSoon
++        }
++    }
++
++    var requirement: FeatureRequirement {
++        switch self {
++        case .deviceInfo, .exportCenter:
++            .none
++        case .angleMeasure, .levelTool, .planeDetection, .arPlayground:
++            .worldTracking
++        case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto,
++             .sensorTests, .recordings:
++            .sceneDepth
++        case .roomScan:
++            .roomPlan
++        case .sceneMesh:
++            .sceneMesh
++        case .surfaceClassification:
++            .sceneMeshClassification
++        }
++    }
++
++    func isSupported(by capabilities: DeviceCapabilities) -> Bool {
++        switch requirement {
++        case .none:
++            true
++        case .worldTracking:
++            capabilities.worldTrackingSupported
++        case .sceneDepth:
++            capabilities.sceneDepthSupported
++        case .sceneMesh:
++            capabilities.meshSupported
++        case .sceneMeshClassification:
++            capabilities.meshClassificationSupported
++        case .roomPlan:
++            capabilities.roomPlanSupported
++        }
++    }
++
++    var plannedCapabilities: [String] {
++        switch self {
++        case .pointCloud:
++            ["عرض حي أو تراكمي", "تلوين حسب المسافة أو الثقة", "كثافة وحجم نقاط قابلان للتغيير"]
++        case .surfaceClassification:
++            ["تمييز الجدار والأرضية والسقف", "تصفية نوع واحد أو العرض الشبكي", "عدادات ونسبة التصنيف"]
++        case .planeDetection:
++            ["مستويات أفقية ورأسية", "حدود وأبعاد كل مستوى", "تثبيت علامات على السطح"]
++        case .depthPhoto:
++            ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
++        case .roomScan:
++            ["جلسة مستقلة لكل غرفة", "ARSession مشتركة بين الغرف", "حفظ الغرف المجمدة ونموذج دمج للمقارنة"]
++        case .recordings:
++            ["تسجيل الصورة والعمق وحركة الكاميرا", "تشغيل مرئي للإطارات", "مشاركة ملفات الجلسة"]
++        case .exportCenter:
++            ["البحث والتصفية", "مشاركة وإعادة تسمية وحذف", "فهرس JSON وCSV"]
++        default:
++            []
++        }
++    }
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Storage/LiDARLabStorage.swift /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Storage/LiDARLabStorage.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Storage/LiDARLabStorage.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Storage/LiDARLabStorage.swift	2026-08-01 18:46:06.224501637 +0000
+@@ -0,0 +1,389 @@
++import Combine
++import Foundation
++
++enum ThreeEStorageSource: String {
++    case appGroup
++    case filesFolder
++    case privateSandbox
++
++    var title: String {
++        switch self {
++        case .appGroup: "App Group"
++        case .filesFolder: "مجلد 3E في Files"
++        case .privateSandbox: "مساحة التطبيق المؤقتة"
++        }
++    }
++
++    var isShared: Bool {
++        self != .privateSandbox
++    }
++}
++
++enum ThreeEStorageError: LocalizedError {
++    case selectedFolderIsNotThreeE
++    case securityScopeUnavailable
++    case bookmarkUnavailable
++    case sharedFolderNotConnected
++    case invalidRelativePath
++    case pathOutsideRoot
++
++    var errorDescription: String? {
++        switch self {
++        case .selectedFolderIsNotThreeE:
++            return "اختر مجلد 3E نفسه، وليس مجلدًا داخله أو مجلدًا آخر."
++        case .securityScopeUnavailable:
++            return "تعذر الحصول على صلاحية دائمة لمجلد 3E. اختر المجلد من Files مرة أخرى."
++        case .bookmarkUnavailable:
++            return "تعذر حفظ صلاحية مجلد 3E."
++        case .sharedFolderNotConnected:
++            return "اربط مجلد 3E من Files أولًا لفتح هذا المسار المشترك."
++        case .invalidRelativePath:
++            return "المسار المطلوب غير صالح."
++        case .pathOutsideRoot:
++            return "تم رفض المسار لأنه يخرج خارج مجلد 3E."
++        }
++    }
++}
++
++final class LiDARLabStorage: ObservableObject {
++    static let shared = LiDARLabStorage()
++
++    @Published private(set) var source: ThreeEStorageSource = .privateSandbox
++    @Published private(set) var needsFolderReselection = false
++    @Published private(set) var statusMessage = "يعمل التطبيق حاليًا داخل مساحته الخاصة."
++    @Published private(set) var lastErrorMessage: String?
++
++    private struct StorageContext {
++        let source: ThreeEStorageSource
++        let threeERootURL: URL?
++        let appRootURL: URL
++    }
++
++    private let fileManager = FileManager.default
++    private let defaults = UserDefaults.standard
++    private let contextLock = NSLock()
++    private var context: StorageContext
++    private var securityScopedURL: URL?
++    private var securityScopeActive = false
++
++    private init() {
++        let privateRoot = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
++            .appendingPathComponent("LiDARLab", isDirectory: true)
++        context = StorageContext(
++            source: .privateSandbox,
++            threeERootURL: nil,
++            appRootURL: privateRoot
++        )
++        bootstrapStorage()
++    }
++
++    deinit {
++        releaseSecurityScope()
++    }
++
++    var rootURL: URL { currentContext().appRootURL }
++    var threeERootURL: URL? { currentContext().threeERootURL }
++    var capturesURL: URL { rootURL.appendingPathComponent("Captures", isDirectory: true) }
++    var roomsURL: URL { rootURL.appendingPathComponent("Rooms", isDirectory: true) }
++    var recordingsURL: URL { rootURL.appendingPathComponent("Recordings", isDirectory: true) }
++    var exportsURL: URL { rootURL.appendingPathComponent("Exports", isDirectory: true) }
++    var projectsURL: URL { rootURL.appendingPathComponent("Projects", isDirectory: true) }
++
++    var isSharedFolderConnected: Bool {
++        source.isShared && threeERootURL != nil
++    }
++
++    func connectToSelectedThreeEFolder(_ selectedURL: URL) throws {
++        guard selectedURL.lastPathComponent.caseInsensitiveCompare("3E") == .orderedSame else {
++            throw ThreeEStorageError.selectedFolderIsNotThreeE
++        }
++
++        let didStart = selectedURL.startAccessingSecurityScopedResource()
++        guard didStart else {
++            throw ThreeEStorageError.securityScopeUnavailable
++        }
++
++        do {
++            let bookmark = try selectedURL.bookmarkData(
++                options: [.minimalBookmark],
++                includingResourceValuesForKeys: [.isDirectoryKey, .nameKey],
++                relativeTo: nil
++            )
++            guard !bookmark.isEmpty else {
++                throw ThreeEStorageError.bookmarkUnavailable
++            }
++
++            let newContext = StorageContext(
++                source: .filesFolder,
++                threeERootURL: selectedURL,
++                appRootURL: selectedURL.appendingPathComponent(ThreeEStorageConstants.appRelativePath, isDirectory: true)
++            )
++            try prepare(context: newContext)
++
++            let oldURL = securityScopedURL
++            let oldWasActive = securityScopeActive
++            setContext(newContext)
++            securityScopedURL = selectedURL
++            securityScopeActive = true
++            defaults.set(bookmark, forKey: ThreeEStorageConstants.bookmarkDefaultsKey)
++
++            if oldWasActive, let oldURL {
++                oldURL.stopAccessingSecurityScopedResource()
++            }
++
++            needsFolderReselection = false
++            lastErrorMessage = nil
++            statusMessage = "تم ربط مجلد 3E وتسجيل تطبيق 3ELiDAR بنجاح."
++        } catch {
++            selectedURL.stopAccessingSecurityScopedResource()
++            throw error
++        }
++    }
++
++    func ensureDirectories() throws {
++        try prepare(context: currentContext())
++    }
++
++    func clearLastError() {
++        lastErrorMessage = nil
++    }
++
++    func clearFolderReselectionRequest() {
++        needsFolderReselection = false
++    }
++
++    func urlForValidatedRelativePath(_ relativePath: String) throws -> URL {
++        guard let sharedRoot = threeERootURL else {
++            throw ThreeEStorageError.sharedFolderNotConnected
++        }
++        return try Self.safeURL(relativePath: relativePath, under: sharedRoot)
++    }
++
++    func relativePath(for url: URL) -> String? {
++        if let sharedRoot = threeERootURL,
++           let relative = Self.relativePath(of: url, under: sharedRoot) {
++            return relative
++        }
++        return Self.relativePath(of: url, under: rootURL)
++    }
++
++    func timestampedName(prefix: String, date: Date = Date()) -> String {
++        let formatter = DateFormatter()
++        formatter.locale = Locale(identifier: "en_US_POSIX")
++        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
++        return "\(prefix)-\(formatter.string(from: date))"
++    }
++
++    func sanitizedName(_ value: String, fallback: String = "Item") -> String {
++        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
++        let parts = value.components(separatedBy: invalid)
++        let result = parts.joined(separator: "-")
++            .trimmingCharacters(in: .whitespacesAndNewlines)
++        return result.isEmpty ? fallback : String(result.prefix(80))
++    }
++
++    func recursiveFiles(at url: URL) -> [URL] {
++        guard let enumerator = fileManager.enumerator(
++            at: url,
++            includingPropertiesForKeys: [.isRegularFileKey, .isHiddenKey],
++            options: [.skipsHiddenFiles]
++        ) else { return [] }
++
++        var files: [URL] = []
++        for case let fileURL as URL in enumerator {
++            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isHiddenKey])
++            if values?.isRegularFile == true, values?.isHidden != true {
++                files.append(fileURL)
++            }
++        }
++        return files.sorted { $0.path < $1.path }
++    }
++
++    func directorySize(at url: URL) -> Int64 {
++        recursiveFiles(at: url).reduce(0) { partial, fileURL in
++            let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
++            return partial + Int64(size)
++        }
++    }
++
++    func modificationDate(at url: URL) -> Date {
++        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
++        return values?.contentModificationDate ?? values?.creationDate ?? .distantPast
++    }
++
++    private func bootstrapStorage() {
++        if let groupRoot = fileManager.containerURL(
++            forSecurityApplicationGroupIdentifier: ThreeEStorageConstants.futureAppGroupIdentifier
++        ) {
++            let groupContext = StorageContext(
++                source: .appGroup,
++                threeERootURL: groupRoot,
++                appRootURL: groupRoot.appendingPathComponent(ThreeEStorageConstants.appRelativePath, isDirectory: true)
++            )
++            if (try? prepare(context: groupContext)) != nil {
++                setContext(groupContext)
++                source = .appGroup
++                statusMessage = "يستخدم التطبيق App Group المشترك."
++                return
++            }
++        }
++
++        if restoreFilesBookmark() {
++            return
++        }
++
++        let restoreFailed = needsFolderReselection
++        do {
++            try prepare(context: context)
++        } catch {
++            lastErrorMessage = error.localizedDescription
++        }
++        source = .privateSandbox
++        if !restoreFailed {
++            statusMessage = "يعمل التطبيق داخل مساحته الخاصة مؤقتًا حتى تختار مجلد 3E."
++        }
++    }
++
++    private func restoreFilesBookmark() -> Bool {
++        guard let bookmark = defaults.data(forKey: ThreeEStorageConstants.bookmarkDefaultsKey) else {
++            return false
++        }
++
++        do {
++            var isStale = false
++            let resolvedURL = try URL(
++                resolvingBookmarkData: bookmark,
++                options: [.withoutUI],
++                relativeTo: nil,
++                bookmarkDataIsStale: &isStale
++            )
++
++            guard resolvedURL.lastPathComponent.caseInsensitiveCompare("3E") == .orderedSame else {
++                throw ThreeEStorageError.selectedFolderIsNotThreeE
++            }
++            guard resolvedURL.startAccessingSecurityScopedResource() else {
++                throw ThreeEStorageError.securityScopeUnavailable
++            }
++
++            do {
++                let restoredContext = StorageContext(
++                    source: .filesFolder,
++                    threeERootURL: resolvedURL,
++                    appRootURL: resolvedURL.appendingPathComponent(ThreeEStorageConstants.appRelativePath, isDirectory: true)
++                )
++                try prepare(context: restoredContext)
++                setContext(restoredContext)
++                securityScopedURL = resolvedURL
++                securityScopeActive = true
++                source = .filesFolder
++                statusMessage = "تمت استعادة صلاحية مجلد 3E تلقائيًا."
++                needsFolderReselection = false
++
++                if isStale {
++                    let refreshedBookmark = try resolvedURL.bookmarkData(
++                        options: [.minimalBookmark],
++                        includingResourceValuesForKeys: [.isDirectoryKey, .nameKey],
++                        relativeTo: nil
++                    )
++                    defaults.set(refreshedBookmark, forKey: ThreeEStorageConstants.bookmarkDefaultsKey)
++                }
++                return true
++            } catch {
++                resolvedURL.stopAccessingSecurityScopedResource()
++                throw error
++            }
++        } catch {
++            defaults.removeObject(forKey: ThreeEStorageConstants.bookmarkDefaultsKey)
++            needsFolderReselection = true
++            lastErrorMessage = error.localizedDescription
++            statusMessage = "تعذر استعادة مجلد 3E. اختر المجلد نفسه من Files مرة أخرى."
++            return false
++        }
++    }
++
++    private func prepare(context: StorageContext) throws {
++        if let sharedRoot = context.threeERootURL {
++            try fileManager.createDirectory(at: sharedRoot, withIntermediateDirectories: true)
++            try fileManager.createDirectory(
++                at: sharedRoot.appendingPathComponent("Apps", isDirectory: true),
++                withIntermediateDirectories: true
++            )
++            for relativePath in ThreeEStorageConstants.sharedSubdirectories {
++                let url = relativePath.split(separator: "/").reduce(sharedRoot) {
++                    $0.appendingPathComponent(String($1), isDirectory: true)
++                }
++                try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
++            }
++        }
++
++        try fileManager.createDirectory(at: context.appRootURL, withIntermediateDirectories: true)
++        for directoryName in ThreeEStorageConstants.appSubdirectories {
++            try fileManager.createDirectory(
++                at: context.appRootURL.appendingPathComponent(directoryName, isDirectory: true),
++                withIntermediateDirectories: true
++            )
++        }
++
++        if let sharedRoot = context.threeERootURL {
++            try ThreeERegistry.registerLiDARApp(in: sharedRoot)
++        }
++    }
++
++    private func currentContext() -> StorageContext {
++        contextLock.lock()
++        defer { contextLock.unlock() }
++        return context
++    }
++
++    private func setContext(_ newContext: StorageContext) {
++        contextLock.lock()
++        context = newContext
++        contextLock.unlock()
++        source = newContext.source
++    }
++
++    private func releaseSecurityScope() {
++        if securityScopeActive, let securityScopedURL {
++            securityScopedURL.stopAccessingSecurityScopedResource()
++        }
++        securityScopeActive = false
++        securityScopedURL = nil
++    }
++
++    private static func safeURL(relativePath: String, under rootURL: URL) throws -> URL {
++        let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard !trimmed.isEmpty,
++              !trimmed.hasPrefix("/"),
++              !trimmed.hasPrefix("\\"),
++              !trimmed.contains("\\"),
++              !trimmed.contains(":") else {
++            throw ThreeEStorageError.invalidRelativePath
++        }
++
++        let components = trimmed.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
++        guard !components.isEmpty,
++              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
++            throw ThreeEStorageError.invalidRelativePath
++        }
++
++        let candidate = components.reduce(rootURL.standardizedFileURL) {
++            $0.appendingPathComponent($1)
++        }.standardizedFileURL
++
++        let canonicalRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
++        let canonicalCandidate = candidate.resolvingSymlinksInPath().standardizedFileURL
++        let rootPath = canonicalRoot.path.hasSuffix("/") ? canonicalRoot.path : canonicalRoot.path + "/"
++        guard canonicalCandidate == canonicalRoot || canonicalCandidate.path.hasPrefix(rootPath) else {
++            throw ThreeEStorageError.pathOutsideRoot
++        }
++        return candidate
++    }
++
++    private static func relativePath(of url: URL, under rootURL: URL) -> String? {
++        let root = rootURL.standardizedFileURL.path
++        let candidate = url.standardizedFileURL.path
++        guard candidate == root || candidate.hasPrefix(root + "/") else { return nil }
++        if candidate == root { return "" }
++        return String(candidate.dropFirst(root.count + 1))
++    }
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Storage/ThreeEStorageConstants.swift /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Storage/ThreeEStorageConstants.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Storage/ThreeEStorageConstants.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Core/Storage/ThreeEStorageConstants.swift	2026-08-01 18:46:06.224501637 +0000
+@@ -0,0 +1,38 @@
++import Foundation
++
++enum ThreeEStorageConstants {
++    static let displayName = "3ELiDAR"
++    static let bundleIdentifier = "com.essam.3E.LiDARLab"
++    static let appKey = "lidar"
++    static let urlScheme = "lidar"
++    static let appRelativePath = "Apps/LiDARLab"
++    static let futureAppGroupIdentifier = "group.com.essam.3e"
++
++    static let bookmarkDefaultsKey = "com.essam.3E.LiDARLab.threeEFolderBookmark"
++    static let registryRelativePath = "System/registry.json"
++    static let registrySchemaVersion = 1
++
++    static let appSubdirectories = [
++        "Captures",
++        "Rooms",
++        "Recordings",
++        "Exports",
++        "Projects"
++    ]
++
++    static let sharedSubdirectories = [
++        "Shared/Inbox",
++        "Shared/Outbox",
++        "Shared/Projects",
++        "Shared/Media",
++        "System"
++    ]
++
++    static let registryEntry: [String: String] = [
++        "appKey": appKey,
++        "displayName": displayName,
++        "bundleIdentifier": bundleIdentifier,
++        "urlScheme": urlScheme,
++        "folder": appRelativePath
++    ]
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Export/ExportCenterView.swift /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Export/ExportCenterView.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Export/ExportCenterView.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Export/ExportCenterView.swift	2026-08-01 18:46:06.224501637 +0000
+@@ -0,0 +1,259 @@
++import SwiftUI
++
++struct ExportCenterView: View {
++    private enum Filter: String, CaseIterable, Identifiable {
++        case all
++        case capture
++        case room
++        case recording
++        case report
++
++        var id: String { rawValue }
++        var title: String {
++            switch self {
++            case .all: "الكل"
++            case .capture: "الصور"
++            case .room: "الغرف"
++            case .recording: "الجلسات"
++            case .report: "التقارير"
++            }
++        }
++        var kind: ExportCenterItem.Kind? {
++            switch self {
++            case .all: nil
++            case .capture: .capture
++            case .room: .room
++            case .recording: .recording
++            case .report: .report
++            }
++        }
++    }
++
++    @StateObject private var model = ExportCenterViewModel()
++    @State private var filter: Filter = .all
++    @State private var searchText = ""
++    @State private var shareItems: [Any] = []
++    @State private var showingShareSheet = false
++    @State private var itemToDelete: ExportCenterItem?
++    @State private var itemToRename: ExportCenterItem?
++    @State private var renameText = ""
++
++    private var filteredItems: [ExportCenterItem] {
++        model.items.filter { item in
++            let matchesKind = filter.kind.map { item.kind == $0 } ?? true
++            let matchesSearch = searchText.isEmpty
++                || item.name.localizedCaseInsensitiveContains(searchText)
++                || item.kind.title.localizedCaseInsensitiveContains(searchText)
++            return matchesKind && matchesSearch
++        }
++    }
++
++    var body: some View {
++        List {
++            Section {
++                summaryPanel
++                    .listRowInsets(EdgeInsets())
++                    .listRowBackground(Color.clear)
++            }
++
++            Section {
++                Picker("النوع", selection: $filter) {
++                    ForEach(Filter.allCases) { item in Text(item.title).tag(item) }
++                }
++                .pickerStyle(.segmented)
++            }
++
++            Section("الملفات المحفوظة") {
++                if filteredItems.isEmpty {
++                    ContentUnavailableView(
++                        searchText.isEmpty ? "لا توجد نتائج محفوظة" : "لا توجد نتائج مطابقة",
++                        systemImage: "externaldrive.badge.questionmark",
++                        description: Text(searchText.isEmpty ? "استخدم أدوات التطبيق لحفظ صور أو غرف أو جلسات." : "جرّب تغيير البحث أو الفلتر.")
++                    )
++                    .frame(maxWidth: .infinity)
++                    .listRowBackground(Color.clear)
++                } else {
++                    ForEach(filteredItems) { item in
++                        exportRow(item)
++                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
++                                Button(role: .destructive) {
++                                    itemToDelete = item
++                                } label: {
++                                    Label("حذف", systemImage: "trash")
++                                }
++                                Button {
++                                    share(item)
++                                } label: {
++                                    Label("مشاركة", systemImage: "square.and.arrow.up")
++                                }
++                                .tint(.blue)
++                            }
++                            .contextMenu {
++                                Button { share(item) } label: {
++                                    Label("مشاركة الملفات", systemImage: "square.and.arrow.up")
++                                }
++                                Button {
++                                    itemToRename = item
++                                    renameText = item.name
++                                } label: {
++                                    Label("إعادة التسمية", systemImage: "pencil")
++                                }
++                                Divider()
++                                Button(role: .destructive) { itemToDelete = item } label: {
++                                    Label("حذف", systemImage: "trash")
++                                }
++                            }
++                    }
++                }
++            }
++        }
++        .listStyle(.insetGrouped)
++        .navigationTitle("مركز التصدير")
++        .navigationBarTitleDisplayMode(.inline)
++        .searchable(text: $searchText, prompt: "ابحث في الملفات")
++        .toolbar {
++            ToolbarItemGroup(placement: .topBarTrailing) {
++                Button { model.refresh() } label: {
++                    Image(systemName: "arrow.clockwise")
++                }
++                Button { model.createCatalog() } label: {
++                    Image(systemName: model.isWorking ? "hourglass" : "doc.badge.plus")
++                }
++                .disabled(model.isWorking)
++            }
++        }
++        .refreshable { model.refresh() }
++        .sheet(isPresented: $showingShareSheet) {
++            ActivityView(items: shareItems)
++        }
++        .confirmationDialog("حذف العنصر نهائيًا؟", isPresented: Binding(
++            get: { itemToDelete != nil },
++            set: { if !$0 { itemToDelete = nil } }
++        ), titleVisibility: .visible) {
++            Button("حذف", role: .destructive) {
++                if let itemToDelete { model.delete(itemToDelete) }
++                itemToDelete = nil
++            }
++            Button("إلغاء", role: .cancel) { itemToDelete = nil }
++        }
++        .alert("إعادة التسمية", isPresented: Binding(
++            get: { itemToRename != nil },
++            set: { if !$0 { itemToRename = nil } }
++        )) {
++            TextField("الاسم الجديد", text: $renameText)
++            Button("حفظ") {
++                if let itemToRename { model.rename(itemToRename, to: renameText) }
++                itemToRename = nil
++            }
++            Button("إلغاء", role: .cancel) { itemToRename = nil }
++        } message: {
++            Text("سيتم تغيير اسم المجلد أو الملف داخل مساحة التطبيق.")
++        }
++        .alert("تعذر إكمال العملية", isPresented: Binding(
++            get: { model.errorMessage != nil },
++            set: { if !$0 { model.clearError() } }
++        )) {
++            Button("حسنًا", role: .cancel) {}
++        } message: {
++            Text(model.errorMessage ?? "خطأ غير معروف")
++        }
++        .onChange(of: model.latestCatalogItems.count) { _, count in
++            guard count > 0 else { return }
++            shareItems = model.latestCatalogItems
++            showingShareSheet = true
++        }
++    }
++
++    private var summaryPanel: some View {
++        VStack(alignment: .leading, spacing: 12) {
++            HStack(spacing: 10) {
++                Image(systemName: "externaldrive.fill")
++                    .font(.title2)
++                    .foregroundStyle(.cyan)
++                VStack(alignment: .leading, spacing: 3) {
++                    Text("مكتبة 3ELiDAR")
++                        .font(.headline)
++                    Text(model.statusMessage)
++                        .font(.caption)
++                        .foregroundStyle(.secondary)
++                }
++                Spacer()
++            }
++
++            LazyVGrid(columns: [GridItem(.adaptive(minimum: 105))], spacing: 9) {
++                MetricChip(title: "العناصر", value: "\(model.items.count)", systemImage: "folder")
++                MetricChip(title: "الملفات", value: "\(model.totalFiles)", systemImage: "doc.on.doc")
++                MetricChip(title: "الحجم", value: ByteCountFormatter.string(fromByteCount: model.totalSize, countStyle: .file), systemImage: "internaldrive")
++            }
++
++            Button {
++                model.createCatalog()
++            } label: {
++                Label(model.isWorking ? "جارٍ إنشاء الفهرس…" : "إنشاء فهرس JSON وCSV", systemImage: model.isWorking ? "hourglass" : "tablecells")
++                    .frame(maxWidth: .infinity)
++            }
++            .buttonStyle(.borderedProminent)
++            .disabled(model.isWorking)
++
++            Text("عند ربط مجلد 3E تُحفظ النتائج داخل Apps/LiDARLab، وإلا تستخدم مساحة التطبيق الخاصة مؤقتًا.")
++                .font(.caption2)
++                .foregroundStyle(.secondary)
++        }
++        .padding(14)
++        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
++        .padding(.horizontal, 16)
++        .padding(.vertical, 8)
++    }
++
++    private func exportRow(_ item: ExportCenterItem) -> some View {
++        Button {
++            share(item)
++        } label: {
++            HStack(spacing: 12) {
++                ZStack {
++                    RoundedRectangle(cornerRadius: 10)
++                        .fill(color(item.kind).opacity(0.14))
++                        .frame(width: 44, height: 44)
++                    Image(systemName: item.kind.systemImage)
++                        .foregroundStyle(color(item.kind))
++                }
++                VStack(alignment: .leading, spacing: 4) {
++                    Text(item.name)
++                        .font(.headline)
++                        .foregroundStyle(.primary)
++                        .lineLimit(1)
++                    Text(item.kind.title)
++                        .font(.caption)
++                        .foregroundStyle(.secondary)
++                    Text("\(item.fileCount) ملف • \(ByteCountFormatter.string(fromByteCount: item.sizeBytes, countStyle: .file))")
++                        .font(.caption2.monospacedDigit())
++                        .foregroundStyle(.secondary)
++                }
++                Spacer()
++                VStack(alignment: .trailing, spacing: 5) {
++                    Image(systemName: "square.and.arrow.up")
++                        .foregroundStyle(.secondary)
++                    Text(item.modifiedAt, format: .dateTime.month().day().hour().minute())
++                        .font(.caption2)
++                        .foregroundStyle(.secondary)
++                }
++            }
++            .padding(.vertical, 4)
++        }
++        .buttonStyle(.plain)
++    }
++
++    private func share(_ item: ExportCenterItem) {
++        shareItems = item.shareItems
++        showingShareSheet = true
++    }
++
++    private func color(_ kind: ExportCenterItem.Kind) -> Color {
++        switch kind {
++        case .capture: .cyan
++        case .room: .green
++        case .recording: .red
++        case .report: .orange
++        }
++    }
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Export/ExportCenterViewModel.swift /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Export/ExportCenterViewModel.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Export/ExportCenterViewModel.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Export/ExportCenterViewModel.swift	2026-08-01 18:46:06.224501637 +0000
+@@ -0,0 +1,231 @@
++import Combine
++import Foundation
++
++struct ExportCenterItem: Identifiable, Hashable {
++    enum Kind: String, CaseIterable, Identifiable {
++        case capture
++        case room
++        case recording
++        case report
++
++        var id: String { rawValue }
++        var title: String {
++            switch self {
++            case .capture: "صور العمق"
++            case .room: "مسح الغرف"
++            case .recording: "الجلسات"
++            case .report: "التقارير"
++            }
++        }
++        var systemImage: String {
++            switch self {
++            case .capture: "camera.filters"
++            case .room: "house.lodge.fill"
++            case .recording: "record.circle.fill"
++            case .report: "doc.text.fill"
++            }
++        }
++    }
++
++    let url: URL
++    let kind: Kind
++    let modifiedAt: Date
++    let sizeBytes: Int64
++    let fileCount: Int
++
++    var id: String { url.path }
++    var name: String { url.deletingPathExtension().lastPathComponent }
++    var shareItems: [Any] {
++        let files = LiDARLabStorage.shared.recursiveFiles(at: url)
++        if !files.isEmpty { return files }
++        return [url]
++    }
++}
++
++private struct ExportCatalog: Codable {
++    let generatedAt: Date
++    let appVersion: String
++    let itemCount: Int
++    let totalSizeBytes: Int64
++    let items: [ExportCatalogEntry]
++}
++
++private struct ExportCatalogEntry: Codable {
++    let category: String
++    let name: String
++    let modifiedAt: Date
++    let sizeBytes: Int64
++    let fileCount: Int
++    let relativePath: String
++}
++
++final class ExportCenterViewModel: ObservableObject {
++    @Published private(set) var items: [ExportCenterItem] = []
++    @Published private(set) var latestCatalogItems: [Any] = []
++    @Published private(set) var statusMessage = "يعرض هذا المركز كل النتائج المحفوظة داخل التطبيق."
++    @Published private(set) var isWorking = false
++    @Published private(set) var errorMessage: String?
++
++    init() {
++        refresh()
++    }
++
++    var totalSize: Int64 { items.reduce(0) { $0 + $1.sizeBytes } }
++    var totalFiles: Int { items.reduce(0) { $0 + $1.fileCount } }
++
++    func refresh() {
++        let storage = LiDARLabStorage.shared
++        do {
++            try storage.ensureDirectories()
++            var scanned: [ExportCenterItem] = []
++            scanned += scan(root: storage.capturesURL, kind: .capture)
++            scanned += scan(root: storage.roomsURL, kind: .room)
++            scanned += scan(root: storage.recordingsURL, kind: .recording)
++            scanned += scan(root: storage.exportsURL, kind: .report)
++            items = scanned.sorted { $0.modifiedAt > $1.modifiedAt }
++            statusMessage = items.isEmpty
++                ? "لا توجد ملفات محفوظة بعد."
++                : "تم العثور على \(items.count) عنصر و\(totalFiles) ملف."
++        } catch {
++            errorMessage = error.localizedDescription
++        }
++    }
++
++    func delete(_ item: ExportCenterItem) {
++        do {
++            try FileManager.default.removeItem(at: item.url)
++            refresh()
++        } catch {
++            errorMessage = error.localizedDescription
++        }
++    }
++
++    func rename(_ item: ExportCenterItem, to proposedName: String) {
++        let storage = LiDARLabStorage.shared
++        let cleanName = storage.sanitizedName(proposedName, fallback: item.name)
++        let isDirectory = (try? item.url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
++        let extensionPart = isDirectory ? "" : item.url.pathExtension
++        let finalName = extensionPart.isEmpty ? cleanName : "\(cleanName).\(extensionPart)"
++        let destination = item.url.deletingLastPathComponent()
++            .appendingPathComponent(finalName, isDirectory: isDirectory)
++        guard destination != item.url else { return }
++        guard !FileManager.default.fileExists(atPath: destination.path) else {
++            errorMessage = "يوجد عنصر آخر بالاسم نفسه."
++            return
++        }
++        do {
++            try FileManager.default.moveItem(at: item.url, to: destination)
++            refresh()
++        } catch {
++            errorMessage = error.localizedDescription
++        }
++    }
++
++    func createCatalog() {
++        guard !isWorking else { return }
++        isWorking = true
++        latestCatalogItems = []
++        let sourceItems = items.filter { $0.kind != .report }
++
++        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
++            guard let self else { return }
++            do {
++                let storage = LiDARLabStorage.shared
++                try storage.ensureDirectories()
++                let folder = storage.exportsURL.appendingPathComponent(
++                    storage.timestampedName(prefix: "Catalog"),
++                    isDirectory: true
++                )
++                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
++
++                let entries = sourceItems.map { item in
++                    ExportCatalogEntry(
++                        category: item.kind.title,
++                        name: item.name,
++                        modifiedAt: item.modifiedAt,
++                        sizeBytes: item.sizeBytes,
++                        fileCount: item.fileCount,
++                        relativePath: storage.relativePath(for: item.url) ?? item.name
++                    )
++                }
++                let catalog = ExportCatalog(
++                    generatedAt: Date(),
++                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
++                    itemCount: entries.count,
++                    totalSizeBytes: entries.reduce(0) { $0 + $1.sizeBytes },
++                    items: entries
++                )
++
++                let jsonURL = folder.appendingPathComponent("catalog.json")
++                let csvURL = folder.appendingPathComponent("catalog.csv")
++                let encoder = JSONEncoder()
++                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++                encoder.dateEncodingStrategy = .iso8601
++                try encoder.encode(catalog).write(to: jsonURL, options: .atomic)
++                try self.makeCSV(entries).write(to: csvURL, atomically: true, encoding: .utf8)
++
++                DispatchQueue.main.async {
++                    self.isWorking = false
++                    self.latestCatalogItems = [jsonURL, csvURL]
++                    self.statusMessage = "تم إنشاء فهرس JSON وCSV ويمكن مشاركته الآن."
++                    self.refresh()
++                }
++            } catch {
++                DispatchQueue.main.async {
++                    self.isWorking = false
++                    self.errorMessage = error.localizedDescription
++                }
++            }
++        }
++    }
++
++    func clearError() { errorMessage = nil }
++
++    private func scan(root: URL, kind: ExportCenterItem.Kind) -> [ExportCenterItem] {
++        let urls = (try? FileManager.default.contentsOfDirectory(
++            at: root,
++            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .contentModificationDateKey, .creationDateKey, .fileSizeKey],
++            options: [.skipsHiddenFiles]
++        )) ?? []
++
++        return urls.compactMap { url in
++            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
++            guard values?.isDirectory == true || values?.isRegularFile == true else { return nil }
++            let files = values?.isDirectory == true ? LiDARLabStorage.shared.recursiveFiles(at: url) : [url]
++            let size: Int64 = values?.isDirectory == true
++                ? LiDARLabStorage.shared.directorySize(at: url)
++                : Int64(values?.fileSize ?? 0)
++            return ExportCenterItem(
++                url: url,
++                kind: kind,
++                modifiedAt: LiDARLabStorage.shared.modificationDate(at: url),
++                sizeBytes: size,
++                fileCount: files.count
++            )
++        }
++    }
++
++    private func makeCSV(_ entries: [ExportCatalogEntry]) -> String {
++        var lines = ["category,name,modified_at,size_bytes,file_count,relative_path"]
++        let formatter = ISO8601DateFormatter()
++        for entry in entries {
++            let values = [
++                entry.category,
++                entry.name,
++                formatter.string(from: entry.modifiedAt),
++                String(entry.sizeBytes),
++                String(entry.fileCount),
++                entry.relativePath
++            ].map(csvEscape)
++            lines.append(values.joined(separator: ","))
++        }
++        return lines.joined(separator: "\n") + "\n"
++    }
++
++    private func csvEscape(_ value: String) -> String {
++        if value.contains(",") || value.contains("\"") || value.contains("\n") {
++            return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
++        }
++        return value
++    }
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Measure/DistanceMeasureView.swift /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Measure/DistanceMeasureView.swift
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Measure/DistanceMeasureView.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/LiDARLab/Features/Measure/DistanceMeasureView.swift	2026-08-01 18:46:06.224501637 +0000
+@@ -0,0 +1,121 @@
++import SwiftUI
++
++struct DistanceMeasureView: View {
++    @StateObject private var model = DepthSessionViewModel(generateHeatmap: false)
++    @State private var useCentimeters = false
++
++    var body: some View {
++        GeometryReader { geometry in
++            ZStack {
++                DepthARViewContainer(model: model)
++                    .ignoresSafeArea(edges: .bottom)
++
++                // The aiming point is always the geometric center of the camera area.
++                CrosshairView()
++                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
++                    .allowsHitTesting(false)
++
++                VStack(spacing: 12) {
++                    unitPicker
++                    Spacer(minLength: 0)
++                    readingPanel
++                    actionButtons
++                }
++                .padding(.horizontal, adaptiveHorizontalPadding(for: geometry.size.width))
++                .padding(.top, 10)
++                .padding(.bottom, 14)
++            }
++        }
++        .background(.black)
++        .navigationTitle("قياس المسافة")
++        .navigationBarTitleDisplayMode(.inline)
++        .onDisappear {
++            model.stopSession()
++        }
++    }
++
++    private var unitPicker: some View {
++        Picker("الوحدة", selection: $useCentimeters) {
++            Text("متر").tag(false)
++            Text("سم").tag(true)
++        }
++        .pickerStyle(.segmented)
++        .padding(10)
++        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
++    }
++
++    private var readingPanel: some View {
++        VStack(spacing: 7) {
++            Text("المسافة عند مؤشر منتصف الشاشة")
++                .font(.subheadline)
++                .foregroundStyle(.secondary)
++
++            ViewThatFits(in: .horizontal) {
++                Text(formattedDistance)
++                    .font(.system(size: 50, weight: .bold, design: .rounded))
++                Text(formattedDistance)
++                    .font(.system(size: 38, weight: .bold, design: .rounded))
++            }
++            .monospacedDigit()
++            .minimumScaleFactor(0.5)
++            .lineLimit(1)
++            .contentTransition(.numericText())
++
++            Label("مستوى الثقة: \(model.centerConfidence)", systemImage: "checkmark.shield")
++                .font(.caption.bold())
++        }
++        .padding(.vertical, 16)
++        .padding(.horizontal, 12)
++        .frame(maxWidth: .infinity)
++        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
++    }
++
++    private var actionButtons: some View {
++        ViewThatFits(in: .horizontal) {
++            HStack(spacing: 12) {
++                freezeButton
++                restartButton
++            }
++
++            VStack(spacing: 10) {
++                freezeButton
++                restartButton
++            }
++        }
++    }
++
++    private var freezeButton: some View {
++        Button {
++            model.isFrozen.toggle()
++        } label: {
++            Label(
++                model.isFrozen ? "متابعة القياس" : "تثبيت القراءة",
++                systemImage: model.isFrozen ? "play.fill" : "pause.fill"
++            )
++            .frame(maxWidth: .infinity)
++        }
++        .buttonStyle(.borderedProminent)
++    }
++
++    private var restartButton: some View {
++        Button {
++            model.startSession(resetTracking: true)
++        } label: {
++            Label("إعادة التتبع", systemImage: "arrow.clockwise")
++                .frame(maxWidth: .infinity)
++        }
++        .buttonStyle(.bordered)
++    }
++
++    private var formattedDistance: String {
++        guard let distance = model.centerDistance else { return "—" }
++        if useCentimeters {
++            return String(format: "%.1f سم", distance * 100)
++        }
++        return String(format: "%.3f م", distance)
++    }
++
++    private func adaptiveHorizontalPadding(for width: CGFloat) -> CGFloat {
++        width >= 900 ? 28 : (width >= 600 ? 20 : 12)
++    }
++}
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/project.yml /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/project.yml
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/_backup/Measurement_pre_merge_0.16.1/project.yml	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/_backup/Measurement_pre_merge_0.16.1/project.yml	2026-08-01 18:46:06.228501637 +0000
+@@ -0,0 +1,81 @@
++name: LiDARLab
++
++options:
++  bundleIdPrefix: com.essam.3E
++  deploymentTarget:
++    iOS: "17.0"
++  createIntermediateGroups: true
++
++settings:
++  base:
++    SWIFT_VERSION: "5.0"
++    MARKETING_VERSION: "0.16.1"
++    CURRENT_PROJECT_VERSION: "21"
++    PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
++    PRODUCT_NAME: LiDARLab
++    DEVELOPMENT_LANGUAGE: ar
++    TARGETED_DEVICE_FAMILY: "1,2"
++    SUPPORTS_MACCATALYST: NO
++    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
++    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
++
++targets:
++  LiDARLab:
++    type: application
++    platform: iOS
++    sources:
++      - path: LiDARLab
++    info:
++      path: LiDARLab/Info.plist
++      properties:
++        CFBundleDevelopmentRegion: ar
++        CFBundleDisplayName: 3ELiDAR
++        CFBundleExecutable: $(EXECUTABLE_NAME)
++        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
++        CFBundleInfoDictionaryVersion: "6.0"
++        CFBundleName: $(PRODUCT_NAME)
++        CFBundlePackageType: APPL
++        CFBundleShortVersionString: $(MARKETING_VERSION)
++        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
++        LSRequiresIPhoneOS: true
++        LSSupportsOpeningDocumentsInPlace: true
++        NSCameraUsageDescription: "يحتاج 3ELiDAR إلى الكاميرا وحساس LiDAR لعرض العمق وقياس المسافات وفهم البيئة المحيطة."
++        UIApplicationSupportsIndirectInputEvents: true
++        UIFileSharingEnabled: true
++        UILaunchScreen: {}
++        CFBundleURLTypes:
++          - CFBundleTypeRole: Editor
++            CFBundleURLName: com.essam.3E.LiDARLab
++            CFBundleURLSchemes:
++              - lidar
++        UISupportedInterfaceOrientations:
++          - UIInterfaceOrientationPortrait
++        "UISupportedInterfaceOrientations~ipad":
++          - UIInterfaceOrientationPortrait
++          - UIInterfaceOrientationPortraitUpsideDown
++          - UIInterfaceOrientationLandscapeLeft
++          - UIInterfaceOrientationLandscapeRight
++    dependencies:
++      - sdk: ARKit.framework
++      - sdk: RealityKit.framework
++      - sdk: RoomPlan.framework
++      - sdk: SceneKit.framework
++      - sdk: AVFoundation.framework
++      - sdk: CoreImage.framework
++      - sdk: ImageIO.framework
++      - sdk: Vision.framework
++      - sdk: QuickLook.framework
++    settings:
++      base:
++        CODE_SIGN_STYLE: Automatic
++        DEVELOPMENT_TEAM: ""
++
++schemes:
++  LiDARLab:
++    build:
++      targets:
++        LiDARLab: all
++    run:
++      config: Debug
++    archive:
++      config: Release
+diff -ruN /mnt/data/merge_work/current/3ELiDAR-0.16.1/project.yml /mnt/data/merge_work/3ELiDAR-0.17.0/project.yml
+--- /mnt/data/merge_work/current/3ELiDAR-0.16.1/project.yml	2026-08-01 18:33:35.000000000 +0000
++++ /mnt/data/merge_work/3ELiDAR-0.17.0/project.yml	2026-08-01 18:46:06.704501619 +0000
+@@ -9,8 +9,8 @@
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.16.1"
+-    CURRENT_PROJECT_VERSION: "21"
++    MARKETING_VERSION: "0.17.0"
++    CURRENT_PROJECT_VERSION: "22"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar

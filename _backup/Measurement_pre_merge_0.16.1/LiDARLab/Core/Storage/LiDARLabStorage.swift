@@ -86,7 +86,6 @@ final class LiDARLabStorage: ObservableObject {
     var capturesURL: URL { rootURL.appendingPathComponent("Captures", isDirectory: true) }
     var roomsURL: URL { rootURL.appendingPathComponent("Rooms", isDirectory: true) }
     var recordingsURL: URL { rootURL.appendingPathComponent("Recordings", isDirectory: true) }
-    var measurementsURL: URL { rootURL.appendingPathComponent("Measurements", isDirectory: true) }
     var exportsURL: URL { rootURL.appendingPathComponent("Exports", isDirectory: true) }
     var projectsURL: URL { rootURL.appendingPathComponent("Projects", isDirectory: true) }
 

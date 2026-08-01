@@ -1,3 +1,31 @@
+# رفع نسخة 3ELiDAR 0.17.0 المدمجة
+
+هذه النسخة تحتوي على جميع مراحل RoomScan حتى 0.16.1، بالإضافة إلى وظيفة القياس المتعدد المرسلة في تحديث 0.9.0.
+
+## الطريقة الأسرع
+
+1. فك ضغط ملف المشروع الكامل.
+2. استبدل محتوى مستودع 3ELiDAR بمحتويات المجلد.
+3. ارفع التغييرات إلى GitHub.
+4. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
+5. نزّل ملف IPA وثبّته بالطريقة التجريبية المعتادة.
+
+## أهم ملفات الدمج الجديدة
+
+- `LiDARLab/Features/Measure/DistanceMeasureView.swift`
+- `LiDARLab/Features/Measure/MeasurementARViewContainer.swift`
+- `LiDARLab/Features/Measure/MeasurementModels.swift`
+- `LiDARLab/Features/Measure/MeasurementViewModel.swift`
+- `LiDARLab/Core/Storage/LiDARLabStorage.swift`
+- `LiDARLab/Core/Storage/ThreeEStorageConstants.swift`
+- `LiDARLab/Features/Export/ExportCenterView.swift`
+- `LiDARLab/Features/Export/ExportCenterViewModel.swift`
+- `LiDARLab/Core/Models/LiDARFeature.swift`
+
+لا تضف ملف Entitlements ولا تفعّل App Groups عند استخدام التوقيع المجاني.
+
+---
+
 # رفع تحديث 3ELiDAR 0.13.0
 
 ## الطريقة الأسرع

@@ -6,7 +6,6 @@ struct ExportCenterView: View {
         case capture
         case room
         case recording
-        case measurement
         case report
 
         var id: String { rawValue }
@@ -16,7 +15,6 @@ struct ExportCenterView: View {
             case .capture: "الصور"
             case .room: "الغرف"
             case .recording: "الجلسات"
-            case .measurement: "القياسات"
             case .report: "التقارير"
             }
         }
@@ -26,7 +24,6 @@ struct ExportCenterView: View {
             case .capture: .capture
             case .room: .room
             case .recording: .recording
-            case .measurement: .measurement
             case .report: .report
             }
         }
@@ -71,7 +68,7 @@ struct ExportCenterView: View {
                     ContentUnavailableView(
                         searchText.isEmpty ? "لا توجد نتائج محفوظة" : "لا توجد نتائج مطابقة",
                         systemImage: "externaldrive.badge.questionmark",
-                        description: Text(searchText.isEmpty ? "استخدم أدوات التطبيق لحفظ صور أو غرف أو قياسات أو جلسات." : "جرّب تغيير البحث أو الفلتر.")
+                        description: Text(searchText.isEmpty ? "استخدم أدوات التطبيق لحفظ صور أو غرف أو جلسات." : "جرّب تغيير البحث أو الفلتر.")
                     )
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
@@ -256,7 +253,6 @@ struct ExportCenterView: View {
         case .capture: .cyan
         case .room: .green
         case .recording: .red
-        case .measurement: .blue
         case .report: .orange
         }
     }

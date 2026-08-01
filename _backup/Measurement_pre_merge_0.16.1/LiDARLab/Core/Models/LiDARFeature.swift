@@ -36,7 +36,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .depthCamera: "كاميرا العمق"
-        case .distanceMeasure: "القياس المتعدد"
+        case .distanceMeasure: "قياس المسافة"
         case .angleMeasure: "قياس الزوايا"
         case .levelTool: "ميزان الميل والزاوية"
         case .pointCloud: "السحابة النقطية"
@@ -56,7 +56,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
     var subtitle: String {
         switch self {
         case .depthCamera: "خريطة حرارية وقراءات عمق مباشرة"
-        case .distanceMeasure: "مسارات متعددة وأطوال أفقية ورأسية مع الحفظ"
+        case .distanceMeasure: "قراءة المسافة من مركز الشاشة"
         case .angleMeasure: "قياس زاوية بين ثلاثة مواضع حقيقية"
         case .levelTool: "تثبيت العنصر على الحائط وقياس ميله بالنسبة للجاذبية"
         case .pointCloud: "تحويل العمق إلى نقاط ثلاثية الأبعاد"
@@ -68,7 +68,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
         case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
-        case .exportCenter: "إدارة الصور والغرف والقياسات والجلسات المحفوظة"
+        case .exportCenter: "إدارة الصور والغرف والجلسات المحفوظة"
         case .deviceInfo: "فحص دعم LiDAR وخصائص ARKit"
         }
     }
