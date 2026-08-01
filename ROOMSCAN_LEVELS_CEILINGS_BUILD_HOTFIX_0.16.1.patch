@@ -1,0 +1,45 @@
+--- a/project.yml
++++ b/project.yml
+@@ -9,8 +9,8 @@
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.16.0"
+-    CURRENT_PROJECT_VERSION: "20"
++    MARKETING_VERSION: "0.16.1"
++    CURRENT_PROJECT_VERSION: "21"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,10 @@
++## 0.16.1
++
++- إصلاح فشل بناء Xcode 16.4 في مخطط المراجعة ثنائي الأبعاد.
++- تحويل عنوان الغرفة داخل `SwiftUI Canvas` إلى `GraphicsContext.ResolvedText` قبل الرسم بدل تمرير `some View` إلى `context.draw`.
++- الحفاظ على لون الغرفة المحددة عبر `ResolvedText.shading`.
++- تحديث رقم البناء إلى `21`.
++
+ ## 0.16.0
+ 
+ - إضافة محرر مستقل لمناسيب الأرضيات وارتفاع السقف الإنشائي وسقف التشطيب لكل غرفة.
+--- a/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift
+@@ -849,13 +849,12 @@
+         for label in snapshot.labels {
+             let point = screenPoint(for: label.position, size: size)
+             let selected = label.roomIndex == selectedRoomIndex
+-            context.draw(
++            var resolvedLabel = context.resolve(
+                 Text("غرفة \(label.roomIndex)\n\(label.levelText)")
+                     .font(.caption.bold())
+-                    .foregroundStyle(selected ? Color.cyan : Color.primary)
+-                    .multilineTextAlignment(.center),
+-                at: point
+             )
++            resolvedLabel.shading = .color(selected ? Color.cyan : Color.primary)
++            context.draw(resolvedLabel, at: point, anchor: .center)
+         }
+     }
+ 

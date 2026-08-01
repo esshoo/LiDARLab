@@ -849,13 +849,12 @@ private struct RoomPlan2DCanvas: View {
         for label in snapshot.labels {
             let point = screenPoint(for: label.position, size: size)
             let selected = label.roomIndex == selectedRoomIndex
-            context.draw(
+            var resolvedLabel = context.resolve(
                 Text("غرفة \(label.roomIndex)\n\(label.levelText)")
                     .font(.caption.bold())
-                    .foregroundStyle(selected ? Color.cyan : Color.primary)
-                    .multilineTextAlignment(.center),
-                at: point
             )
+            resolvedLabel.shading = .color(selected ? Color.cyan : Color.primary)
+            context.draw(resolvedLabel, at: point, anchor: .center)
         }
     }
 
