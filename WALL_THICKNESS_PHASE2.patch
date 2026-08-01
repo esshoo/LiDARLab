@@ -1,0 +1,1414 @@
+--- phase1_work/3ELiDAR/project.yml	2026-08-01 11:09:56.000000000 +0000
++++ phase2_work/project.yml	2026-08-01 12:39:38.209238096 +0000
+@@ -9,8 +9,8 @@
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.9.0"
+-    CURRENT_PROJECT_VERSION: "12"
++    MARKETING_VERSION: "0.10.0"
++    CURRENT_PROJECT_VERSION: "13"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar
+--- phase1_work/3ELiDAR/CHANGELOG.md	2026-08-01 11:09:56.000000000 +0000
++++ phase2_work/CHANGELOG.md	2026-08-01 12:39:38.209238096 +0000
+@@ -1,5 +1,20 @@
+ # Changelog
+ 
++## 0.10.0
++
++- إضافة شاشة تحديد سماكة الحوائط الافتراضية قبل بدء المبنى.
++- إضافة تأكيد سماكة الحوائط الجديدة قبل بدء كل غرفة مستقلة.
++- إبقاء هندسة `CapturedRoom` الأصلية دون تعديل، وحفظ السماكات كبيانات تطبيق منفصلة.
++- إنشاء سجل واحد للحائط الفيزيائي وإسناد وجهيه من الغرف المتجاورة إلى نفس السجل عند نجاح المطابقة الهندسية.
++- مطابقة الحوائط المشتركة باستخدام اتجاه الحائط، التداخل الأفقي والرأسي، والمسافة بين الوجهين داخل نظام إحداثيات `ARSession` المشترك.
++- توريث سماكة الحائط المشترك تلقائيًا من الغرفة السابقة بدل إنشاء قيمة متعارضة للغرفة الجديدة.
++- إضافة شاشة مراجعة سماكات حوائط آخر غرفة وتعديل كل حائط بعد المسح.
++- تعديل الحائط المشترك من أي غرفة يحدّث نفس السجل في جميع الغرف المرتبطة.
++- حفظ `wall-metadata.json` للمبنى و`wall-properties.json` لكل غرفة مع مصدر السماكة ودرجة المطابقة والفاصل المقاس بين الوجهين.
++- تضمين بيانات خصائص الحوائط مع تصدير الغرفة أو المبنى.
++- إضافة نسخة احتياطية لملفات مرحلة Multi-Room الأولى داخل `_backup/RoomScan_phase1`.
++- تحديث الإصدار إلى `0.10.0` ورقم البناء إلى `13`.
++
+ ## 0.9.0
+ 
+ - تحويل وظيفة مسح الغرفة إلى تجربة تجريبية لمسح مبنى متعدد الغرف.
+--- phase1_work/3ELiDAR/README.md	2026-07-31 20:13:54.000000000 +0000
++++ phase2_work/README.md	2026-08-01 12:39:38.213238096 +0000
+@@ -11,6 +11,30 @@
+ - App Folder: `Apps/LiDARLab`
+ - Future App Group: `group.com.essam.3e`
+ 
++## النسخة 0.10.0 — سماكات الحوائط المشتركة
++
++أصبح مسح المبنى يطلب سماكة افتراضية قبل البداية، ثم يؤكد سماكة الحوائط الجديدة قبل كل غرفة. يحتفظ التطبيق بنتيجة RoomPlan الأصلية كما هي، ويضيف ملف خصائص مستقل يربط وجهي الحائط المتجاورين بسجل حائط واحد عند نجاح المطابقة الهندسية.
++
++بعد تثبيت أي غرفة يمكن فتح **مراجعة سماكات حوائط الغرفة الأخيرة** لتعديل كل حائط. إذا كان الحائط مشتركًا، يتغير السجل نفسه في الغرفتين ولا تُنشأ سماكتان متعارضتان.
++
++ملفات الجلسة الجديدة:
++
++```text
++Rooms/MultiRoom-<timestamp>/
++├── manifest.json
++├── wall-metadata.json
++├── FrozenRooms/
++│   ├── Room-01/
++│   │   ├── room.json
++│   │   └── wall-properties.json
++│   └── Room-02/
++│       ├── room.json
++│       └── wall-properties.json
++└── structure.json
++```
++
++`room.json` يظل ناتج RoomPlan غير المعدّل، بينما يحتوي ملف خصائص الحوائط على السماكات ومصدرها وعلاقات المشاركة ودرجة المطابقة.
++
+ ## النسخة 0.8.2 — توافق سجل تطبيقات 3E
+ 
+ أضيف دعم قراءة `System/registry.json` بصيغتي القائمة القديمة والكائن المفهرس الجديد، ثم حفظه بالصيغة الموحدة دون حذف سجلات التطبيقات الأخرى. لم تتغير صيغ ملفات LiDAR أو أسماء مجلدات النتائج الحالية. ترتيب مصدر التخزين هو:
+--- phase1_work/3ELiDAR/TEST_3E.md	2026-07-31 18:48:12.000000000 +0000
++++ phase2_work/TEST_3E.md	2026-08-01 12:39:38.501238096 +0000
+@@ -92,3 +92,33 @@
+ ## 6. App Group
+ 
+ لا تختبر App Group في هذه النسخة؛ المعرف `group.com.essam.3e` موجود في الكود للمستقبل فقط، ولا يوجد ملف Entitlements أو اعتماد عليه في التشغيل الحالي.
++
++## 7. اختبار سماكات الحوائط المشتركة — 0.10.0
++
++1. افتح **مسح متعدد الغرف** واضغط **بدء مسح المبنى**.
++2. اختر 25 سم، ثم ابدأ الغرفة الأولى.
++3. ثبت الغرفة الأولى، وافتح **مراجعة سماكات حوائط الغرفة الأخيرة**.
++4. تأكد أن الحوائط غير المشتركة تعرض مصدر **افتراضي المبنى** وقيمة 25 سم.
++5. ابدأ الغرفة الثانية من الجهة المقابلة لحائط واضح، واختر 15 سم كافتراضي الغرفة.
++6. ثبت الغرفة الثانية.
++7. يجب أن تعرض الحوائط الجديدة 15 سم، بينما الحائط المطابق للغرفة الأولى يعرض **مشترك** ويرث 25 سم.
++8. غيّر سماكة الحائط المشترك إلى 35 سم.
++9. راجع ملفي:
++
++```text
++FrozenRooms/Room-01/wall-properties.json
++FrozenRooms/Room-02/wall-properties.json
++```
++
++يجب أن يشيرا إلى نفس `buildingWallID` وقيمة 0.35 متر.
++
++10. افتح `wall-metadata.json` وتأكد من وجود:
++
++- `buildingDefaultThicknessMeters`
++- `wallRecords`
++- `assignments`
++- `matchConfidence`
++- `faceSeparationMeters`
++
++11. اختبر حائطين متوازيين لكن غير متداخلين؛ يجب ألا يعتبرهما التطبيق حائطًا مشتركًا.
++12. اختبر غرفتين بارتفاعي سقف مختلفين؛ يجب أن تستمر المطابقة إذا كان هناك تداخل رأسي كافٍ، دون تغيير ارتفاع أي غرفة.
+--- /dev/null	2026-08-01 12:29:48.093238096 +0000
++++ phase2_work/ROOMSCAN_WALL_THICKNESS_PHASE2.md	2026-08-01 12:39:38.497238096 +0000
+@@ -0,0 +1,66 @@
++# RoomScan — Wall Thickness Phase 2
++
++## الهدف
++
++إضافة سماكة حائط خاصة بتطبيق 3ELiDAR فوق نتائج RoomPlan، مع اعتبار الحائط بين غرفتين عنصرًا فيزيائيًا واحدًا بدل تخزين سماكتين مستقلتين.
++
++## ما لا يتغير
++
++- `CapturedRoom` الناتج من RoomPlan لا يتم تعديله.
++- ملفات `room.json` وUSDZ تظل بصيغ Apple الأصلية.
++- تستمر كل غرفة كجلسة RoomPlan مستقلة مع `ARSession` مشتركة.
++- لا تتغير هوية التطبيق أو مسارات التخزين أو URL Scheme.
++
++## سير الاستخدام
++
++1. اضغط **بدء مسح المبنى**.
++2. حدد السماكة الأساسية، مثل 15 أو 25 أو 35 سم.
++3. امسح الغرفة الأولى وثبتها.
++4. قبل الغرفة التالية، أكد سماكة الحوائط الجديدة لتلك الغرفة.
++5. بعد تثبيت الغرفة، يحاول التطبيق مطابقة الحوائط المتوازية والمتداخلة مع الغرف السابقة.
++6. عند نجاح المطابقة، يشير وجها الحائط إلى `BuildingWallRecord` واحد.
++7. افتح **مراجعة سماكات حوائط الغرفة الأخيرة** لتأكيد أو تعديل القيم.
++
++## المطابقة التلقائية
++
++يستخدم التطبيق:
++
++- تقارب اتجاه الحائطين.
++- التداخل الأفقي بين طولي الحائطين.
++- التداخل الرأسي، مع السماح باختلاف ارتفاع السقف بين الغرف.
++- المسافة بين وجهي الحائط.
++- السماكة المسجلة للحائط السابق كقرينة إضافية، وليست شرطًا مطلقًا.
++
++لا تُعتمد المطابقة إذا كانت الثقة أقل من 62%. القيمة والدرجة تظهران في شاشة المراجعة.
++
++## ملفات الحفظ
++
++### `wall-metadata.json`
++
++يحتوي بيانات المبنى كاملة:
++
++- السماكة الافتراضية للمبنى.
++- إعداد السماكة المؤكد لكل غرفة.
++- سجلات الحوائط الفيزيائية.
++- إسناد كل وجه RoomPlan إلى سجل الحائط.
++- مصدر السماكة.
++- درجة المطابقة.
++- المسافة المقاسة بين الوجهين.
++
++### `FrozenRooms/Room-XX/wall-properties.json`
++
++نسخة مخصصة للغرفة، وتشمل سجلات الحوائط التي تستخدمها الغرفة فقط. عند تعديل حائط مشترك، يحدث الملف في كل الغرف المرتبطة به.
++
++## مصادر السماكة
++
++- `buildingDefault`: افتراضي المبنى.
++- `roomDefault`: افتراضي الغرفة.
++- `inheritedSharedWall`: موروث من حائط مشترك في غرفة سابقة.
++- `userConfirmed`: قيمة أكدها المستخدم يدويًا.
++
++## حدود المرحلة
++
++- السماكة لا تغير عرض `RoomCaptureView` أو USDZ الأصلي حتى الآن.
++- المطابقة هندسية تلقائية وتحتاج مراجعة المستخدم في الأماكن المعقدة.
++- تحديد الحائط على مخطط 2D أو ربطه يدويًا بحائط غرفة أخرى سيكون مرحلة لاحقة.
++- التوقف المؤقت واستعادة الجلسة بعد إغلاق التطبيق غير منفذين في هذه المرحلة.
+--- /dev/null	2026-08-01 12:29:48.093238096 +0000
++++ phase2_work/LiDARLab/Features/RoomScan/RoomWallMetadata.swift	2026-08-01 12:35:04.169238096 +0000
+@@ -0,0 +1,92 @@
++import Foundation
++
++/// The source that currently controls a wall group's thickness.
++enum WallThicknessSource: String, Codable, CaseIterable {
++    case buildingDefault
++    case roomDefault
++    case inheritedSharedWall
++    case userConfirmed
++
++    var arabicTitle: String {
++        switch self {
++        case .buildingDefault:
++            return "افتراضي المبنى"
++        case .roomDefault:
++            return "افتراضي الغرفة"
++        case .inheritedSharedWall:
++            return "موروث من حائط مشترك"
++        case .userConfirmed:
++            return "مؤكد يدويًا"
++        }
++    }
++}
++
++/// A single physical wall in the app's building model. Multiple RoomPlan wall faces
++/// can point to the same record when they belong to two adjacent rooms.
++struct BuildingWallRecord: Codable, Identifiable, Equatable {
++    let id: UUID
++    var thicknessMeters: Double
++    var source: WallThicknessSource
++    let createdAt: Date
++    var updatedAt: Date
++}
++
++/// Geometry snapshot used only for matching wall faces between separately captured rooms.
++/// RoomPlan's original CapturedRoom JSON remains untouched.
++struct RoomWallGeometrySnapshot: Codable, Equatable {
++    let centerX: Float
++    let centerY: Float
++    let centerZ: Float
++    let tangentX: Float
++    let tangentZ: Float
++    let normalX: Float
++    let normalZ: Float
++    let widthMeters: Float
++    let heightMeters: Float
++}
++
++/// Links one RoomPlan wall face to one physical building wall record.
++struct RoomWallAssignment: Codable, Identifiable, Equatable {
++    let id: UUID
++    let roomIndex: Int
++    let roomIdentifier: UUID
++    let wallIdentifier: UUID
++    let wallNumber: Int
++    let buildingWallID: UUID
++    let geometry: RoomWallGeometrySnapshot
++    let assignmentSource: WallThicknessSource
++    let matchedPreviousWallIdentifier: UUID?
++    let matchConfidence: Double?
++    let faceSeparationMeters: Double?
++}
++
++struct RoomWallConfiguration: Codable, Identifiable, Equatable {
++    var id: Int { roomIndex }
++    let roomIndex: Int
++    let roomIdentifier: UUID
++    let defaultThicknessMeters: Double
++    let confirmedAt: Date
++}
++
++struct BuildingWallMetadataDocument: Codable {
++    let schemaVersion: Int
++    let updatedAt: Date
++    let buildingDefaultThicknessMeters: Double
++    let roomConfigurations: [RoomWallConfiguration]
++    let wallRecords: [BuildingWallRecord]
++    let assignments: [RoomWallAssignment]
++}
++
++/// Lightweight value consumed by SwiftUI. It intentionally contains no RoomPlan types.
++struct RoomWallDisplayItem: Identifiable, Equatable {
++    let id: UUID
++    let roomIndex: Int
++    let wallNumber: Int
++    let wallIdentifier: UUID
++    let buildingWallID: UUID
++    let thicknessCentimeters: Double
++    let source: WallThicknessSource
++    let isShared: Bool
++    let matchConfidence: Double?
++    let faceSeparationCentimeters: Double?
++}
+--- phase1_work/3ELiDAR/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-08-01 11:08:53.000000000 +0000
++++ phase2_work/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-08-01 12:37:14.041238096 +0000
+@@ -1,6 +1,7 @@
+ import ARKit
+ import Combine
+ import RoomPlan
++import simd
+ import UIKit
+ 
+ struct RoomScanExport: Identifiable {
+@@ -8,9 +9,16 @@
+     let folderURL: URL
+     let jsonURL: URL
+     let usdzURL: URL
++    let metadataURL: URL?
+     let kind: String
+ 
+-    var shareItems: [Any] { [jsonURL, usdzURL] }
++    var shareItems: [Any] {
++        var items: [Any] = [jsonURL, usdzURL]
++        if let metadataURL {
++            items.append(metadataURL)
++        }
++        return items
++    }
+ }
+ 
+ private struct MultiRoomScanManifest: Codable {
+@@ -20,6 +28,10 @@
+     let roomCount: Int
+     let isFinished: Bool
+     let coordinateSpace: String
++    let buildingDefaultWallThicknessMeters: Double
++    let physicalWallCount: Int
++    let sharedPhysicalWallCount: Int
++    let wallMetadataFile: String
+ }
+ 
+ @MainActor
+@@ -40,16 +52,34 @@
+     @Published private(set) var capturedRooms: [CapturedRoom] = []
+     @Published private(set) var capturedStructure: CapturedStructure?
+ 
++    /// App-owned wall metadata. RoomPlan geometry is never rewritten.
++    @Published private(set) var buildingDefaultWallThicknessMeters = 0.15
++    @Published private(set) var roomWallConfigurations: [RoomWallConfiguration] = []
++    @Published private(set) var buildingWallRecords: [BuildingWallRecord] = []
++    @Published private(set) var roomWallAssignments: [RoomWallAssignment] = []
++
+     @Published private(set) var latestExport: RoomScanExport?
+     @Published private(set) var buildingFolderURL: URL?
+     @Published private(set) var statusMessage = "ابدأ مسح المبنى، وامسح كل غرفة منفصلة."
+     @Published private(set) var errorMessage: String?
+ 
+     private weak var captureView: RoomCaptureView?
+-    private var pendingStart = false
++    private var pendingStartRequest: PendingStartRequest?
+     private var shouldAcceptNextProcessedRoom = false
++    private var activeRoomDefaultThicknessMeters = 0.15
+     private var scanCreatedAt = Date()
+ 
++    private enum PendingStartRequest {
++        case building(defaultThicknessCentimeters: Double)
++        case room(defaultThicknessCentimeters: Double)
++    }
++
++    private struct SharedWallMatch {
++        let assignment: RoomWallAssignment
++        let confidence: Double
++        let faceSeparationMeters: Double
++    }
++
+     override init() {
+         super.init()
+     }
+@@ -74,6 +104,25 @@
+     var totalDoorCount: Int { capturedRooms.reduce(0) { $0 + $1.doors.count } }
+     var totalWindowCount: Int { capturedRooms.reduce(0) { $0 + $1.windows.count } }
+ 
++    var buildingDefaultWallThicknessCentimeters: Double {
++        buildingDefaultWallThicknessMeters * 100.0
++    }
++
++    var recommendedNextRoomThicknessCentimeters: Double {
++        (roomWallConfigurations.last?.defaultThicknessMeters ?? buildingDefaultWallThicknessMeters) * 100.0
++    }
++
++    var physicalWallCount: Int { buildingWallRecords.count }
++
++    var sharedPhysicalWallCount: Int {
++        assignmentCountsByBuildingWallID.values.filter { $0 > 1 }.count
++    }
++
++    var latestRoomSharedFaceCount: Int {
++        guard roomCount > 0 else { return 0 }
++        return wallItems(for: roomCount).filter(\.isShared).count
++    }
++
+     var canStartNextRoom: Bool {
+         !isScanning && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
+     }
+@@ -86,46 +135,62 @@
+         captureView = view
+         view.delegate = self
+ 
+-        if pendingStart {
+-            pendingStart = false
+-            startBuildingScan()
++        guard let request = pendingStartRequest else { return }
++        pendingStartRequest = nil
++
++        switch request {
++        case .building(let centimeters):
++            startBuildingScan(defaultWallThicknessCentimeters: centimeters)
++        case .room(let centimeters):
++            startNextRoomScan(defaultWallThicknessCentimeters: centimeters)
+         }
+     }
+ 
+     /// Starts a fresh building workflow and immediately begins room 1.
+-    func startBuildingScan() {
++    func startBuildingScan(defaultWallThicknessCentimeters: Double) {
+         guard RoomCaptureSession.isSupported else {
+             errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
+             return
+         }
+         guard captureView != nil else {
+-            pendingStart = true
++            pendingStartRequest = .building(defaultThicknessCentimeters: defaultWallThicknessCentimeters)
+             return
+         }
+ 
+         resetPublishedResults()
++        buildingDefaultWallThicknessMeters = validatedThicknessMeters(fromCentimeters: defaultWallThicknessCentimeters)
+         scanCreatedAt = Date()
+         prepareBuildingFolder()
+-        startNextRoomScan()
++        beginRoomScan(defaultThicknessMeters: buildingDefaultWallThicknessMeters)
+     }
+ 
+     /// Starts another independent RoomPlan scan while preserving the shared ARSession.
+-    func startNextRoomScan() {
++    func startNextRoomScan(defaultWallThicknessCentimeters: Double) {
+         guard RoomCaptureSession.isSupported else {
+             errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
+             return
+         }
+         guard !isScanning, !isProcessing, !isBuildingFinished else { return }
+-        guard let captureView else {
+-            pendingStart = true
++        guard captureView != nil else {
++            pendingStartRequest = .room(defaultThicknessCentimeters: defaultWallThicknessCentimeters)
+             return
+         }
+ 
++        let thicknessMeters = validatedThicknessMeters(fromCentimeters: defaultWallThicknessCentimeters)
++        beginRoomScan(defaultThicknessMeters: thicknessMeters)
++    }
++
++    private func beginRoomScan(defaultThicknessMeters: Double) {
++        guard let captureView else { return }
++
+         latestExport = nil
+         capturedStructure = nil
+         activeRoomNumber = capturedRooms.count + 1
++        activeRoomDefaultThicknessMeters = defaultThicknessMeters
+         shouldAcceptNextProcessedRoom = false
+-        statusMessage = "امسح الغرفة رقم \(activeRoomNumber) فقط. قبل عبور أي باب اضغط «إنهاء الغرفة»."
++
++        let thicknessText = centimetersText(defaultThicknessMeters * 100.0)
++        statusMessage = "امسح الغرفة رقم \(activeRoomNumber) فقط. سماكة الجدران الجديدة \(thicknessText) سم، والمشتركة ترث قيمتها السابقة."
+ 
+         captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
+         isScanning = true
+@@ -138,7 +203,7 @@
+         isScanning = false
+         isProcessing = true
+         shouldAcceptNextProcessedRoom = true
+-        statusMessage = "جارٍ تثبيت الغرفة رقم \(activeRoomNumber) بدون إيقاف تتبع المكان…"
++        statusMessage = "جارٍ تثبيت الغرفة رقم \(activeRoomNumber) وربط حوائطها المشتركة…"
+         captureView?.captureSession.stop(pauseARSession: false)
+     }
+ 
+@@ -151,7 +216,8 @@
+         isBuildingFinished = true
+ 
+         guard capturedRooms.count > 1 else {
+-            statusMessage = "انتهى المسح بغرفة واحدة. تم حفظ الغرفة كما هي."
++            statusMessage = "انتهى المسح بغرفة واحدة. تم حفظ الغرفة وسماكات حوائطها كما هي."
++            persistWallMetadata()
+             writeManifest()
+             return
+         }
+@@ -166,14 +232,16 @@
+                 let structure = try await builder.capturedStructure(from: frozenRooms)
+                 capturedStructure = structure
+                 isProcessing = false
+-                statusMessage = "تم إنهاء المبنى: \(capturedRooms.count) غرف مجمدة + نموذج مجمّع للمقارنة."
++                statusMessage = "تم إنهاء المبنى: \(capturedRooms.count) غرف، و\(sharedPhysicalWallCount) حوائط مشتركة."
+                 persistStructureJSON(structure)
++                persistWallMetadata()
+                 writeManifest()
+                 UINotificationFeedbackGenerator().notificationOccurred(.success)
+             } catch {
+                 isProcessing = false
+-                errorMessage = "تم حفظ الغرف منفصلة، لكن تعذر دمجها: \(error.localizedDescription)"
+-                statusMessage = "الغرف المجمدة سليمة، وفشل النموذج المجمّع فقط."
++                errorMessage = "تم حفظ الغرف والسماكات منفصلة، لكن تعذر دمج RoomPlan: \(error.localizedDescription)"
++                statusMessage = "الغرف وبيانات الحوائط سليمة، وفشل النموذج المجمّع فقط."
++                persistWallMetadata()
+                 writeManifest()
+             }
+         }
+@@ -181,7 +249,7 @@
+ 
+     func resetBuilding() {
+         shouldAcceptNextProcessedRoom = false
+-        pendingStart = false
++        pendingStartRequest = nil
+ 
+         if isScanning {
+             captureView?.captureSession.stop(pauseARSession: true)
+@@ -196,7 +264,7 @@
+ 
+     func stopWithoutProcessing() {
+         shouldAcceptNextProcessedRoom = false
+-        pendingStart = false
++        pendingStartRequest = nil
+         isScanning = false
+         isProcessing = false
+         captureView?.captureSession.stop(pauseARSession: true)
+@@ -225,13 +293,25 @@
+             try encoder.encode(capturedStructure).write(to: jsonURL, options: .atomic)
+             try capturedStructure.export(to: usdzURL)
+ 
++            let metadataURL = folder.appendingPathComponent("wall-metadata.json")
++            let wallDocument = BuildingWallMetadataDocument(
++                schemaVersion: 1,
++                updatedAt: Date(),
++                buildingDefaultThicknessMeters: buildingDefaultWallThicknessMeters,
++                roomConfigurations: roomWallConfigurations,
++                wallRecords: buildingWallRecords,
++                assignments: roomWallAssignments
++            )
++            try configuredEncoder().encode(wallDocument).write(to: metadataURL, options: .atomic)
++
+             latestExport = RoomScanExport(
+                 folderURL: folder,
+                 jsonURL: jsonURL,
+                 usdzURL: usdzURL,
++                metadataURL: metadataURL,
+                 kind: "Merged-Structure"
+             )
+-            statusMessage = "تم تصدير النموذج المجمّع. الغرف الأصلية ما زالت محفوظة منفصلة."
++            statusMessage = "تم تصدير النموذج المجمّع. الغرف وبيانات السماكات ما زالت محفوظة منفصلة."
+             UINotificationFeedbackGenerator().notificationOccurred(.success)
+         } catch {
+             errorMessage = error.localizedDescription
+@@ -242,6 +322,71 @@
+         errorMessage = nil
+     }
+ 
++    // MARK: - Wall thickness metadata
++
++    func wallItems(for roomIndex: Int) -> [RoomWallDisplayItem] {
++        let recordsByID = Dictionary(uniqueKeysWithValues: buildingWallRecords.map { ($0.id, $0) })
++        let counts = assignmentCountsByBuildingWallID
++
++        return roomWallAssignments
++            .filter { $0.roomIndex == roomIndex }
++            .sorted { $0.wallNumber < $1.wallNumber }
++            .compactMap { assignment in
++                guard let record = recordsByID[assignment.buildingWallID] else { return nil }
++                let displaySource: WallThicknessSource = record.source == .userConfirmed
++                    ? .userConfirmed
++                    : assignment.assignmentSource
++
++                return RoomWallDisplayItem(
++                    id: assignment.id,
++                    roomIndex: assignment.roomIndex,
++                    wallNumber: assignment.wallNumber,
++                    wallIdentifier: assignment.wallIdentifier,
++                    buildingWallID: assignment.buildingWallID,
++                    thicknessCentimeters: record.thicknessMeters * 100.0,
++                    source: displaySource,
++                    isShared: (counts[assignment.buildingWallID] ?? 0) > 1,
++                    matchConfidence: assignment.matchConfidence,
++                    faceSeparationCentimeters: assignment.faceSeparationMeters.map { $0 * 100.0 }
++                )
++            }
++    }
++
++    func updateWallThickness(buildingWallID: UUID, centimeters: Double) {
++        guard let index = buildingWallRecords.firstIndex(where: { $0.id == buildingWallID }) else { return }
++
++        buildingWallRecords[index].thicknessMeters = validatedThicknessMeters(fromCentimeters: centimeters)
++        buildingWallRecords[index].source = .userConfirmed
++        buildingWallRecords[index].updatedAt = Date()
++
++        persistWallMetadata()
++        persistRoomWallMetadataFilesForWall(buildingWallID)
++        writeManifest()
++    }
++
++    func applyThicknessToUnsharedWalls(roomIndex: Int, centimeters: Double) {
++        let counts = assignmentCountsByBuildingWallID
++        let wallIDs = Set(
++            roomWallAssignments
++                .filter { $0.roomIndex == roomIndex && (counts[$0.buildingWallID] ?? 0) == 1 }
++                .map(\.buildingWallID)
++        )
++
++        guard !wallIDs.isEmpty else { return }
++        let meters = validatedThicknessMeters(fromCentimeters: centimeters)
++        let now = Date()
++
++        for index in buildingWallRecords.indices where wallIDs.contains(buildingWallRecords[index].id) {
++            buildingWallRecords[index].thicknessMeters = meters
++            buildingWallRecords[index].source = .userConfirmed
++            buildingWallRecords[index].updatedAt = now
++        }
++
++        persistWallMetadata()
++        persistRoomWallMetadata(roomIndex: roomIndex)
++        writeManifest()
++    }
++
+     // MARK: - RoomCaptureViewDelegate
+ 
+     func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
+@@ -279,14 +424,227 @@
+         // from all later RoomPlan sessions.
+         capturedRooms.append(processedResult)
+         capturedRoom = processedResult
++        let finalizedRoomIndex = capturedRooms.count
++
++        registerWallMetadata(
++            for: processedResult,
++            roomIndex: finalizedRoomIndex,
++            defaultThicknessMeters: activeRoomDefaultThicknessMeters
++        )
++
+         activeRoomNumber = 0
+-        persistFrozenRoom(processedResult, index: capturedRooms.count)
++        persistFrozenRoom(processedResult, index: finalizedRoomIndex)
++        persistWallMetadata()
++        persistRoomWallMetadata(roomIndex: finalizedRoomIndex)
+         writeManifest()
+ 
+-        statusMessage = "تم تثبيت الغرفة رقم \(capturedRooms.count). تحرك نحو الباب ثم ابدأ الغرفة التالية."
++        let sharedCount = wallItems(for: finalizedRoomIndex).filter(\.isShared).count
++        if sharedCount > 0 {
++            statusMessage = "تم تثبيت الغرفة رقم \(finalizedRoomIndex)، وربط \(sharedCount) وجه حائط بحوائط الغرف السابقة."
++        } else {
++            statusMessage = "تم تثبيت الغرفة رقم \(finalizedRoomIndex). لم يُعثر على حائط مشترك مؤكد تلقائيًا."
++        }
+         UINotificationFeedbackGenerator().notificationOccurred(.success)
+     }
+ 
++    // MARK: - Wall matching
++
++    private func registerWallMetadata(
++        for room: CapturedRoom,
++        roomIndex: Int,
++        defaultThicknessMeters: Double
++    ) {
++        roomWallConfigurations.append(
++            RoomWallConfiguration(
++                roomIndex: roomIndex,
++                roomIdentifier: room.identifier,
++                defaultThicknessMeters: defaultThicknessMeters,
++                confirmedAt: Date()
++            )
++        )
++
++        for (wallOffset, wall) in room.walls.enumerated() {
++            let geometry = geometrySnapshot(for: wall)
++            let match = bestSharedWallMatch(
++                for: geometry,
++                currentRoomIndex: roomIndex
++            )
++
++            let buildingWallID: UUID
++            let source: WallThicknessSource
++            let matchedWallIdentifier: UUID?
++            let confidence: Double?
++            let separation: Double?
++
++            if let match {
++                buildingWallID = match.assignment.buildingWallID
++                source = .inheritedSharedWall
++                matchedWallIdentifier = match.assignment.wallIdentifier
++                confidence = match.confidence
++                separation = match.faceSeparationMeters
++            } else {
++                let record = BuildingWallRecord(
++                    id: UUID(),
++                    thicknessMeters: defaultThicknessMeters,
++                    source: roomIndex == 1 ? .buildingDefault : .roomDefault,
++                    createdAt: Date(),
++                    updatedAt: Date()
++                )
++                buildingWallRecords.append(record)
++                buildingWallID = record.id
++                source = roomIndex == 1 ? .buildingDefault : .roomDefault
++                matchedWallIdentifier = nil
++                confidence = nil
++                separation = nil
++            }
++
++            roomWallAssignments.append(
++                RoomWallAssignment(
++                    id: UUID(),
++                    roomIndex: roomIndex,
++                    roomIdentifier: room.identifier,
++                    wallIdentifier: wall.identifier,
++                    wallNumber: wallOffset + 1,
++                    buildingWallID: buildingWallID,
++                    geometry: geometry,
++                    assignmentSource: source,
++                    matchedPreviousWallIdentifier: matchedWallIdentifier,
++                    matchConfidence: confidence,
++                    faceSeparationMeters: separation
++                )
++            )
++        }
++    }
++
++    private func bestSharedWallMatch(
++        for current: RoomWallGeometrySnapshot,
++        currentRoomIndex: Int
++    ) -> SharedWallMatch? {
++        let previousAssignments = roomWallAssignments.filter { $0.roomIndex < currentRoomIndex }
++        guard !previousAssignments.isEmpty else { return nil }
++
++        let recordsByID = Dictionary(uniqueKeysWithValues: buildingWallRecords.map { ($0.id, $0) })
++        var best: SharedWallMatch?
++
++        for previous in previousAssignments {
++            guard let wallRecord = recordsByID[previous.buildingWallID] else { continue }
++            guard let candidate = scoreSharedWallMatch(
++                current: current,
++                previous: previous.geometry,
++                expectedThicknessMeters: wallRecord.thicknessMeters
++            ) else { continue }
++
++            if best == nil || candidate.confidence > best!.confidence {
++                best = SharedWallMatch(
++                    assignment: previous,
++                    confidence: candidate.confidence,
++                    faceSeparationMeters: candidate.separationMeters
++                )
++            }
++        }
++
++        guard let best, best.confidence >= 0.62 else { return nil }
++        return best
++    }
++
++    private func scoreSharedWallMatch(
++        current: RoomWallGeometrySnapshot,
++        previous: RoomWallGeometrySnapshot,
++        expectedThicknessMeters: Double
++    ) -> (confidence: Double, separationMeters: Double)? {
++        let currentTangent = normalized2D(SIMD2<Float>(current.tangentX, current.tangentZ))
++        let previousTangent = normalized2D(SIMD2<Float>(previous.tangentX, previous.tangentZ))
++        let currentNormal = normalized2D(SIMD2<Float>(current.normalX, current.normalZ))
++        let previousNormal = normalized2D(SIMD2<Float>(previous.normalX, previous.normalZ))
++
++        let tangentAlignment = abs(Double(simd_dot(currentTangent, previousTangent)))
++        let normalAlignment = abs(Double(simd_dot(currentNormal, previousNormal)))
++        guard tangentAlignment >= 0.965, normalAlignment >= 0.94 else { return nil }
++
++        let currentCenter = SIMD2<Float>(current.centerX, current.centerZ)
++        let previousCenter = SIMD2<Float>(previous.centerX, previous.centerZ)
++        let delta = previousCenter - currentCenter
++
++        let separation = abs(Double(simd_dot(delta, currentNormal)))
++        guard separation <= 0.65 else { return nil }
++
++        let axis = currentTangent
++        let currentAxisCenter = Double(simd_dot(currentCenter, axis))
++        let previousAxisCenter = Double(simd_dot(previousCenter, axis))
++        let currentHalfWidth = Double(current.widthMeters) * 0.5
++        let previousHalfWidth = Double(previous.widthMeters) * 0.5 * tangentAlignment
++
++        let overlapStart = max(currentAxisCenter - currentHalfWidth, previousAxisCenter - previousHalfWidth)
++        let overlapEnd = min(currentAxisCenter + currentHalfWidth, previousAxisCenter + previousHalfWidth)
++        let horizontalOverlap = max(0.0, overlapEnd - overlapStart)
++        let shorterWidth = max(0.01, min(Double(current.widthMeters), Double(previous.widthMeters)))
++        let horizontalOverlapRatio = horizontalOverlap / shorterWidth
++        guard horizontalOverlap >= 0.40, horizontalOverlapRatio >= 0.28 else { return nil }
++
++        let currentBottom = Double(current.centerY) - Double(current.heightMeters) * 0.5
++        let currentTop = Double(current.centerY) + Double(current.heightMeters) * 0.5
++        let previousBottom = Double(previous.centerY) - Double(previous.heightMeters) * 0.5
++        let previousTop = Double(previous.centerY) + Double(previous.heightMeters) * 0.5
++        let verticalOverlap = max(0.0, min(currentTop, previousTop) - max(currentBottom, previousBottom))
++        let shorterHeight = max(0.01, min(Double(current.heightMeters), Double(previous.heightMeters)))
++        let verticalOverlapRatio = verticalOverlap / shorterHeight
++        guard verticalOverlap >= 0.80, verticalOverlapRatio >= 0.25 else { return nil }
++
++        let expected = max(0.05, expectedThicknessMeters)
++        let thicknessError = abs(separation - expected)
++        let thicknessScore = max(0.0, 1.0 - thicknessError / 0.35)
++        let angleScore = min(tangentAlignment, normalAlignment)
++        let overlapScore = min(1.0, horizontalOverlapRatio)
++        let heightScore = min(1.0, verticalOverlapRatio)
++
++        let confidence = (
++            angleScore * 0.34
++            + overlapScore * 0.34
++            + heightScore * 0.17
++            + thicknessScore * 0.15
++        )
++
++        return (confidence, separation)
++    }
++
++    private func geometrySnapshot(for wall: CapturedRoom.Surface) -> RoomWallGeometrySnapshot {
++        let transform = wall.transform
++        let center = transform.columns.3
++
++        var tangent = normalized2D(SIMD2<Float>(transform.columns.0.x, transform.columns.0.z))
++        var normal = normalized2D(SIMD2<Float>(transform.columns.2.x, transform.columns.2.z))
++
++        if simd_length(tangent) < 0.5 {
++            tangent = SIMD2<Float>(1, 0)
++        }
++        if simd_length(normal) < 0.5 || abs(simd_dot(tangent, normal)) > 0.35 {
++            normal = SIMD2<Float>(-tangent.y, tangent.x)
++        }
++
++        return RoomWallGeometrySnapshot(
++            centerX: center.x,
++            centerY: center.y,
++            centerZ: center.z,
++            tangentX: tangent.x,
++            tangentZ: tangent.y,
++            normalX: normal.x,
++            normalZ: normal.y,
++            widthMeters: max(0.05, wall.dimensions.x),
++            heightMeters: max(0.05, wall.dimensions.y)
++        )
++    }
++
++    private func normalized2D(_ value: SIMD2<Float>) -> SIMD2<Float> {
++        let length = simd_length(value)
++        guard length > 0.0001 else { return SIMD2<Float>(0, 0) }
++        return value / length
++    }
++
++    private var assignmentCountsByBuildingWallID: [UUID: Int] {
++        Dictionary(grouping: roomWallAssignments, by: \.buildingWallID)
++            .mapValues(\.count)
++    }
++
+     // MARK: - Persistence and export
+ 
+     private func resetPublishedResults() {
+@@ -297,8 +655,12 @@
+         capturedRoom = nil
+         capturedRooms = []
+         capturedStructure = nil
++        roomWallConfigurations = []
++        buildingWallRecords = []
++        roomWallAssignments = []
+         latestExport = nil
+         shouldAcceptNextProcessedRoom = false
++        activeRoomDefaultThicknessMeters = buildingDefaultWallThicknessMeters
+     }
+ 
+     private func prepareBuildingFolder() {
+@@ -313,6 +675,7 @@
+                 withIntermediateDirectories: true
+             )
+             buildingFolderURL = folder
++            persistWallMetadata()
+             writeManifest()
+         } catch {
+             buildingFolderURL = nil
+@@ -336,6 +699,65 @@
+         }
+     }
+ 
++    private func persistWallMetadata() {
++        guard let buildingFolderURL else { return }
++
++        let document = BuildingWallMetadataDocument(
++            schemaVersion: 1,
++            updatedAt: Date(),
++            buildingDefaultThicknessMeters: buildingDefaultWallThicknessMeters,
++            roomConfigurations: roomWallConfigurations,
++            wallRecords: buildingWallRecords,
++            assignments: roomWallAssignments
++        )
++
++        do {
++            let url = buildingFolderURL.appendingPathComponent("wall-metadata.json")
++            try configuredEncoder().encode(document).write(to: url, options: .atomic)
++        } catch {
++            errorMessage = "تم حفظ الغرفة، لكن تعذر حفظ بيانات سماكات الحوائط: \(error.localizedDescription)"
++        }
++    }
++
++    private func persistRoomWallMetadata(roomIndex: Int) {
++        guard let buildingFolderURL else { return }
++        guard let roomConfiguration = roomWallConfigurations.first(where: { $0.roomIndex == roomIndex }) else { return }
++
++        let assignments = roomWallAssignments.filter { $0.roomIndex == roomIndex }
++        let referencedIDs = Set(assignments.map(\.buildingWallID))
++        let records = buildingWallRecords.filter { referencedIDs.contains($0.id) }
++        let document = BuildingWallMetadataDocument(
++            schemaVersion: 1,
++            updatedAt: Date(),
++            buildingDefaultThicknessMeters: buildingDefaultWallThicknessMeters,
++            roomConfigurations: [roomConfiguration],
++            wallRecords: records,
++            assignments: assignments
++        )
++
++        do {
++            let roomFolder = buildingFolderURL
++                .appendingPathComponent("FrozenRooms", isDirectory: true)
++                .appendingPathComponent(String(format: "Room-%02d", roomIndex), isDirectory: true)
++            try FileManager.default.createDirectory(at: roomFolder, withIntermediateDirectories: true)
++            let url = roomFolder.appendingPathComponent("wall-properties.json")
++            try configuredEncoder().encode(document).write(to: url, options: .atomic)
++        } catch {
++            errorMessage = "تعذر تحديث ملف سماكات الغرفة رقم \(roomIndex): \(error.localizedDescription)"
++        }
++    }
++
++    private func persistRoomWallMetadataFilesForWall(_ buildingWallID: UUID) {
++        let roomIndices = Set(
++            roomWallAssignments
++                .filter { $0.buildingWallID == buildingWallID }
++                .map(\.roomIndex)
++        )
++        for roomIndex in roomIndices {
++            persistRoomWallMetadata(roomIndex: roomIndex)
++        }
++    }
++
+     private func persistStructureJSON(_ structure: CapturedStructure) {
+         guard let buildingFolderURL else { return }
+ 
+@@ -352,12 +774,16 @@
+ 
+         do {
+             let manifest = MultiRoomScanManifest(
+-                schemaVersion: 1,
++                schemaVersion: 2,
+                 createdAt: scanCreatedAt,
+                 updatedAt: Date(),
+                 roomCount: capturedRooms.count,
+                 isFinished: isBuildingFinished,
+-                coordinateSpace: "continuous-shared-ARSession"
++                coordinateSpace: "continuous-shared-ARSession",
++                buildingDefaultWallThicknessMeters: buildingDefaultWallThicknessMeters,
++                physicalWallCount: physicalWallCount,
++                sharedPhysicalWallCount: sharedPhysicalWallCount,
++                wallMetadataFile: "wall-metadata.json"
+             )
+             let url = buildingFolderURL.appendingPathComponent("manifest.json")
+             try configuredEncoder().encode(manifest).write(to: url, options: .atomic)
+@@ -379,10 +805,28 @@
+             try configuredEncoder().encode(capturedRoom).write(to: jsonURL, options: .atomic)
+             try capturedRoom.export(to: usdzURL, exportOptions: options)
+ 
++            var wallMetadataURL: URL?
++            if roomCount > 0 {
++                let assignments = roomWallAssignments.filter { $0.roomIndex == roomCount }
++                let referencedIDs = Set(assignments.map(\.buildingWallID))
++                let wallDocument = BuildingWallMetadataDocument(
++                    schemaVersion: 1,
++                    updatedAt: Date(),
++                    buildingDefaultThicknessMeters: buildingDefaultWallThicknessMeters,
++                    roomConfigurations: roomWallConfigurations.filter { $0.roomIndex == roomCount },
++                    wallRecords: buildingWallRecords.filter { referencedIDs.contains($0.id) },
++                    assignments: assignments
++                )
++                let wallURL = folder.appendingPathComponent("wall-properties.json")
++                try configuredEncoder().encode(wallDocument).write(to: wallURL, options: .atomic)
++                wallMetadataURL = wallURL
++            }
++
+             latestExport = RoomScanExport(
+                 folderURL: folder,
+                 jsonURL: jsonURL,
+                 usdzURL: usdzURL,
++                metadataURL: wallMetadataURL,
+                 kind: kind
+             )
+             statusMessage = "تم تصدير آخر غرفة بنمط \(kind)."
+@@ -407,4 +851,15 @@
+         encoder.dateEncodingStrategy = .iso8601
+         return encoder
+     }
++
++    private func validatedThicknessMeters(fromCentimeters centimeters: Double) -> Double {
++        min(max(centimeters, 5.0), 60.0) / 100.0
++    }
++
++    private func centimetersText(_ centimeters: Double) -> String {
++        if abs(centimeters.rounded() - centimeters) < 0.05 {
++            return String(Int(centimeters.rounded()))
++        }
++        return String(format: "%.1f", centimeters)
++    }
+ }
+--- phase1_work/3ELiDAR/LiDARLab/Features/RoomScan/RoomScanView.swift	2026-08-01 11:08:53.000000000 +0000
++++ phase2_work/LiDARLab/Features/RoomScan/RoomScanView.swift	2026-08-01 12:37:14.053238096 +0000
+@@ -4,7 +4,11 @@
+     @StateObject private var model = RoomScanViewModel()
+     @State private var showingShareSheet = false
+     @State private var showingResetConfirmation = false
++    @State private var showingThicknessSetup = false
++    @State private var showingWallEditor = false
+     @State private var shareItems: [Any] = []
++    @State private var setupThicknessCentimeters = 15.0
++    @State private var setupMode: RoomThicknessSetupMode = .building
+ 
+     var body: some View {
+         ZStack {
+@@ -26,6 +30,35 @@
+         .sheet(isPresented: $showingShareSheet) {
+             ActivityView(items: shareItems)
+         }
++        .sheet(isPresented: $showingThicknessSetup) {
++            RoomThicknessSetupSheet(
++                mode: setupMode,
++                roomNumber: setupMode == .building ? 1 : model.nextRoomNumber,
++                buildingDefaultCentimeters: model.buildingDefaultWallThicknessCentimeters,
++                thicknessCentimeters: $setupThicknessCentimeters
++            ) {
++                showingThicknessSetup = false
++                switch setupMode {
++                case .building:
++                    model.startBuildingScan(
++                        defaultWallThicknessCentimeters: setupThicknessCentimeters
++                    )
++                case .nextRoom:
++                    model.startNextRoomScan(
++                        defaultWallThicknessCentimeters: setupThicknessCentimeters
++                    )
++                }
++            }
++            .presentationDetents([.medium, .large])
++        }
++        .sheet(isPresented: $showingWallEditor) {
++            NavigationStack {
++                RoomWallThicknessEditor(
++                    model: model,
++                    roomIndex: model.roomCount
++                )
++            }
++        }
+         .alert("حذف جلسة المسح الحالية؟", isPresented: $showingResetConfirmation) {
+             Button("حذف وبدء جديد", role: .destructive) {
+                 model.resetBuilding()
+@@ -59,10 +92,16 @@
+             }
+ 
+             if model.isScanning {
+-                Label(
+-                    "الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.",
+-                    systemImage: "door.left.hand.closed"
+-                )
++                VStack(alignment: .leading, spacing: 5) {
++                    Label(
++                        "الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.",
++                        systemImage: "door.left.hand.closed"
++                    )
++                    Label(
++                        "الحائط المشترك سيأخذ نفس السماكة المسجلة للغرفة السابقة.",
++                        systemImage: "link"
++                    )
++                }
+                 .font(.caption)
+                 .foregroundStyle(.yellow)
+             }
+@@ -70,10 +109,14 @@
+             if model.roomCount > 0 {
+                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
+                     MetricChip(title: "غرف مثبتة", value: "\(model.roomCount)", systemImage: "square.grid.2x2")
+-                    MetricChip(title: "كل الجدران", value: "\(model.totalWallCount)", systemImage: "rectangle.split.3x1")
++                    MetricChip(title: "حوائط فعلية", value: "\(model.physicalWallCount)", systemImage: "rectangle.split.3x1")
++                    MetricChip(title: "حوائط مشتركة", value: "\(model.sharedPhysicalWallCount)", systemImage: "link")
+                     MetricChip(title: "كل الأبواب", value: "\(model.totalDoorCount)", systemImage: "door.left.hand.open")
+-                    MetricChip(title: "كل النوافذ", value: "\(model.totalWindowCount)", systemImage: "window.vertical.closed")
+                 }
++
++                Text("سماكة المبنى الافتراضية: \(centimetersText(model.buildingDefaultWallThicknessCentimeters)) سم")
++                    .font(.caption2)
++                    .foregroundStyle(.secondary)
+             }
+ 
+             if model.capturedRoom != nil {
+@@ -84,9 +127,9 @@
+ 
+                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
+                     MetricChip(title: "جدران", value: "\(model.wallCount)", systemImage: "rectangle.split.3x1")
++                    MetricChip(title: "مشتركة", value: "\(model.latestRoomSharedFaceCount)", systemImage: "link")
+                     MetricChip(title: "أبواب", value: "\(model.doorCount)", systemImage: "door.left.hand.open")
+                     MetricChip(title: "فتحات", value: "\(model.openingCount)", systemImage: "rectangle.dashed")
+-                    MetricChip(title: "عناصر", value: "\(model.objectCount)", systemImage: "chair.lounge")
+                 }
+             }
+         }
+@@ -99,6 +142,14 @@
+             primaryControls
+ 
+             if model.capturedRoom != nil, !model.isScanning, !model.isProcessing {
++                Button {
++                    showingWallEditor = true
++                } label: {
++                    Label("مراجعة سماكات حوائط الغرفة الأخيرة", systemImage: "ruler")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++
+                 ViewThatFits(in: .horizontal) {
+                     HStack(spacing: 10) { roomExportControls }
+                     VStack(spacing: 10) { roomExportControls }
+@@ -120,7 +171,7 @@
+                     shareItems = export.shareItems
+                     showingShareSheet = true
+                 } label: {
+-                    Label("مشاركة JSON وUSDZ", systemImage: "square.and.arrow.up")
++                    Label("مشاركة التصدير وخصائص الحوائط", systemImage: "square.and.arrow.up")
+                         .frame(maxWidth: .infinity)
+                 }
+                 .buttonStyle(.bordered)
+@@ -161,7 +212,7 @@
+             .disabled(true)
+         } else if model.roomCount == 0 {
+             Button {
+-                model.startBuildingScan()
++                presentThicknessSetup(.building)
+             } label: {
+                 Label("بدء مسح المبنى", systemImage: "viewfinder")
+                     .frame(maxWidth: .infinity)
+@@ -196,9 +247,9 @@
+     @ViewBuilder
+     private var continuationControls: some View {
+         Button {
+-            model.startNextRoomScan()
++            presentThicknessSetup(.nextRoom)
+         } label: {
+-            Label("مسح الغرفة \(model.nextRoomNumber)", systemImage: "plus.viewfinder")
++            Label("إعداد ومسح الغرفة \(model.nextRoomNumber)", systemImage: "plus.viewfinder")
+                 .frame(maxWidth: .infinity)
+         }
+         .buttonStyle(.borderedProminent)
+@@ -236,15 +287,287 @@
+     private var stateIcon: String {
+         if model.isProcessing { return "gearshape.2.fill" }
+         if model.isBuildingFinished { return "checkmark.seal.fill" }
+-        if model.roomCount > 0 { return "square.grid.2x2.fill" }
+         if model.isScanning { return "record.circle" }
++        if model.roomCount > 0 { return "square.grid.2x2.fill" }
+         return "building.2"
+     }
+ 
+     private var stateColor: Color {
+         if model.isBuildingFinished { return .green }
+-        if model.roomCount > 0 { return .cyan }
+         if model.isScanning { return .red }
++        if model.roomCount > 0 { return .cyan }
+         return .cyan
+     }
++
++    private func presentThicknessSetup(_ mode: RoomThicknessSetupMode) {
++        setupMode = mode
++        setupThicknessCentimeters = mode == .building
++            ? 15.0
++            : model.recommendedNextRoomThicknessCentimeters
++        showingThicknessSetup = true
++    }
++
++    private func centimetersText(_ value: Double) -> String {
++        if abs(value.rounded() - value) < 0.05 {
++            return String(Int(value.rounded()))
++        }
++        return String(format: "%.1f", value)
++    }
++}
++
++private enum RoomThicknessSetupMode {
++    case building
++    case nextRoom
++}
++
++private struct RoomThicknessSetupSheet: View {
++    let mode: RoomThicknessSetupMode
++    let roomNumber: Int
++    let buildingDefaultCentimeters: Double
++    @Binding var thicknessCentimeters: Double
++    let onConfirm: () -> Void
++
++    @Environment(\.dismiss) private var dismiss
++
++    private let presets: [Double] = [10, 15, 20, 25, 30, 35]
++
++    var body: some View {
++        NavigationStack {
++            Form {
++                Section {
++                    VStack(spacing: 12) {
++                        Image(systemName: mode == .building ? "building.2" : "ruler")
++                            .font(.system(size: 34))
++                            .foregroundStyle(.cyan)
++
++                        Text(title)
++                            .font(.headline)
++
++                        Text(explanation)
++                            .font(.caption)
++                            .foregroundStyle(.secondary)
++                            .multilineTextAlignment(.center)
++                    }
++                    .frame(maxWidth: .infinity)
++                    .listRowBackground(Color.clear)
++                }
++
++                Section("السماكة الافتراضية") {
++                    HStack {
++                        Text("السماكة")
++                        Spacer()
++                        Text("\(centimetersText(thicknessCentimeters)) سم")
++                            .font(.title3.bold())
++                            .monospacedDigit()
++                    }
++
++                    Stepper(
++                        "تغيير السماكة بمقدار 1 سم",
++                        value: $thicknessCentimeters,
++                        in: 5...60,
++                        step: 1
++                    )
++
++                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 66), spacing: 8)], spacing: 8) {
++                        ForEach(presets, id: \.self) { preset in
++                            Button {
++                                thicknessCentimeters = preset
++                            } label: {
++                                Text("\(Int(preset)) سم")
++                                    .frame(maxWidth: .infinity)
++                            }
++                            .buttonStyle(.bordered)
++                            .tint(abs(thicknessCentimeters - preset) < 0.1 ? .cyan : nil)
++                        }
++                    }
++                    .padding(.vertical, 4)
++                }
++
++                Section("منطق الحائط المشترك") {
++                    Label(
++                        "هذه القيمة تُطبق على الحوائط الجديدة في الغرفة فقط.",
++                        systemImage: "square.dashed"
++                    )
++                    Label(
++                        "إذا تعرف التطبيق على وجه الحائط المقابل في غرفة سابقة، يستخدم سجل حائط واحد ونفس السماكة للغرفتين.",
++                        systemImage: "link"
++                    )
++                    if mode == .nextRoom {
++                        Label(
++                            "افتراضي المبنى الحالي: \(centimetersText(buildingDefaultCentimeters)) سم",
++                            systemImage: "building.2"
++                        )
++                    }
++                }
++            }
++            .navigationTitle(mode == .building ? "إعداد المبنى" : "إعداد الغرفة \(roomNumber)")
++            .navigationBarTitleDisplayMode(.inline)
++            .toolbar {
++                ToolbarItem(placement: .cancellationAction) {
++                    Button("إلغاء") { dismiss() }
++                }
++                ToolbarItem(placement: .confirmationAction) {
++                    Button("تأكيد وبدء") { onConfirm() }
++                        .fontWeight(.semibold)
++                }
++            }
++        }
++    }
++
++    private var title: String {
++        mode == .building
++            ? "حدد السماكة الأساسية قبل بدء المبنى"
++            : "أكد سماكة الحوائط الجديدة للغرفة \(roomNumber)"
++    }
++
++    private var explanation: String {
++        mode == .building
++            ? "سيستخدم التطبيق هذه القيمة كبداية، ويمكن تعديل أي حائط لاحقًا دون تغيير هندسة RoomPlan الأصلية."
++            : "يمكن أن تختلف هذه الغرفة عن السابقة. الحوائط المشتركة لا تتكرر؛ بل ترث سماكة الحائط المسجل من الجهة الأخرى."
++    }
++
++    private func centimetersText(_ value: Double) -> String {
++        if abs(value.rounded() - value) < 0.05 {
++            return String(Int(value.rounded()))
++        }
++        return String(format: "%.1f", value)
++    }
++}
++
++private struct RoomWallThicknessEditor: View {
++    @ObservedObject var model: RoomScanViewModel
++    let roomIndex: Int
++
++    @Environment(\.dismiss) private var dismiss
++    @State private var bulkThicknessCentimeters = 15.0
++
++    var body: some View {
++        List {
++            Section {
++                Label(
++                    "تعديل الحائط المشترك هنا يغيّر نفس السجل في كل الغرف المرتبطة به.",
++                    systemImage: "link"
++                )
++                .font(.caption)
++
++                Label(
++                    "السماكة بيانات خاصة بالتطبيق ولا تعيد كتابة أسطح RoomPlan الأصلية.",
++                    systemImage: "lock.shield"
++                )
++                .font(.caption)
++            }
++
++            Section("تطبيق سريع على الحوائط غير المشتركة") {
++                Stepper(
++                    "\(centimetersText(bulkThicknessCentimeters)) سم",
++                    value: $bulkThicknessCentimeters,
++                    in: 5...60,
++                    step: 1
++                )
++                Button("تطبيق على الحوائط غير المشتركة فقط") {
++                    model.applyThicknessToUnsharedWalls(
++                        roomIndex: roomIndex,
++                        centimeters: bulkThicknessCentimeters
++                    )
++                }
++            }
++
++            Section("حوائط الغرفة \(roomIndex)") {
++                ForEach(model.wallItems(for: roomIndex)) { item in
++                    RoomWallThicknessRow(model: model, item: item)
++                }
++            }
++        }
++        .navigationTitle("سماكات الحوائط")
++        .navigationBarTitleDisplayMode(.inline)
++        .toolbar {
++            ToolbarItem(placement: .confirmationAction) {
++                Button("تم") { dismiss() }
++            }
++        }
++        .onAppear {
++            bulkThicknessCentimeters = model.recommendedNextRoomThicknessCentimeters
++        }
++    }
++
++    private func centimetersText(_ value: Double) -> String {
++        if abs(value.rounded() - value) < 0.05 {
++            return String(Int(value.rounded()))
++        }
++        return String(format: "%.1f", value)
++    }
++}
++
++private struct RoomWallThicknessRow: View {
++    @ObservedObject var model: RoomScanViewModel
++    let item: RoomWallDisplayItem
++
++    var body: some View {
++        VStack(alignment: .leading, spacing: 8) {
++            HStack {
++                Label("الحائط \(item.wallNumber)", systemImage: item.isShared ? "link" : "rectangle")
++                    .font(.headline)
++                Spacer()
++                Text(item.isShared ? "مشترك" : "خاص بالغرفة")
++                    .font(.caption2.bold())
++                    .foregroundStyle(item.isShared ? .green : .secondary)
++            }
++
++            Stepper(
++                value: thicknessBinding,
++                in: 5...60,
++                step: 1
++            ) {
++                HStack {
++                    Text("السماكة")
++                    Spacer()
++                    Text("\(centimetersText(currentItem.thicknessCentimeters)) سم")
++                        .font(.headline)
++                        .monospacedDigit()
++                }
++            }
++
++            HStack(spacing: 8) {
++                Text(currentItem.source.arabicTitle)
++                    .font(.caption2)
++                    .foregroundStyle(.secondary)
++
++                if let confidence = currentItem.matchConfidence {
++                    Text("تطابق \(Int((confidence * 100).rounded()))٪")
++                        .font(.caption2)
++                        .foregroundStyle(.secondary)
++                }
++
++                if let separation = currentItem.faceSeparationCentimeters {
++                    Text("فاصل \(centimetersText(separation)) سم")
++                        .font(.caption2)
++                        .foregroundStyle(.secondary)
++                }
++            }
++        }
++        .padding(.vertical, 4)
++    }
++
++    private var currentItem: RoomWallDisplayItem {
++        model.wallItems(for: item.roomIndex).first(where: { $0.id == item.id }) ?? item
++    }
++
++    private var thicknessBinding: Binding<Double> {
++        Binding(
++            get: { currentItem.thicknessCentimeters },
++            set: { newValue in
++                model.updateWallThickness(
++                    buildingWallID: item.buildingWallID,
++                    centimeters: newValue
++                )
++            }
++        )
++    }
++
++    private func centimetersText(_ value: Double) -> String {
++        if abs(value.rounded() - value) < 0.05 {
++            return String(Int(value.rounded()))
++        }
++        return String(format: "%.1f", value)
++    }
+ }

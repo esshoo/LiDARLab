@@ -4,7 +4,11 @@ struct RoomScanView: View {
     @StateObject private var model = RoomScanViewModel()
     @State private var showingShareSheet = false
     @State private var showingResetConfirmation = false
+    @State private var showingThicknessSetup = false
+    @State private var showingWallEditor = false
     @State private var shareItems: [Any] = []
+    @State private var setupThicknessCentimeters = 15.0
+    @State private var setupMode: RoomThicknessSetupMode = .building
 
     var body: some View {
         ZStack {
@@ -25,6 +29,35 @@ struct RoomScanView: View {
         .onDisappear { model.stopWithoutProcessing() }
         .sheet(isPresented: $showingShareSheet) {
             ActivityView(items: shareItems)
+        }
+        .sheet(isPresented: $showingThicknessSetup) {
+            RoomThicknessSetupSheet(
+                mode: setupMode,
+                roomNumber: setupMode == .building ? 1 : model.nextRoomNumber,
+                buildingDefaultCentimeters: model.buildingDefaultWallThicknessCentimeters,
+                thicknessCentimeters: $setupThicknessCentimeters
+            ) {
+                showingThicknessSetup = false
+                switch setupMode {
+                case .building:
+                    model.startBuildingScan(
+                        defaultWallThicknessCentimeters: setupThicknessCentimeters
+                    )
+                case .nextRoom:
+                    model.startNextRoomScan(
+                        defaultWallThicknessCentimeters: setupThicknessCentimeters
+                    )
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showingWallEditor) {
+            NavigationStack {
+                RoomWallThicknessEditor(
+                    model: model,
+                    roomIndex: model.roomCount
+                )
+            }
         }
         .alert("حذف جلسة المسح الحالية؟", isPresented: $showingResetConfirmation) {
             Button("حذف وبدء جديد", role: .destructive) {
@@ -59,10 +92,16 @@ struct RoomScanView: View {
             }
 
             if model.isScanning {
-                Label(
-                    "الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.",
-                    systemImage: "door.left.hand.closed"
-                )
+                VStack(alignment: .leading, spacing: 5) {
+                    Label(
+                        "الغرفة \(model.activeRoomNumber): لا تعبر الباب قبل إنهاء الغرفة.",
+                        systemImage: "door.left.hand.closed"
+                    )
+                    Label(
+                        "الحائط المشترك سيأخذ نفس السماكة المسجلة للغرفة السابقة.",
+                        systemImage: "link"
+                    )
+                }
                 .font(.caption)
                 .foregroundStyle(.yellow)
             }
@@ -70,10 +109,14 @@ struct RoomScanView: View {
             if model.roomCount > 0 {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
                     MetricChip(title: "غرف مثبتة", value: "\(model.roomCount)", systemImage: "square.grid.2x2")
-                    MetricChip(title: "كل الجدران", value: "\(model.totalWallCount)", systemImage: "rectangle.split.3x1")
+                    MetricChip(title: "حوائط فعلية", value: "\(model.physicalWallCount)", systemImage: "rectangle.split.3x1")
+                    MetricChip(title: "حوائط مشتركة", value: "\(model.sharedPhysicalWallCount)", systemImage: "link")
                     MetricChip(title: "كل الأبواب", value: "\(model.totalDoorCount)", systemImage: "door.left.hand.open")
-                    MetricChip(title: "كل النوافذ", value: "\(model.totalWindowCount)", systemImage: "window.vertical.closed")
                 }
+
+                Text("سماكة المبنى الافتراضية: \(centimetersText(model.buildingDefaultWallThicknessCentimeters)) سم")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             if model.capturedRoom != nil {
@@ -84,9 +127,9 @@ struct RoomScanView: View {
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
                     MetricChip(title: "جدران", value: "\(model.wallCount)", systemImage: "rectangle.split.3x1")
+                    MetricChip(title: "مشتركة", value: "\(model.latestRoomSharedFaceCount)", systemImage: "link")
                     MetricChip(title: "أبواب", value: "\(model.doorCount)", systemImage: "door.left.hand.open")
                     MetricChip(title: "فتحات", value: "\(model.openingCount)", systemImage: "rectangle.dashed")
-                    MetricChip(title: "عناصر", value: "\(model.objectCount)", systemImage: "chair.lounge")
                 }
             }
         }
@@ -99,6 +142,14 @@ struct RoomScanView: View {
             primaryControls
 
             if model.capturedRoom != nil, !model.isScanning, !model.isProcessing {
+                Button {
+                    showingWallEditor = true
+                } label: {
+                    Label("مراجعة سماكات حوائط الغرفة الأخيرة", systemImage: "ruler")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) { roomExportControls }
                     VStack(spacing: 10) { roomExportControls }
@@ -120,7 +171,7 @@ struct RoomScanView: View {
                     shareItems = export.shareItems
                     showingShareSheet = true
                 } label: {
-                    Label("مشاركة JSON وUSDZ", systemImage: "square.and.arrow.up")
+                    Label("مشاركة التصدير وخصائص الحوائط", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -161,7 +212,7 @@ struct RoomScanView: View {
             .disabled(true)
         } else if model.roomCount == 0 {
             Button {
-                model.startBuildingScan()
+                presentThicknessSetup(.building)
             } label: {
                 Label("بدء مسح المبنى", systemImage: "viewfinder")
                     .frame(maxWidth: .infinity)
@@ -196,9 +247,9 @@ struct RoomScanView: View {
     @ViewBuilder
     private var continuationControls: some View {
         Button {
-            model.startNextRoomScan()
+            presentThicknessSetup(.nextRoom)
         } label: {
-            Label("مسح الغرفة \(model.nextRoomNumber)", systemImage: "plus.viewfinder")
+            Label("إعداد ومسح الغرفة \(model.nextRoomNumber)", systemImage: "plus.viewfinder")
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
@@ -236,15 +287,287 @@ struct RoomScanView: View {
     private var stateIcon: String {
         if model.isProcessing { return "gearshape.2.fill" }
         if model.isBuildingFinished { return "checkmark.seal.fill" }
-        if model.roomCount > 0 { return "square.grid.2x2.fill" }
         if model.isScanning { return "record.circle" }
+        if model.roomCount > 0 { return "square.grid.2x2.fill" }
         return "building.2"
     }
 
     private var stateColor: Color {
         if model.isBuildingFinished { return .green }
-        if model.roomCount > 0 { return .cyan }
         if model.isScanning { return .red }
+        if model.roomCount > 0 { return .cyan }
         return .cyan
+    }
+
+    private func presentThicknessSetup(_ mode: RoomThicknessSetupMode) {
+        setupMode = mode
+        setupThicknessCentimeters = mode == .building
+            ? 15.0
+            : model.recommendedNextRoomThicknessCentimeters
+        showingThicknessSetup = true
+    }
+
+    private func centimetersText(_ value: Double) -> String {
+        if abs(value.rounded() - value) < 0.05 {
+            return String(Int(value.rounded()))
+        }
+        return String(format: "%.1f", value)
+    }
+}
+
+private enum RoomThicknessSetupMode {
+    case building
+    case nextRoom
+}
+
+private struct RoomThicknessSetupSheet: View {
+    let mode: RoomThicknessSetupMode
+    let roomNumber: Int
+    let buildingDefaultCentimeters: Double
+    @Binding var thicknessCentimeters: Double
+    let onConfirm: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private let presets: [Double] = [10, 15, 20, 25, 30, 35]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(spacing: 12) {
+                        Image(systemName: mode == .building ? "building.2" : "ruler")
+                            .font(.system(size: 34))
+                            .foregroundStyle(.cyan)
+
+                        Text(title)
+                            .font(.headline)
+
+                        Text(explanation)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear)
+                }
+
+                Section("السماكة الافتراضية") {
+                    HStack {
+                        Text("السماكة")
+                        Spacer()
+                        Text("\(centimetersText(thicknessCentimeters)) سم")
+                            .font(.title3.bold())
+                            .monospacedDigit()
+                    }
+
+                    Stepper(
+                        "تغيير السماكة بمقدار 1 سم",
+                        value: $thicknessCentimeters,
+                        in: 5...60,
+                        step: 1
+                    )
+
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 66), spacing: 8)], spacing: 8) {
+                        ForEach(presets, id: \.self) { preset in
+                            Button {
+                                thicknessCentimeters = preset
+                            } label: {
+                                Text("\(Int(preset)) سم")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(abs(thicknessCentimeters - preset) < 0.1 ? .cyan : nil)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Section("منطق الحائط المشترك") {
+                    Label(
+                        "هذه القيمة تُطبق على الحوائط الجديدة في الغرفة فقط.",
+                        systemImage: "square.dashed"
+                    )
+                    Label(
+                        "إذا تعرف التطبيق على وجه الحائط المقابل في غرفة سابقة، يستخدم سجل حائط واحد ونفس السماكة للغرفتين.",
+                        systemImage: "link"
+                    )
+                    if mode == .nextRoom {
+                        Label(
+                            "افتراضي المبنى الحالي: \(centimetersText(buildingDefaultCentimeters)) سم",
+                            systemImage: "building.2"
+                        )
+                    }
+                }
+            }
+            .navigationTitle(mode == .building ? "إعداد المبنى" : "إعداد الغرفة \(roomNumber)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("تأكيد وبدء") { onConfirm() }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private var title: String {
+        mode == .building
+            ? "حدد السماكة الأساسية قبل بدء المبنى"
+            : "أكد سماكة الحوائط الجديدة للغرفة \(roomNumber)"
+    }
+
+    private var explanation: String {
+        mode == .building
+            ? "سيستخدم التطبيق هذه القيمة كبداية، ويمكن تعديل أي حائط لاحقًا دون تغيير هندسة RoomPlan الأصلية."
+            : "يمكن أن تختلف هذه الغرفة عن السابقة. الحوائط المشتركة لا تتكرر؛ بل ترث سماكة الحائط المسجل من الجهة الأخرى."
+    }
+
+    private func centimetersText(_ value: Double) -> String {
+        if abs(value.rounded() - value) < 0.05 {
+            return String(Int(value.rounded()))
+        }
+        return String(format: "%.1f", value)
+    }
+}
+
+private struct RoomWallThicknessEditor: View {
+    @ObservedObject var model: RoomScanViewModel
+    let roomIndex: Int
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var bulkThicknessCentimeters = 15.0
+
+    var body: some View {
+        List {
+            Section {
+                Label(
+                    "تعديل الحائط المشترك هنا يغيّر نفس السجل في كل الغرف المرتبطة به.",
+                    systemImage: "link"
+                )
+                .font(.caption)
+
+                Label(
+                    "السماكة بيانات خاصة بالتطبيق ولا تعيد كتابة أسطح RoomPlan الأصلية.",
+                    systemImage: "lock.shield"
+                )
+                .font(.caption)
+            }
+
+            Section("تطبيق سريع على الحوائط غير المشتركة") {
+                Stepper(
+                    "\(centimetersText(bulkThicknessCentimeters)) سم",
+                    value: $bulkThicknessCentimeters,
+                    in: 5...60,
+                    step: 1
+                )
+                Button("تطبيق على الحوائط غير المشتركة فقط") {
+                    model.applyThicknessToUnsharedWalls(
+                        roomIndex: roomIndex,
+                        centimeters: bulkThicknessCentimeters
+                    )
+                }
+            }
+
+            Section("حوائط الغرفة \(roomIndex)") {
+                ForEach(model.wallItems(for: roomIndex)) { item in
+                    RoomWallThicknessRow(model: model, item: item)
+                }
+            }
+        }
+        .navigationTitle("سماكات الحوائط")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("تم") { dismiss() }
+            }
+        }
+        .onAppear {
+            bulkThicknessCentimeters = model.recommendedNextRoomThicknessCentimeters
+        }
+    }
+
+    private func centimetersText(_ value: Double) -> String {
+        if abs(value.rounded() - value) < 0.05 {
+            return String(Int(value.rounded()))
+        }
+        return String(format: "%.1f", value)
+    }
+}
+
+private struct RoomWallThicknessRow: View {
+    @ObservedObject var model: RoomScanViewModel
+    let item: RoomWallDisplayItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("الحائط \(item.wallNumber)", systemImage: item.isShared ? "link" : "rectangle")
+                    .font(.headline)
+                Spacer()
+                Text(item.isShared ? "مشترك" : "خاص بالغرفة")
+                    .font(.caption2.bold())
+                    .foregroundStyle(item.isShared ? .green : .secondary)
+            }
+
+            Stepper(
+                value: thicknessBinding,
+                in: 5...60,
+                step: 1
+            ) {
+                HStack {
+                    Text("السماكة")
+                    Spacer()
+                    Text("\(centimetersText(currentItem.thicknessCentimeters)) سم")
+                        .font(.headline)
+                        .monospacedDigit()
+                }
+            }
+
+            HStack(spacing: 8) {
+                Text(currentItem.source.arabicTitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                if let confidence = currentItem.matchConfidence {
+                    Text("تطابق \(Int((confidence * 100).rounded()))٪")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let separation = currentItem.faceSeparationCentimeters {
+                    Text("فاصل \(centimetersText(separation)) سم")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var currentItem: RoomWallDisplayItem {
+        model.wallItems(for: item.roomIndex).first(where: { $0.id == item.id }) ?? item
+    }
+
+    private var thicknessBinding: Binding<Double> {
+        Binding(
+            get: { currentItem.thicknessCentimeters },
+            set: { newValue in
+                model.updateWallThickness(
+                    buildingWallID: item.buildingWallID,
+                    centimeters: newValue
+                )
+            }
+        )
+    }
+
+    private func centimetersText(_ value: Double) -> String {
+        if abs(value.rounded() - value) < 0.05 {
+            return String(Int(value.rounded()))
+        }
+        return String(format: "%.1f", value)
     }
 }
