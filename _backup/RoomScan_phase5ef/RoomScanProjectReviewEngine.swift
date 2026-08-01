@@ -9,8 +9,6 @@ struct RoomScanProjectReviewEngine {
     let geometryOverrides: [WallGeometryOverrideRecord]
     let manualOpenings: [ManualOpeningRecord]
     let suppressedSurfaceIdentifiers: Set<UUID>
-    let levelProfiles: [RoomLevelProfileRecord]
-    let ceilingZones: [CeilingZoneRecord]
 
     func makeIssues() -> [ProjectReviewIssue] {
         var issues: [ProjectReviewIssue] = []
@@ -296,83 +294,6 @@ struct RoomScanProjectReviewEngine {
                     details: "لم يُعثر على حائط مشترك أو باب يدوي يربط الغرفة \(roomIndex) بالشبكة التي تبدأ من الغرفة 1.",
                     action: "راجع الحائط المشترك أو اربط بابًا بالغرفة المقابلة.",
                     roomIndex: roomIndex
-                )
-            }
-        }
-
-        let profileByRoom = Dictionary(uniqueKeysWithValues: levelProfiles.map { ($0.roomIndex, $0) })
-        for (offset, room) in rooms.enumerated() {
-            let roomIndex = offset + 1
-            if room.floors.isEmpty {
-                append(
-                    key: "missing-floor-\(roomIndex)",
-                    kind: .missingFloorSurface,
-                    severity: .information,
-                    title: "أرضية RoomPlan غير متوفرة",
-                    details: "لم يسجل RoomPlan سطح أرضية صريحًا للغرفة \(roomIndex)، لذلك استُنتج المنسوب من أسفل الحوائط.",
-                    action: "راجع منسوب الأرضية يدويًا من محرر الأرضية والسقف.",
-                    roomIndex: roomIndex
-                )
-            }
-
-            guard let profile = profileByRoom[roomIndex] else { continue }
-            if profile.finishedCeilingHeightMeters > profile.structuralCeilingHeightMeters + 0.01 {
-                append(
-                    key: "ceiling-profile-\(roomIndex)",
-                    kind: .ceilingHeightConflict,
-                    severity: .critical,
-                    title: "سقف التشطيب أعلى من السقف الإنشائي",
-                    details: "ارتفاع التشطيب \(Self.centimeters(Float(profile.finishedCeilingHeightMeters))) سم بينما الإنشائي \(Self.centimeters(Float(profile.structuralCeilingHeightMeters))) سم.",
-                    action: "صحح ارتفاع التشطيب أو الارتفاع الإنشائي للغرفة.",
-                    roomIndex: roomIndex
-                )
-            }
-
-            let seed = RoomLevelGeometrySeed.make(room: room)
-            for zone in ceilingZones where zone.roomIndex == roomIndex {
-                if zone.heightAboveFloorMeters > profile.structuralCeilingHeightMeters + 0.01 {
-                    append(
-                        key: "ceiling-zone-height-\(zone.id)",
-                        kind: .ceilingHeightConflict,
-                        severity: .critical,
-                        title: "منطقة سقف تتجاوز الارتفاع الإنشائي",
-                        details: "منطقة \(zone.name.isEmpty ? zone.kind.arabicTitle : zone.name) أعلى من السقف الإنشائي للغرفة.",
-                        action: "خفّض ارتفاع المنطقة أو صحح الارتفاع الإنشائي.",
-                        roomIndex: roomIndex
-                    )
-                }
-                let centerDistance = hypot(zone.centerX - seed.centerX, zone.centerZ - seed.centerZ)
-                let roomRadius = hypot(seed.widthMeters, seed.depthMeters) / 2
-                let zoneRadius = hypot(zone.widthMeters, zone.depthMeters) / 2
-                if centerDistance + zoneRadius > roomRadius * 1.35 {
-                    append(
-                        key: "ceiling-zone-outside-\(zone.id)",
-                        kind: .ceilingZoneOutsideRoom,
-                        severity: .warning,
-                        title: "منطقة سقف خارج حدود الغرفة تقريبًا",
-                        details: "مركز أو أبعاد منطقة \(zone.name.isEmpty ? zone.kind.arabicTitle : zone.name) تتجاوز بصمة أرضية الغرفة المتاحة.",
-                        action: "راجع المركز X وZ والأبعاد من محرر الأرضية والسقف.",
-                        roomIndex: roomIndex
-                    )
-                }
-            }
-        }
-
-        for group in assignmentsByWall.values {
-            let roomIndices = Array(Set(group.map(\.roomIndex))).sorted()
-            guard roomIndices.count == 2,
-                  let first = profileByRoom[roomIndices[0]],
-                  let second = profileByRoom[roomIndices[1]] else { continue }
-            let difference = abs(first.floorElevationMeters - second.floorElevationMeters)
-            if difference > 0.08 {
-                append(
-                    key: "floor-level-\(group[0].buildingWallID)",
-                    kind: .floorLevelMismatch,
-                    severity: .warning,
-                    title: "فرق منسوب بين غرفتين متجاورتين",
-                    details: "فرق منسوب الأرضية بين الغرفتين \(roomIndices[0]) و\(roomIndices[1]) يساوي \(Int((difference * 100).rounded())) سم.",
-                    action: "أكد وجود درجة فعلية أو صحح منسوب إحدى الغرف.",
-                    assignment: group.first
                 )
             }
         }

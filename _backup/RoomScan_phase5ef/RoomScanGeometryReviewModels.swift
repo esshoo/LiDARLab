@@ -131,10 +131,6 @@ enum ProjectReviewIssueKind: String, Codable {
     case orphanDetectedOpening
     case unconfirmedSharedThickness
     case extremeManualCorrection
-    case missingFloorSurface
-    case floorLevelMismatch
-    case ceilingHeightConflict
-    case ceilingZoneOutsideRoom
 }
 
 struct ProjectReviewIssue: Codable, Identifiable, Equatable {

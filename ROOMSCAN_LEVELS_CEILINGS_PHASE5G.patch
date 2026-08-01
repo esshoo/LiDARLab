@@ -1,0 +1,1767 @@
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/CHANGELOG.md /mnt/data/phase6_work/3ELiDAR-0.15.0/CHANGELOG.md
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/CHANGELOG.md	2026-08-01 17:17:42.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/CHANGELOG.md	2026-08-01 18:25:34.264548914 +0000
+@@ -1,3 +1,16 @@
++## 0.16.0
++
++- إضافة محرر مستقل لمناسيب الأرضيات وارتفاع السقف الإنشائي وسقف التشطيب لكل غرفة.
++- استخدام `CapturedRoom.floors` و`polygonCorners` من Apple RoomPlan كبصمة أولية للأرضية عند توفرها.
++- استنتاج منسوب بديل من أسفل الحوائط عندما لا يسجل RoomPlan أرضية صريحة، مع إظهار تنبيه للمراجعة.
++- إضافة مناطق سقف مستقلة للجبس والكمـرات والسواقط والمناطق المرتفعة، لكل منها موضع وأبعاد ودوران وارتفاع.
++- عرض أرضيات RoomPlan ومناطق السقف داخل مخطط 2D باستخدام SwiftUI Canvas.
++- عرض منسوب الأرضية ومناطق السقف داخل نموذج SceneKit ثلاثي الأبعاد مع تحريك الغرفة رأسيًا كوحدة واحدة عند تعديل المنسوب.
++- حفظ بيانات المناسيب داخل `Review/room-levels.json` دون تعديل `CapturedRoom` الأصلي.
++- إضافة فحوص تلقائية لفروق المناسيب بين الغرف المتجاورة، وسقف التشطيب الأعلى من الإنشائي، ومناطق السقف الخارجة تقريبًا من حدود الغرفة.
++- إضافة نسخة احتياطية لملفات 0.15.0 داخل `_backup/RoomScan_phase5ef`.
++- تحديث الإصدار إلى `0.16.0` ورقم البناء إلى `20`.
++
+ ## 0.15.0
+ 
+ - إضافة تبويب **المشكلات** داخل مركز المراجعة مع فحص هندسي تلقائي للمشروع.
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomLevelsEditorView.swift /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomLevelsEditorView.swift
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomLevelsEditorView.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomLevelsEditorView.swift	2026-08-01 18:20:53.628559684 +0000
+@@ -0,0 +1,298 @@
++import SwiftUI
++
++struct RoomLevelsEditorView: View {
++    @ObservedObject var model: RoomScanViewModel
++    let roomIndex: Int
++
++    @Environment(\.dismiss) private var dismiss
++    @State private var floorElevationCentimeters: Double = 0
++    @State private var structuralCeilingCentimeters: Double = 270
++    @State private var finishedCeilingCentimeters: Double = 270
++    @State private var story: Int = 0
++    @State private var zoneEditor: CeilingZoneEditorRequest?
++    @State private var showResetConfirmation = false
++
++    private var profile: RoomLevelProfileRecord? {
++        model.roomLevelProfile(for: roomIndex)
++    }
++
++    private var zones: [CeilingZoneRecord] {
++        model.ceilingZones(for: roomIndex)
++    }
++
++    var body: some View {
++        Form {
++            Section {
++                Stepper("الدور أو الطابق: \(story)", value: $story, in: -10...100)
++                signedMeasurementField("منسوب الأرضية", value: $floorElevationCentimeters)
++                measurementField("ارتفاع السقف الإنشائي", value: $structuralCeilingCentimeters, range: 20...2_000)
++                measurementField("ارتفاع التشطيب الافتراضي", value: $finishedCeilingCentimeters, range: 20...2_000)
++            } header: {
++                Text("مناسيب الغرفة \(roomIndex)")
++            } footer: {
++                Text("يستخدم التطبيق أرضيات RoomPlan كقيمة أولية عند توفرها، ثم يحفظ تصحيحاتك في طبقة مستقلة دون تغيير CapturedRoom الأصلي.")
++            }
++
++            Section {
++                if zones.isEmpty {
++                    ContentUnavailableView(
++                        "لا توجد مناطق سقف",
++                        systemImage: "rectangle.dashed",
++                        description: Text("أضف منطقة جبس أو كمرة عندما يختلف الارتفاع داخل الغرفة.")
++                    )
++                } else {
++                    ForEach(zones) { zone in
++                        Button {
++                            zoneEditor = CeilingZoneEditorRequest(zone: zone)
++                        } label: {
++                            HStack(spacing: 12) {
++                                Image(systemName: zone.kind.systemImage)
++                                    .foregroundStyle(.indigo)
++                                VStack(alignment: .leading, spacing: 4) {
++                                    Text(zone.name.isEmpty ? zone.kind.arabicTitle : zone.name)
++                                        .font(.headline)
++                                    Text("\(centimeters(zone.widthMeters)) × \(centimeters(zone.depthMeters)) سم • ارتفاع \(centimeters(zone.heightAboveFloorMeters)) سم")
++                                        .font(.caption)
++                                        .foregroundStyle(.secondary)
++                                }
++                                Spacer()
++                                Image(systemName: "chevron.left")
++                                    .foregroundStyle(.tertiary)
++                            }
++                        }
++                        .buttonStyle(.plain)
++                        .swipeActions {
++                            Button(role: .destructive) {
++                                model.deleteCeilingZone(id: zone.id)
++                            } label: {
++                                Label("حذف", systemImage: "trash")
++                            }
++                        }
++                    }
++                }
++
++                Button {
++                    zoneEditor = CeilingZoneEditorRequest(zone: model.suggestedCeilingZone(for: roomIndex))
++                } label: {
++                    Label("إضافة منطقة سقف", systemImage: "plus.rectangle.on.rectangle")
++                }
++            } header: {
++                Text("مناطق السقف المستعار والكمـرات")
++            } footer: {
++                Text("كل منطقة لها موضع وأبعاد وارتفاع مستقل، وتظهر في مخطط 2D وعرض SceneKit ثلاثي الأبعاد.")
++            }
++
++            Section {
++                Button(role: .destructive) {
++                    showResetConfirmation = true
++                } label: {
++                    Label("إعادة المناسيب إلى اقتراح RoomPlan", systemImage: "arrow.uturn.backward.circle")
++                }
++            }
++        }
++        .navigationTitle("الأرضية والسقف")
++        .navigationBarTitleDisplayMode(.inline)
++        .toolbar {
++            ToolbarItem(placement: .cancellationAction) {
++                Button("إلغاء") { dismiss() }
++            }
++            ToolbarItem(placement: .confirmationAction) {
++                Button("حفظ") {
++                    model.saveRoomLevelProfile(
++                        roomIndex: roomIndex,
++                        story: story,
++                        floorElevationCentimeters: floorElevationCentimeters,
++                        structuralCeilingCentimeters: structuralCeilingCentimeters,
++                        finishedCeilingCentimeters: finishedCeilingCentimeters
++                    )
++                    dismiss()
++                }
++                .fontWeight(.semibold)
++            }
++        }
++        .sheet(item: $zoneEditor) { request in
++            NavigationStack {
++                CeilingZoneEditorView(model: model, zone: request.zone)
++            }
++        }
++        .onAppear { reloadProfile() }
++        .confirmationDialog(
++            "استعادة اقتراح RoomPlan؟",
++            isPresented: $showResetConfirmation,
++            titleVisibility: .visible
++        ) {
++            Button("استعادة المناسيب وحذف المناطق", role: .destructive) {
++                model.resetRoomLevelProfile(roomIndex: roomIndex, deleteZones: true)
++                reloadProfile()
++            }
++            Button("استعادة المناسيب فقط", role: .destructive) {
++                model.resetRoomLevelProfile(roomIndex: roomIndex, deleteZones: false)
++                reloadProfile()
++            }
++            Button("إلغاء", role: .cancel) {}
++        } message: {
++            Text("سيعود منسوب الأرضية وارتفاع السقف إلى القيم المستنتجة من بيانات RoomPlan المحفوظة.")
++        }
++    }
++
++    private func reloadProfile() {
++        model.ensureRoomLevelProfile(for: roomIndex)
++        guard let profile = model.roomLevelProfile(for: roomIndex) else { return }
++        story = profile.story
++        floorElevationCentimeters = profile.floorElevationMeters * 100
++        structuralCeilingCentimeters = profile.structuralCeilingHeightMeters * 100
++        finishedCeilingCentimeters = profile.finishedCeilingHeightMeters * 100
++    }
++
++    private func measurementField(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
++        HStack {
++            Text(title)
++            Spacer()
++            TextField("سم", value: value, format: .number.precision(.fractionLength(1)))
++                .keyboardType(.decimalPad)
++                .multilineTextAlignment(.trailing)
++                .frame(width: 105)
++                .onChange(of: value.wrappedValue) { _, newValue in
++                    value.wrappedValue = min(max(newValue, range.lowerBound), range.upperBound)
++                }
++            Text("سم").foregroundStyle(.secondary)
++        }
++    }
++
++    private func signedMeasurementField(_ title: String, value: Binding<Double>) -> some View {
++        HStack {
++            Text(title)
++            Spacer()
++            TextField("0", value: value, format: .number.precision(.fractionLength(1)))
++                .keyboardType(.numbersAndPunctuation)
++                .multilineTextAlignment(.trailing)
++                .frame(width: 105)
++            Text("سم").foregroundStyle(.secondary)
++        }
++    }
++
++    private func centimeters(_ meters: Double) -> String {
++        String(format: "%.0f", meters * 100)
++    }
++}
++
++private struct CeilingZoneEditorRequest: Identifiable {
++    let zone: CeilingZoneRecord
++    var id: UUID { zone.id }
++}
++
++private struct CeilingZoneEditorView: View {
++    @ObservedObject var model: RoomScanViewModel
++    let zone: CeilingZoneRecord
++
++    @Environment(\.dismiss) private var dismiss
++    @State private var name: String
++    @State private var kind: CeilingZoneKind
++    @State private var centerXCentimeters: Double
++    @State private var centerZCentimeters: Double
++    @State private var widthCentimeters: Double
++    @State private var depthCentimeters: Double
++    @State private var rotationDegrees: Double
++    @State private var heightCentimeters: Double
++
++    init(model: RoomScanViewModel, zone: CeilingZoneRecord) {
++        self.model = model
++        self.zone = zone
++        _name = State(initialValue: zone.name)
++        _kind = State(initialValue: zone.kind)
++        _centerXCentimeters = State(initialValue: zone.centerX * 100)
++        _centerZCentimeters = State(initialValue: zone.centerZ * 100)
++        _widthCentimeters = State(initialValue: zone.widthMeters * 100)
++        _depthCentimeters = State(initialValue: zone.depthMeters * 100)
++        _rotationDegrees = State(initialValue: zone.rotationDegrees)
++        _heightCentimeters = State(initialValue: zone.heightAboveFloorMeters * 100)
++    }
++
++    var body: some View {
++        Form {
++            Section("المنطقة") {
++                TextField("اسم اختياري", text: $name)
++                Picker("النوع", selection: $kind) {
++                    ForEach(CeilingZoneKind.allCases) { item in
++                        Label(item.arabicTitle, systemImage: item.systemImage).tag(item)
++                    }
++                }
++            }
++
++            Section("الأبعاد والارتفاع") {
++                measurementField("العرض", value: $widthCentimeters, range: 20...5_000)
++                measurementField("العمق", value: $depthCentimeters, range: 20...5_000)
++                measurementField("الارتفاع فوق الأرضية", value: $heightCentimeters, range: 20...2_000)
++            }
++
++            Section {
++                signedMeasurementField("المركز X", value: $centerXCentimeters)
++                signedMeasurementField("المركز Z", value: $centerZCentimeters)
++                HStack {
++                    Text("الدوران")
++                    Spacer()
++                    TextField("0", value: $rotationDegrees, format: .number.precision(.fractionLength(1)))
++                        .keyboardType(.numbersAndPunctuation)
++                        .multilineTextAlignment(.trailing)
++                        .frame(width: 100)
++                    Text("°").foregroundStyle(.secondary)
++                }
++            } header: {
++                Text("الموقع داخل إحداثيات المشروع")
++            } footer: {
++                Text("القيم X وZ بالسنتيمتر داخل نظام الإحداثيات المشترك للمبنى. الاقتراح الأولي مأخوذ من أكبر أرضية اكتشفها RoomPlan للغرفة.")
++            }
++        }
++        .navigationTitle(zone.name.isEmpty ? "منطقة سقف" : zone.name)
++        .navigationBarTitleDisplayMode(.inline)
++        .toolbar {
++            ToolbarItem(placement: .cancellationAction) {
++                Button("إلغاء") { dismiss() }
++            }
++            ToolbarItem(placement: .confirmationAction) {
++                Button("حفظ") {
++                    var updated = zone
++                    updated.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
++                    updated.kind = kind
++                    updated.centerX = centerXCentimeters / 100
++                    updated.centerZ = centerZCentimeters / 100
++                    updated.widthMeters = min(max(widthCentimeters / 100, 0.20), 50)
++                    updated.depthMeters = min(max(depthCentimeters / 100, 0.20), 50)
++                    updated.rotationDegrees = min(max(rotationDegrees, -180), 180)
++                    updated.heightAboveFloorMeters = min(max(heightCentimeters / 100, 0.20), 20)
++                    updated.updatedAt = Date()
++                    model.saveCeilingZone(updated)
++                    dismiss()
++                }
++                .fontWeight(.semibold)
++            }
++        }
++    }
++
++    private func measurementField(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
++        HStack {
++            Text(title)
++            Spacer()
++            TextField("سم", value: value, format: .number.precision(.fractionLength(1)))
++                .keyboardType(.decimalPad)
++                .multilineTextAlignment(.trailing)
++                .frame(width: 105)
++                .onChange(of: value.wrappedValue) { _, newValue in
++                    value.wrappedValue = min(max(newValue, range.lowerBound), range.upperBound)
++                }
++            Text("سم").foregroundStyle(.secondary)
++        }
++    }
++
++    private func signedMeasurementField(_ title: String, value: Binding<Double>) -> some View {
++        HStack {
++            Text(title)
++            Spacer()
++            TextField("0", value: value, format: .number.precision(.fractionLength(1)))
++                .keyboardType(.numbersAndPunctuation)
++                .multilineTextAlignment(.trailing)
++                .frame(width: 105)
++            Text("سم").foregroundStyle(.secondary)
++        }
++    }
++}
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanGeometryReviewModels.swift /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanGeometryReviewModels.swift
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanGeometryReviewModels.swift	2026-08-01 17:18:25.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanGeometryReviewModels.swift	2026-08-01 18:22:08.580556808 +0000
+@@ -131,6 +131,10 @@
+     case orphanDetectedOpening
+     case unconfirmedSharedThickness
+     case extremeManualCorrection
++    case missingFloorSurface
++    case floorLevelMismatch
++    case ceilingHeightConflict
++    case ceilingZoneOutsideRoom
+ }
+ 
+ struct ProjectReviewIssue: Codable, Identifiable, Equatable {
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanLevelModels.swift /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanLevelModels.swift
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanLevelModels.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanLevelModels.swift	2026-08-01 18:20:53.628559684 +0000
+@@ -0,0 +1,219 @@
++import Foundation
++import RoomPlan
++import simd
++
++/// App-owned floor and ceiling information. RoomPlan remains the immutable source scan.
++struct RoomLevelProfileRecord: Codable, Identifiable, Equatable {
++    let id: UUID
++    let roomIndex: Int
++    let roomIdentifier: UUID
++    var story: Int
++    let roomPlanFloorElevationMeters: Double
++    var floorElevationMeters: Double
++    var structuralCeilingHeightMeters: Double
++    var finishedCeilingHeightMeters: Double
++    let createdAt: Date
++    var updatedAt: Date
++}
++
++enum CeilingZoneKind: String, Codable, CaseIterable, Identifiable {
++    case falseCeiling
++    case soffit
++    case beam
++    case raisedCeiling
++    case custom
++
++    var id: String { rawValue }
++
++    var arabicTitle: String {
++        switch self {
++        case .falseCeiling: return "سقف مستعار"
++        case .soffit: return "ساقط جبس"
++        case .beam: return "كمرة"
++        case .raisedCeiling: return "منطقة مرتفعة"
++        case .custom: return "منطقة مخصصة"
++        }
++    }
++
++    var systemImage: String {
++        switch self {
++        case .falseCeiling: return "rectangle.inset.filled"
++        case .soffit: return "rectangle.bottomhalf.inset.filled"
++        case .beam: return "rectangle.compress.vertical"
++        case .raisedCeiling: return "arrow.up.to.line"
++        case .custom: return "square.dashed"
++        }
++    }
++}
++
++/// Rectangular app-owned ceiling region expressed in the shared building coordinate space.
++struct CeilingZoneRecord: Codable, Identifiable, Equatable {
++    let id: UUID
++    let roomIndex: Int
++    var name: String
++    var kind: CeilingZoneKind
++    var centerX: Double
++    var centerZ: Double
++    var widthMeters: Double
++    var depthMeters: Double
++    var rotationDegrees: Double
++    var heightAboveFloorMeters: Double
++    let createdAt: Date
++    var updatedAt: Date
++}
++
++struct RoomLevelDocument: Codable, Equatable {
++    let schemaVersion: Int
++    let updatedAt: Date
++    let profiles: [RoomLevelProfileRecord]
++    let ceilingZones: [CeilingZoneRecord]
++}
++
++/// Lightweight geometry seed derived from Apple RoomPlan floor surfaces where available.
++struct RoomLevelGeometrySeed: Equatable {
++    let floorElevationMeters: Double
++    let structuralCeilingHeightMeters: Double
++    let centerX: Double
++    let centerZ: Double
++    let widthMeters: Double
++    let depthMeters: Double
++    let rotationDegrees: Double
++
++    static func make(room: CapturedRoom) -> RoomLevelGeometrySeed {
++        let floorElevations = room.floors.map { Double($0.transform.columns.3.y) }
++        let wallBottoms = room.walls.map {
++            Double($0.transform.columns.3.y - $0.dimensions.y / 2)
++        }
++        let floorElevation = median(floorElevations)
++            ?? median(wallBottoms)
++            ?? 0
++
++        let wallTops = room.walls.map {
++            Double($0.transform.columns.3.y + $0.dimensions.y / 2)
++        }
++        let structuralHeight = max((wallTops.max() ?? floorElevation + 2.7) - floorElevation, 0.20)
++
++        if let floor = room.floors.max(by: { floorArea($0) < floorArea($1) }) {
++            let axis = normalized(SIMD2<Float>(floor.transform.columns.0.x, floor.transform.columns.0.z))
++            let rotation = atan2(Double(axis.y), Double(axis.x)) * 180 / .pi
++            let footprint = floorFootprint(surface: floor)
++            if !footprint.isEmpty {
++                let bounds = orientedBounds(points: footprint, axis: axis)
++                return RoomLevelGeometrySeed(
++                    floorElevationMeters: floorElevation,
++                    structuralCeilingHeightMeters: structuralHeight,
++                    centerX: Double(bounds.center.x),
++                    centerZ: Double(bounds.center.y),
++                    widthMeters: max(Double(bounds.width), 0.20),
++                    depthMeters: max(Double(bounds.depth), 0.20),
++                    rotationDegrees: rotation
++                )
++            }
++            return RoomLevelGeometrySeed(
++                floorElevationMeters: floorElevation,
++                structuralCeilingHeightMeters: structuralHeight,
++                centerX: Double(floor.transform.columns.3.x),
++                centerZ: Double(floor.transform.columns.3.z),
++                widthMeters: max(Double(floor.dimensions.x), 0.20),
++                depthMeters: max(Double(floor.dimensions.y), 0.20),
++                rotationDegrees: rotation
++            )
++        }
++
++        let wallPoints = room.walls.flatMap { wall -> [SIMD2<Float>] in
++            let center = SIMD2<Float>(wall.transform.columns.3.x, wall.transform.columns.3.z)
++            let tangent = normalized(SIMD2<Float>(wall.transform.columns.0.x, wall.transform.columns.0.z))
++            let half = max(wall.dimensions.x, 0.05) / 2
++            return [center - tangent * half, center + tangent * half]
++        }
++        if let first = wallPoints.first {
++            var minX = first.x
++            var maxX = first.x
++            var minZ = first.y
++            var maxZ = first.y
++            for point in wallPoints.dropFirst() {
++                minX = min(minX, point.x)
++                maxX = max(maxX, point.x)
++                minZ = min(minZ, point.y)
++                maxZ = max(maxZ, point.y)
++            }
++            return RoomLevelGeometrySeed(
++                floorElevationMeters: floorElevation,
++                structuralCeilingHeightMeters: structuralHeight,
++                centerX: Double((minX + maxX) / 2),
++                centerZ: Double((minZ + maxZ) / 2),
++                widthMeters: max(Double(maxX - minX), 0.20),
++                depthMeters: max(Double(maxZ - minZ), 0.20),
++                rotationDegrees: 0
++            )
++        }
++
++        return RoomLevelGeometrySeed(
++            floorElevationMeters: floorElevation,
++            structuralCeilingHeightMeters: structuralHeight,
++            centerX: 0,
++            centerZ: 0,
++            widthMeters: 1,
++            depthMeters: 1,
++            rotationDegrees: 0
++        )
++    }
++
++    static func floorFootprint(surface: CapturedRoom.Surface) -> [SIMD2<Float>] {
++        if !surface.polygonCorners.isEmpty {
++            return surface.polygonCorners.map { corner in
++                let world = surface.transform * SIMD4<Float>(corner.x, corner.y, corner.z, 1)
++                return SIMD2<Float>(world.x, world.z)
++            }
++        }
++
++        let center = SIMD2<Float>(surface.transform.columns.3.x, surface.transform.columns.3.z)
++        let axisX = normalized(SIMD2<Float>(surface.transform.columns.0.x, surface.transform.columns.0.z))
++        var axisZ = normalized(SIMD2<Float>(surface.transform.columns.1.x, surface.transform.columns.1.z))
++        if simd_length(axisZ) < 0.001 || abs(simd_dot(axisX, axisZ)) > 0.98 {
++            axisZ = SIMD2<Float>(-axisX.y, axisX.x)
++        }
++        let halfWidth = max(surface.dimensions.x, 0.05) / 2
++        let halfDepth = max(surface.dimensions.y, 0.05) / 2
++        return [
++            center - axisX * halfWidth - axisZ * halfDepth,
++            center + axisX * halfWidth - axisZ * halfDepth,
++            center + axisX * halfWidth + axisZ * halfDepth,
++            center - axisX * halfWidth + axisZ * halfDepth
++        ]
++    }
++
++    private static func floorArea(_ surface: CapturedRoom.Surface) -> Float {
++        max(surface.dimensions.x, 0.01) * max(surface.dimensions.y, 0.01)
++    }
++
++    private static func median(_ values: [Double]) -> Double? {
++        guard !values.isEmpty else { return nil }
++        let sorted = values.sorted()
++        let middle = sorted.count / 2
++        if sorted.count.isMultiple(of: 2) {
++            return (sorted[middle - 1] + sorted[middle]) / 2
++        }
++        return sorted[middle]
++    }
++
++    private static func normalized(_ value: SIMD2<Float>) -> SIMD2<Float> {
++        let length = simd_length(value)
++        return length > 0.0001 ? value / length : SIMD2<Float>(1, 0)
++    }
++
++    private static func orientedBounds(
++        points: [SIMD2<Float>],
++        axis: SIMD2<Float>
++    ) -> (center: SIMD2<Float>, width: Float, depth: Float) {
++        let normal = SIMD2<Float>(-axis.y, axis.x)
++        let projectedX = points.map { simd_dot($0, axis) }
++        let projectedZ = points.map { simd_dot($0, normal) }
++        let minX = projectedX.min() ?? 0
++        let maxX = projectedX.max() ?? 1
++        let minZ = projectedZ.min() ?? 0
++        let maxZ = projectedZ.max() ?? 1
++        let center = axis * ((minX + maxX) / 2) + normal * ((minZ + maxZ) / 2)
++        return (center, maxX - minX, maxZ - minZ)
++    }
++}
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProject3DView.swift /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProject3DView.swift
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProject3DView.swift	2026-08-01 17:14:24.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProject3DView.swift	2026-08-01 18:26:37.884546473 +0000
+@@ -15,6 +15,8 @@
+     let manualOpenings: [ManualOpeningRecord]
+     let suppressedSurfaceIdentifiers: Set<UUID>
+     let geometryOverrides: [WallGeometryOverrideRecord]
++    let levelProfiles: [RoomLevelProfileRecord]
++    let ceilingZones: [CeilingZoneRecord]
+     let issueWallIdentifiers: Set<UUID>
+ 
+     func makeUIView(context: Context) -> SCNView {
+@@ -38,6 +40,7 @@
+         scene.rootNode.addChildNode(modelRoot)
+ 
+         let thicknessByWallID = Dictionary(uniqueKeysWithValues: wallRecords.map { ($0.id, $0.thicknessMeters) })
++        let profileByRoom = Dictionary(uniqueKeysWithValues: levelProfiles.map { ($0.roomIndex, $0) })
+         var assignmentByFace: [FaceKey: RoomWallAssignment] = [:]
+         let overrideByAssignment = Dictionary(
+             uniqueKeysWithValues: geometryOverrides.map { ($0.assignmentID, $0) }
+@@ -50,22 +53,44 @@
+         }
+ 
+         for (offset, room) in rooms.enumerated() {
++            let roomIndex = offset + 1
++            let profile = profileByRoom[roomIndex]
++            let seed = RoomLevelGeometrySeed.make(room: room)
++            let verticalOffset = Float((profile?.floorElevationMeters ?? seed.floorElevationMeters) - seed.floorElevationMeters)
+             addRoom(
+                 room,
+-                roomIndex: offset + 1,
++                roomIndex: roomIndex,
+                 isCorrection: false,
++                verticalOffset: verticalOffset,
++                targetFloorY: Float(profile?.floorElevationMeters ?? seed.floorElevationMeters),
++                targetStructuralHeight: profile.map { Float($0.structuralCeilingHeightMeters) },
+                 to: modelRoot,
+                 assignmentByFace: assignmentByFace,
+                 thicknessByWallID: thicknessByWallID,
+                 overrideByAssignment: overrideByAssignment
+             )
++            addFloors(
++                room,
++                roomIndex: roomIndex,
++                profile: profile,
++                seed: seed,
++                to: modelRoot
++            )
+         }
+ 
+         for layer in corrections {
++            let profile = profileByRoom[layer.roomIndex]
++            let seed = rooms.indices.contains(layer.roomIndex - 1)
++                ? RoomLevelGeometrySeed.make(room: rooms[layer.roomIndex - 1])
++                : RoomLevelGeometrySeed.make(room: layer.room)
++            let verticalOffset = Float((profile?.floorElevationMeters ?? seed.floorElevationMeters) - seed.floorElevationMeters)
+             addRoom(
+                 layer.room,
+                 roomIndex: layer.roomIndex,
+                 isCorrection: true,
++                verticalOffset: verticalOffset,
++                targetFloorY: Float(profile?.floorElevationMeters ?? seed.floorElevationMeters),
++                targetStructuralHeight: profile.map { Float($0.structuralCeilingHeightMeters) },
+                 to: modelRoot,
+                 assignmentByFace: assignmentByFace,
+                 thicknessByWallID: thicknessByWallID,
+@@ -74,7 +99,17 @@
+         }
+ 
+         for opening in manualOpenings {
+-            modelRoot.addChildNode(manualOpeningNode(opening))
++            let profile = profileByRoom[opening.sourceRoomIndex]
++            let seed = rooms.indices.contains(opening.sourceRoomIndex - 1)
++                ? RoomLevelGeometrySeed.make(room: rooms[opening.sourceRoomIndex - 1])
++                : nil
++            let verticalOffset = Float((profile?.floorElevationMeters ?? seed?.floorElevationMeters ?? 0) - (seed?.floorElevationMeters ?? 0))
++            modelRoot.addChildNode(manualOpeningNode(opening, verticalOffset: verticalOffset))
++        }
++
++        for zone in ceilingZones {
++            guard let profile = profileByRoom[zone.roomIndex] else { continue }
++            modelRoot.addChildNode(ceilingZoneNode(zone, floorElevation: profile.floorElevationMeters))
+         }
+ 
+         addReferenceFloor(to: scene.rootNode, modelRoot: modelRoot)
+@@ -86,6 +121,9 @@
+         _ room: CapturedRoom,
+         roomIndex: Int,
+         isCorrection: Bool,
++        verticalOffset: Float,
++        targetFloorY: Float,
++        targetStructuralHeight: Float?,
+         to root: SCNNode,
+         assignmentByFace: [FaceKey: RoomWallAssignment],
+         thicknessByWallID: [UUID: Double],
+@@ -105,81 +143,97 @@
+                     base: assignment.geometry,
+                     adjustment: overrideByAssignment[assignment.id]
+                 )
+-                root.addChildNode(
+-                    wallNode(
+-                        geometry: geometry,
+-                        depth: max(thickness, 0.03),
+-                        material: wallMaterial
+-                    )
++                let hasManualHeight = overrideByAssignment[assignment.id] != nil
++                let displayHeight = hasManualHeight
++                    ? geometry.heightMeters
++                    : max(targetStructuralHeight ?? geometry.heightMeters, 0.05)
++                let node = wallNode(
++                    geometry: geometry,
++                    displayHeight: displayHeight,
++                    centerY: targetFloorY + displayHeight / 2,
++                    depth: max(thickness, 0.03),
++                    material: wallMaterial
+                 )
++                root.addChildNode(node)
+             } else {
+-                root.addChildNode(
+-                    surfaceNode(
+-                        wall,
+-                        depth: max(thickness, 0.03),
+-                        material: wallMaterial
+-                    )
++                let displayHeight = max(targetStructuralHeight ?? wall.dimensions.y, 0.05)
++                let node = surfaceNode(
++                    wall,
++                    depth: max(thickness, 0.03),
++                    material: wallMaterial,
++                    displayHeight: displayHeight,
++                    centerY: targetFloorY + displayHeight / 2
+                 )
++                root.addChildNode(node)
+             }
+         }
+ 
+-        addDetectedSurfaces(room.doors, color: .systemOrange, isCorrection: isCorrection, to: root)
+-        addDetectedSurfaces(room.windows, color: .systemBlue, isCorrection: isCorrection, to: root)
+-        addDetectedSurfaces(room.openings, color: .systemGreen, isCorrection: isCorrection, to: root)
++        addDetectedSurfaces(room.doors, color: .systemOrange, isCorrection: isCorrection, verticalOffset: verticalOffset, to: root)
++        addDetectedSurfaces(room.windows, color: .systemBlue, isCorrection: isCorrection, verticalOffset: verticalOffset, to: root)
++        addDetectedSurfaces(room.openings, color: .systemGreen, isCorrection: isCorrection, verticalOffset: verticalOffset, to: root)
+     }
+ 
+     private func addDetectedSurfaces(
+         _ surfaces: [CapturedRoom.Surface],
+         color: UIColor,
+         isCorrection: Bool,
++        verticalOffset: Float,
+         to root: SCNNode
+     ) {
+         for surface in surfaces where !suppressedSurfaceIdentifiers.contains(surface.identifier) {
+-            root.addChildNode(
+-                surfaceNode(
+-                    surface,
+-                    depth: isCorrection ? 0.025 : 0.04,
+-                    material: material(color: color, opacity: isCorrection ? 0.40 : 0.90)
+-                )
++            let node = surfaceNode(
++                surface,
++                depth: isCorrection ? 0.025 : 0.04,
++                material: material(color: color, opacity: isCorrection ? 0.40 : 0.90)
+             )
++            node.simdPosition.y += verticalOffset
++            root.addChildNode(node)
+         }
+     }
+ 
+     private func wallNode(
+         geometry: EffectiveWallGeometry,
++        displayHeight: Float,
++        centerY: Float,
+         depth: Double,
+         material: SCNMaterial
+     ) -> SCNNode {
+         let box = SCNBox(
+             width: CGFloat(max(geometry.widthMeters, 0.03)),
+-            height: CGFloat(max(geometry.heightMeters, 0.03)),
++            height: CGFloat(max(displayHeight, 0.03)),
+             length: CGFloat(max(depth, 0.01)),
+             chamferRadius: 0.005
+         )
+         box.materials = [material]
+         let node = SCNNode(geometry: box)
+-        node.simdTransform = geometry.transform
++        var transform = geometry.transform
++        transform.columns.3.y = centerY
++        node.simdTransform = transform
+         return node
+     }
+ 
+     private func surfaceNode(
+         _ surface: CapturedRoom.Surface,
+         depth: Double,
+-        material: SCNMaterial
++        material: SCNMaterial,
++        displayHeight: Float? = nil,
++        centerY: Float? = nil
+     ) -> SCNNode {
+         let geometry = SCNBox(
+             width: CGFloat(max(surface.dimensions.x, 0.03)),
+-            height: CGFloat(max(surface.dimensions.y, 0.03)),
++            height: CGFloat(max(displayHeight ?? surface.dimensions.y, 0.03)),
+             length: CGFloat(max(depth, 0.01)),
+             chamferRadius: 0.005
+         )
+         geometry.materials = [material]
+         let node = SCNNode(geometry: geometry)
+-        node.simdTransform = surface.transform
++        var transform = surface.transform
++        if let centerY { transform.columns.3.y = centerY }
++        node.simdTransform = transform
+         return node
+     }
+ 
+-    private func manualOpeningNode(_ record: ManualOpeningRecord) -> SCNNode {
++    private func manualOpeningNode(_ record: ManualOpeningRecord, verticalOffset: Float) -> SCNNode {
+         let geometry = SCNBox(
+             width: CGFloat(max(record.widthMeters, 0.05)),
+             height: CGFloat(max(record.heightMeters, 0.05)),
+@@ -200,7 +254,7 @@
+         transform.columns.0 = SIMD4<Float>(tangent.x, tangent.y, tangent.z, 0)
+         transform.columns.1 = SIMD4<Float>(0, 1, 0, 0)
+         transform.columns.2 = SIMD4<Float>(normal.x, normal.y, normal.z, 0)
+-        transform.columns.3 = SIMD4<Float>(record.centerX, record.centerY, record.centerZ, 1)
++        transform.columns.3 = SIMD4<Float>(record.centerX, record.centerY + verticalOffset, record.centerZ, 1)
+ 
+         let node = SCNNode(geometry: geometry)
+         node.simdTransform = transform
+@@ -208,6 +262,94 @@
+         return node
+     }
+ 
++    private func addFloors(
++        _ room: CapturedRoom,
++        roomIndex: Int,
++        profile: RoomLevelProfileRecord?,
++        seed: RoomLevelGeometrySeed,
++        to root: SCNNode
++    ) {
++        let targetY = Float(profile?.floorElevationMeters ?? seed.floorElevationMeters)
++        if room.floors.isEmpty {
++            let box = SCNBox(
++                width: CGFloat(max(seed.widthMeters, 0.20)),
++                height: 0.025,
++                length: CGFloat(max(seed.depthMeters, 0.20)),
++                chamferRadius: 0
++            )
++            box.materials = [material(color: .systemBrown, opacity: 0.24)]
++            let node = SCNNode(geometry: box)
++            node.eulerAngles.y = Float(-seed.rotationDegrees * .pi / 180)
++            node.position = SCNVector3(
++                Float(seed.centerX),
++                targetY - 0.015,
++                Float(seed.centerZ)
++            )
++            node.name = "FallbackFloor-Room-\(roomIndex)"
++            root.addChildNode(node)
++            return
++        }
++
++        for floor in room.floors {
++            let box = SCNBox(
++                width: CGFloat(max(floor.dimensions.x, 0.05)),
++                height: 0.025,
++                length: CGFloat(max(floor.dimensions.y, 0.05)),
++                chamferRadius: 0
++            )
++            box.materials = [material(color: .systemBrown, opacity: 0.24)]
++            let node = SCNNode(geometry: box)
++            var transform = matrix_identity_float4x4
++            let axisX = simd_normalize(SIMD3<Float>(
++                floor.transform.columns.0.x, floor.transform.columns.0.y, floor.transform.columns.0.z
++            ))
++            let planeAxis = simd_normalize(SIMD3<Float>(
++                floor.transform.columns.1.x, floor.transform.columns.1.y, floor.transform.columns.1.z
++            ))
++            var normal = simd_normalize(simd_cross(axisX, planeAxis))
++            if abs(normal.y) < 0.5 { normal = SIMD3<Float>(0, 1, 0) }
++            transform.columns.0 = SIMD4<Float>(axisX.x, axisX.y, axisX.z, 0)
++            transform.columns.1 = SIMD4<Float>(normal.x, normal.y, normal.z, 0)
++            transform.columns.2 = SIMD4<Float>(planeAxis.x, planeAxis.y, planeAxis.z, 0)
++            transform.columns.3 = SIMD4<Float>(
++                floor.transform.columns.3.x,
++                targetY - 0.015,
++                floor.transform.columns.3.z,
++                1
++            )
++            node.simdTransform = transform
++            node.name = "RoomPlanFloor-\(floor.identifier.uuidString)"
++            root.addChildNode(node)
++        }
++    }
++
++    private func ceilingZoneNode(_ zone: CeilingZoneRecord, floorElevation: Double) -> SCNNode {
++        let box = SCNBox(
++            width: CGFloat(max(zone.widthMeters, 0.05)),
++            height: 0.045,
++            length: CGFloat(max(zone.depthMeters, 0.05)),
++            chamferRadius: 0.01
++        )
++        let color: UIColor
++        switch zone.kind {
++        case .falseCeiling: color = .systemIndigo
++        case .soffit: color = .systemPurple
++        case .beam: color = .systemOrange
++        case .raisedCeiling: color = .systemBlue
++        case .custom: color = .systemTeal
++        }
++        box.materials = [material(color: color, opacity: 0.48)]
++        let node = SCNNode(geometry: box)
++        node.position = SCNVector3(
++            Float(zone.centerX),
++            Float(floorElevation + zone.heightAboveFloorMeters),
++            Float(zone.centerZ)
++        )
++        node.eulerAngles.y = Float(-zone.rotationDegrees * .pi / 180)
++        node.name = "CeilingZone-\(zone.id.uuidString)"
++        return node
++    }
++
+     private func material(color: UIColor, opacity: CGFloat) -> SCNMaterial {
+         let material = SCNMaterial()
+         material.diffuse.contents = color
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProjectReviewEngine.swift /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProjectReviewEngine.swift
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProjectReviewEngine.swift	2026-08-01 17:18:53.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProjectReviewEngine.swift	2026-08-01 18:22:08.580556808 +0000
+@@ -9,6 +9,8 @@
+     let geometryOverrides: [WallGeometryOverrideRecord]
+     let manualOpenings: [ManualOpeningRecord]
+     let suppressedSurfaceIdentifiers: Set<UUID>
++    let levelProfiles: [RoomLevelProfileRecord]
++    let ceilingZones: [CeilingZoneRecord]
+ 
+     func makeIssues() -> [ProjectReviewIssue] {
+         var issues: [ProjectReviewIssue] = []
+@@ -297,6 +299,83 @@
+                 )
+             }
+         }
++
++        let profileByRoom = Dictionary(uniqueKeysWithValues: levelProfiles.map { ($0.roomIndex, $0) })
++        for (offset, room) in rooms.enumerated() {
++            let roomIndex = offset + 1
++            if room.floors.isEmpty {
++                append(
++                    key: "missing-floor-\(roomIndex)",
++                    kind: .missingFloorSurface,
++                    severity: .information,
++                    title: "أرضية RoomPlan غير متوفرة",
++                    details: "لم يسجل RoomPlan سطح أرضية صريحًا للغرفة \(roomIndex)، لذلك استُنتج المنسوب من أسفل الحوائط.",
++                    action: "راجع منسوب الأرضية يدويًا من محرر الأرضية والسقف.",
++                    roomIndex: roomIndex
++                )
++            }
++
++            guard let profile = profileByRoom[roomIndex] else { continue }
++            if profile.finishedCeilingHeightMeters > profile.structuralCeilingHeightMeters + 0.01 {
++                append(
++                    key: "ceiling-profile-\(roomIndex)",
++                    kind: .ceilingHeightConflict,
++                    severity: .critical,
++                    title: "سقف التشطيب أعلى من السقف الإنشائي",
++                    details: "ارتفاع التشطيب \(Self.centimeters(Float(profile.finishedCeilingHeightMeters))) سم بينما الإنشائي \(Self.centimeters(Float(profile.structuralCeilingHeightMeters))) سم.",
++                    action: "صحح ارتفاع التشطيب أو الارتفاع الإنشائي للغرفة.",
++                    roomIndex: roomIndex
++                )
++            }
++
++            let seed = RoomLevelGeometrySeed.make(room: room)
++            for zone in ceilingZones where zone.roomIndex == roomIndex {
++                if zone.heightAboveFloorMeters > profile.structuralCeilingHeightMeters + 0.01 {
++                    append(
++                        key: "ceiling-zone-height-\(zone.id)",
++                        kind: .ceilingHeightConflict,
++                        severity: .critical,
++                        title: "منطقة سقف تتجاوز الارتفاع الإنشائي",
++                        details: "منطقة \(zone.name.isEmpty ? zone.kind.arabicTitle : zone.name) أعلى من السقف الإنشائي للغرفة.",
++                        action: "خفّض ارتفاع المنطقة أو صحح الارتفاع الإنشائي.",
++                        roomIndex: roomIndex
++                    )
++                }
++                let centerDistance = hypot(zone.centerX - seed.centerX, zone.centerZ - seed.centerZ)
++                let roomRadius = hypot(seed.widthMeters, seed.depthMeters) / 2
++                let zoneRadius = hypot(zone.widthMeters, zone.depthMeters) / 2
++                if centerDistance + zoneRadius > roomRadius * 1.35 {
++                    append(
++                        key: "ceiling-zone-outside-\(zone.id)",
++                        kind: .ceilingZoneOutsideRoom,
++                        severity: .warning,
++                        title: "منطقة سقف خارج حدود الغرفة تقريبًا",
++                        details: "مركز أو أبعاد منطقة \(zone.name.isEmpty ? zone.kind.arabicTitle : zone.name) تتجاوز بصمة أرضية الغرفة المتاحة.",
++                        action: "راجع المركز X وZ والأبعاد من محرر الأرضية والسقف.",
++                        roomIndex: roomIndex
++                    )
++                }
++            }
++        }
++
++        for group in assignmentsByWall.values {
++            let roomIndices = Array(Set(group.map(\.roomIndex))).sorted()
++            guard roomIndices.count == 2,
++                  let first = profileByRoom[roomIndices[0]],
++                  let second = profileByRoom[roomIndices[1]] else { continue }
++            let difference = abs(first.floorElevationMeters - second.floorElevationMeters)
++            if difference > 0.08 {
++                append(
++                    key: "floor-level-\(group[0].buildingWallID)",
++                    kind: .floorLevelMismatch,
++                    severity: .warning,
++                    title: "فرق منسوب بين غرفتين متجاورتين",
++                    details: "فرق منسوب الأرضية بين الغرفتين \(roomIndices[0]) و\(roomIndices[1]) يساوي \(Int((difference * 100).rounded())) سم.",
++                    action: "أكد وجود درجة فعلية أو صحح منسوب إحدى الغرف.",
++                    assignment: group.first
++                )
++            }
++        }
+ 
+         return issues.sorted {
+             if $0.severity != $1.severity { return $0.severity > $1.severity }
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift	2026-08-01 17:14:10.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift	2026-08-01 18:24:29.460551401 +0000
+@@ -12,6 +12,7 @@
+     @State private var showingWallEditor = false
+     @State private var showingOpeningsManager = false
+     @State private var showingGeometryEditor = false
++    @State private var showingLevelsEditor = false
+     @State private var previewURL: URL?
+     @State private var rescanConfirmationRoom: Int?
+     @State private var correctionConfirmationRoom: Int?
+@@ -91,6 +92,13 @@
+                     }
+                 }
+             }
++            .sheet(isPresented: $showingLevelsEditor) {
++                if let selectedRoomIndex {
++                    NavigationStack {
++                        RoomLevelsEditorView(model: model, roomIndex: selectedRoomIndex)
++                    }
++                }
++            }
+             .sheet(
+                 item: Binding(
+                     get: { previewURL.map(PreviewItem.init) },
+@@ -139,6 +147,7 @@
+                 Text("امسح المنطقة المفقودة فقط. ستُحفظ كطبقة مكملة ولن تستبدل الغرفة الأصلية.")
+             }
+             .onAppear {
++                model.ensureAllRoomLevelProfiles()
+                 model.refreshProjectReviewIssues()
+                 if selectedRoomIndex == nil {
+                     selectedRoomIndex = model.roomReviewSummaries.first?.roomIndex
+@@ -161,6 +170,8 @@
+                 manualOpenings: model.manualOpeningOverlays,
+                 suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
+                 geometryOverrides: model.wallGeometryOverrides,
++                levelProfiles: model.roomLevelProfiles,
++                ceilingZones: model.ceilingZoneRecords,
+                 issueWallIdentifiers: model.issueWallIdentifiers,
+                 selectedRoomIndex: $selectedRoomIndex,
+                 selectedWall: $selectedWall
+@@ -189,7 +200,7 @@
+                 VStack(alignment: .leading, spacing: 8) {
+                     Label("نموذج المشروع التفاعلي", systemImage: "cube.transparent")
+                         .font(.headline)
+-                    Text("يعرض سماكات الحوائط، الأجزاء المكملة، العناصر اليدوية، والعناصر التي أخفيتها من نتيجة RoomPlan.")
++                    Text("يعرض سماكات الحوائط، مناسيب الأرضيات، مناطق السقف، الأجزاء المكملة، والعناصر اليدوية.")
+                         .font(.caption)
+                         .foregroundStyle(.secondary)
+                 }
+@@ -204,6 +215,8 @@
+                     manualOpenings: model.resolvedManualOpeningRecords,
+                     suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
+                     geometryOverrides: model.wallGeometryOverrides,
++                    levelProfiles: model.roomLevelProfiles,
++                    ceilingZones: model.ceilingZoneRecords,
+                     issueWallIdentifiers: model.issueWallIdentifiers
+                 )
+                 .frame(height: 380)
+@@ -478,6 +491,19 @@
+                 }
+             }
+ 
++            if let profile = model.roomLevelProfile(for: summary.roomIndex) {
++                HStack(spacing: 12) {
++                    Label("أرضية \(Int((profile.floorElevationMeters * 100).rounded())) سم", systemImage: "arrow.up.and.down")
++                    Label("سقف \(Int((profile.finishedCeilingHeightMeters * 100).rounded())) سم", systemImage: "rectangle.tophalf.inset.filled")
++                    if !model.ceilingZones(for: summary.roomIndex).isEmpty {
++                        Text("\(model.ceilingZones(for: summary.roomIndex).count) مناطق")
++                            .foregroundStyle(.indigo)
++                    }
++                }
++                .font(.caption2)
++                .foregroundStyle(.secondary)
++            }
++
+             HStack(spacing: 8) {
+                 Button {
+                     showingWallEditor = true
+@@ -510,9 +536,18 @@
+ 
+             HStack(spacing: 8) {
+                 Button {
++                    showingLevelsEditor = true
++                } label: {
++                    Label("المناسيب", systemImage: "square.3.layers.3d.down.right")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++                .tint(.blue)
++
++                Button {
+                     correctionConfirmationRoom = summary.roomIndex
+                 } label: {
+-                    Label("إضافة جزء ناقص", systemImage: "plus.viewfinder")
++                    Label("جزء ناقص", systemImage: "plus.viewfinder")
+                         .frame(maxWidth: .infinity)
+                 }
+                 .buttonStyle(.borderedProminent)
+@@ -522,13 +557,14 @@
+                 Button {
+                     rescanConfirmationRoom = summary.roomIndex
+                 } label: {
+-                    Label("إعادة الغرفة", systemImage: "viewfinder")
++                    Label("إعادة", systemImage: "viewfinder")
+                         .frame(maxWidth: .infinity)
+                 }
+                 .buttonStyle(.bordered)
+                 .tint(.orange)
+                 .disabled(!model.isBuildingFinished)
+             }
++            .font(.caption)
+         }
+         .padding(12)
+         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+@@ -619,6 +655,8 @@
+     let manualOpenings: [ProjectOpeningOverlay]
+     let suppressedSurfaceIdentifiers: Set<UUID>
+     let geometryOverrides: [WallGeometryOverrideRecord]
++    let levelProfiles: [RoomLevelProfileRecord]
++    let ceilingZones: [CeilingZoneRecord]
+     let issueWallIdentifiers: Set<UUID>
+     @Binding var selectedRoomIndex: Int?
+     @Binding var selectedWall: RoomWallSelection?
+@@ -635,7 +673,9 @@
+             wallAssignments: wallAssignments,
+             manualOpenings: manualOpenings,
+             suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers,
+-            geometryOverrides: geometryOverrides
++            geometryOverrides: geometryOverrides,
++            levelProfiles: levelProfiles,
++            ceilingZones: ceilingZones
+         )
+     }
+ 
+@@ -673,6 +713,7 @@
+                 VStack(alignment: .leading, spacing: 4) {
+                     Label("اسحب للتحريك • كبّر بإصبعين", systemImage: "hand.draw")
+                     Label("اضغط على حائط لاختياره", systemImage: "cursorarrow.click")
++                    Label("البني = أرضية RoomPlan • النيلي = منطقة سقف", systemImage: "square.3.layers.3d.down.right")
+                     Label("البنفسجي = جزء مكمل • الأحمر/السماوي = يدوي", systemImage: "paintpalette")
+                     Label("الحائط الأحمر المتقطع = يحتاج مراجعة", systemImage: "exclamationmark.triangle")
+                 }
+@@ -727,6 +768,41 @@
+             return
+         }
+ 
++        for floor in snapshot.floorPolygons where floor.points.count >= 3 {
++            var path = Path()
++            path.move(to: screenPoint(for: floor.points[0], size: size))
++            for point in floor.points.dropFirst() {
++                path.addLine(to: screenPoint(for: point, size: size))
++            }
++            path.closeSubpath()
++            let selected = floor.roomIndex == selectedRoomIndex
++            context.fill(path, with: .color(Color.brown.opacity(selected ? 0.18 : 0.08)))
++            context.stroke(
++                path,
++                with: .color(Color.brown.opacity(selected ? 0.55 : 0.25)),
++                style: StrokeStyle(lineWidth: selected ? 1.6 : 1, dash: [5, 4])
++            )
++        }
++
++        for zone in snapshot.ceilingZoneShapes {
++            let corners = zone.corners.map { screenPoint(for: $0, size: size) }
++            guard corners.count == 4 else { continue }
++            var path = Path()
++            path.move(to: corners[0])
++            for point in corners.dropFirst() { path.addLine(to: point) }
++            path.closeSubpath()
++            context.fill(path, with: .color(Color.indigo.opacity(0.10)))
++            context.stroke(
++                path,
++                with: .color(Color.indigo.opacity(0.75)),
++                style: StrokeStyle(lineWidth: 2, dash: [6, 4])
++            )
++            context.draw(
++                Text(zone.title).font(.caption2.bold()).foregroundStyle(Color.indigo),
++                at: screenPoint(for: zone.center, size: size)
++            )
++        }
++
+         for segment in snapshot.segments {
+             let start = screenPoint(for: segment.start, size: size)
+             let end = screenPoint(for: segment.end, size: size)
+@@ -774,9 +850,10 @@
+             let point = screenPoint(for: label.position, size: size)
+             let selected = label.roomIndex == selectedRoomIndex
+             context.draw(
+-                Text("غرفة \(label.roomIndex)")
++                Text("غرفة \(label.roomIndex)\n\(label.levelText)")
+                     .font(.caption.bold())
+-                    .foregroundStyle(selected ? Color.cyan : Color.primary),
++                    .foregroundStyle(selected ? Color.cyan : Color.primary)
++                    .multilineTextAlignment(.center),
+                 at: point
+             )
+         }
+@@ -838,6 +915,21 @@
+     struct Label {
+         let roomIndex: Int
+         let position: SIMD2<Float>
++        let levelText: String
++    }
++
++    struct FloorPolygon: Identifiable {
++        let id: String
++        let roomIndex: Int
++        let points: [SIMD2<Float>]
++    }
++
++    struct CeilingZoneShape: Identifiable {
++        let id: UUID
++        let roomIndex: Int
++        let title: String
++        let center: SIMD2<Float>
++        let corners: [SIMD2<Float>]
+     }
+ 
+     struct Bounds {
+@@ -849,6 +941,8 @@
+ 
+     let segments: [Segment]
+     let labels: [Label]
++    let floorPolygons: [FloorPolygon]
++    let ceilingZoneShapes: [CeilingZoneShape]
+     let bounds: Bounds
+ 
+     init(
+@@ -857,10 +951,15 @@
+         wallAssignments: [RoomWallAssignment],
+         manualOpenings: [ProjectOpeningOverlay],
+         suppressedSurfaceIdentifiers: Set<UUID>,
+-        geometryOverrides: [WallGeometryOverrideRecord]
++        geometryOverrides: [WallGeometryOverrideRecord],
++        levelProfiles: [RoomLevelProfileRecord],
++        ceilingZones: [CeilingZoneRecord]
+     ) {
+         var newSegments: [Segment] = []
+         var newLabels: [Label] = []
++        var newFloorPolygons: [FloorPolygon] = []
++        var newCeilingZoneShapes: [CeilingZoneShape] = []
++        let profileByRoom = Dictionary(uniqueKeysWithValues: levelProfiles.map { ($0.roomIndex, $0) })
+         var assignmentByKey: [WallKey: RoomWallAssignment] = [:]
+         for assignment in wallAssignments {
+             let key = WallKey(roomIndex: assignment.roomIndex, wallIdentifier: assignment.wallIdentifier)
+@@ -933,12 +1032,53 @@
+ 
+             if addLabel, !wallCenters.isEmpty {
+                 let sum = wallCenters.reduce(SIMD2<Float>(repeating: 0), +)
+-                newLabels.append(Label(roomIndex: roomIndex, position: sum / Float(wallCenters.count)))
++                let profile = profileByRoom[roomIndex]
++                let floorCM = Int(((profile?.floorElevationMeters ?? 0) * 100).rounded())
++                let ceilingCM = Int(((profile?.finishedCeilingHeightMeters ?? 0) * 100).rounded())
++                newLabels.append(
++                    Label(
++                        roomIndex: roomIndex,
++                        position: sum / Float(wallCenters.count),
++                        levelText: "أرضية \(floorCM) سم • سقف \(ceilingCM) سم"
++                    )
++                )
+             }
+         }
+ 
+         for (offset, room) in rooms.enumerated() {
+-            appendRoom(room, roomIndex: offset + 1, source: .roomPlan, addLabel: true)
++            let roomIndex = offset + 1
++            appendRoom(room, roomIndex: roomIndex, source: .roomPlan, addLabel: true)
++            if room.floors.isEmpty {
++                let seed = RoomLevelGeometrySeed.make(room: room)
++                let angle = Float(seed.rotationDegrees * .pi / 180)
++                let axis = SIMD2<Float>(cos(angle), sin(angle))
++                let normal = SIMD2<Float>(-axis.y, axis.x)
++                let center = SIMD2<Float>(Float(seed.centerX), Float(seed.centerZ))
++                let halfWidth = Float(seed.widthMeters / 2)
++                let halfDepth = Float(seed.depthMeters / 2)
++                newFloorPolygons.append(
++                    FloorPolygon(
++                        id: "fallback-floor-\(roomIndex)",
++                        roomIndex: roomIndex,
++                        points: [
++                            center - axis * halfWidth - normal * halfDepth,
++                            center + axis * halfWidth - normal * halfDepth,
++                            center + axis * halfWidth + normal * halfDepth,
++                            center - axis * halfWidth + normal * halfDepth
++                        ]
++                    )
++                )
++            } else {
++                for floor in room.floors {
++                    newFloorPolygons.append(
++                        FloorPolygon(
++                            id: floor.identifier.uuidString,
++                            roomIndex: roomIndex,
++                            points: RoomLevelGeometrySeed.floorFootprint(surface: floor)
++                        )
++                    )
++                }
++            }
+         }
+         for correction in corrections {
+             appendRoom(correction.room, roomIndex: correction.roomIndex, source: .correction, addLabel: false)
+@@ -964,19 +1104,47 @@
+             )
+         }
+ 
++        for zone in ceilingZones {
++            let angle = Float(zone.rotationDegrees * .pi / 180)
++            let axis = SIMD2<Float>(cos(angle), sin(angle))
++            let normal = SIMD2<Float>(-axis.y, axis.x)
++            let center = SIMD2<Float>(Float(zone.centerX), Float(zone.centerZ))
++            let halfWidth = Float(zone.widthMeters / 2)
++            let halfDepth = Float(zone.depthMeters / 2)
++            newCeilingZoneShapes.append(
++                CeilingZoneShape(
++                    id: zone.id,
++                    roomIndex: zone.roomIndex,
++                    title: "\(zone.name.isEmpty ? zone.kind.arabicTitle : zone.name) • \(Int((zone.heightAboveFloorMeters * 100).rounded())) سم",
++                    center: center,
++                    corners: [
++                        center - axis * halfWidth - normal * halfDepth,
++                        center + axis * halfWidth - normal * halfDepth,
++                        center + axis * halfWidth + normal * halfDepth,
++                        center - axis * halfWidth + normal * halfDepth
++                    ]
++                )
++            )
++        }
++
+         segments = newSegments
+         labels = newLabels
++        floorPolygons = newFloorPolygons
++        ceilingZoneShapes = newCeilingZoneShapes
+ 
+-        if let first = newSegments.first {
+-            var minX = min(first.start.x, first.end.x)
+-            var maxX = max(first.start.x, first.end.x)
+-            var minY = min(first.start.y, first.end.y)
+-            var maxY = max(first.start.y, first.end.y)
+-            for segment in newSegments.dropFirst() {
+-                minX = min(minX, min(segment.start.x, segment.end.x))
+-                maxX = max(maxX, max(segment.start.x, segment.end.x))
+-                minY = min(minY, min(segment.start.y, segment.end.y))
+-                maxY = max(maxY, max(segment.start.y, segment.end.y))
++        let allPoints = newSegments.flatMap { [$0.start, $0.end] }
++            + newFloorPolygons.flatMap(\.points)
++            + newCeilingZoneShapes.flatMap(\.corners)
++        if let first = allPoints.first {
++            var minX = first.x
++            var maxX = first.x
++            var minY = first.y
++            var maxY = first.y
++            for point in allPoints.dropFirst() {
++                minX = min(minX, point.x)
++                maxX = max(maxX, point.x)
++                minY = min(minY, point.y)
++                maxY = max(maxY, point.y)
+             }
+             bounds = Bounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY)
+         } else {
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanViewModel.swift /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-08-01 17:19:15.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-08-01 18:21:36.208558050 +0000
+@@ -102,6 +102,10 @@
+     @Published private(set) var wallGeometryOverrides: [WallGeometryOverrideRecord] = []
+     @Published private(set) var projectReviewIssues: [ProjectReviewIssue] = []
+ 
++    /// Phase 5G: floor elevations, structural/finished ceiling heights, and local ceiling zones.
++    @Published private(set) var roomLevelProfiles: [RoomLevelProfileRecord] = []
++    @Published private(set) var ceilingZoneRecords: [CeilingZoneRecord] = []
++
+     private weak var captureView: RoomCaptureView?
+     private var pendingStartRequest: PendingStartRequest?
+     private var shouldAcceptNextProcessedRoom = false
+@@ -685,6 +689,7 @@
+         persistWallMetadata()
+         persistRoomWallMetadata(roomIndex: roomIndex)
+         persistWallGeometryOverrideDocument()
++        refreshRoomLevelProfileAfterRoomReplacement(roomIndex: roomIndex)
+         refreshProjectReviewIssues()
+ 
+         updateRevisionDecision(id: pending.id, decision: .accepted)
+@@ -1538,6 +1543,8 @@
+             loadRoomCorrectionHistory(from: folder)
+             loadManualOpeningDocument(from: folder)
+             loadWallGeometryOverrideDocument(from: folder)
++            loadRoomLevelDocument(from: folder)
++            ensureAllRoomLevelProfiles()
+             refreshProjectReviewIssues()
+ 
+             activeRoomNumber = checkpoint.activeRoomNumber
+@@ -2011,6 +2018,7 @@
+         persistRoomFragmentsDocument(roomIndex: roomIndex, isFinalized: true)
+         persistWallMetadata()
+         persistRoomWallMetadata(roomIndex: roomIndex)
++        ensureRoomLevelProfile(for: roomIndex)
+ 
+         isPaused = false
+         activeRoomNumber = 0
+@@ -2422,6 +2430,8 @@
+         suppressedDetectedSurfaces = []
+         wallGeometryOverrides = []
+         projectReviewIssues = []
++        roomLevelProfiles = []
++        ceilingZoneRecords = []
+         buildingWasFinishedBeforeRescan = false
+         shouldAcceptNextProcessedRoom = false
+         pendingStopAction = nil
+@@ -2444,6 +2454,7 @@
+             persistRoomCorrectionDocument()
+             persistManualOpeningDocument()
+             persistWallGeometryOverrideDocument()
++            persistRoomLevelDocument()
+             refreshProjectReviewIssues()
+             persistSessionCheckpoint()
+             writeManifest()
+@@ -2902,7 +2913,9 @@
+             assignments: roomWallAssignments,
+             geometryOverrides: wallGeometryOverrides,
+             manualOpenings: manualOpeningRecords,
+-            suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers
++            suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers,
++            levelProfiles: roomLevelProfiles,
++            ceilingZones: ceilingZoneRecords
+         ).makeIssues()
+         persistProjectReviewIssueDocument()
+     }
+@@ -2970,3 +2983,238 @@
+         return value
+     }
+ }
++
++// MARK: - Phase 5G floor levels and ceiling zones
++
++extension RoomScanViewModel {
++    func roomLevelProfile(for roomIndex: Int) -> RoomLevelProfileRecord? {
++        roomLevelProfiles.first { $0.roomIndex == roomIndex }
++    }
++
++    func ceilingZones(for roomIndex: Int) -> [CeilingZoneRecord] {
++        ceilingZoneRecords
++            .filter { $0.roomIndex == roomIndex }
++            .sorted { ($0.name, $0.createdAt) < ($1.name, $1.createdAt) }
++    }
++
++    func ensureRoomLevelProfile(for roomIndex: Int) {
++        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
++        let room = capturedRooms[roomIndex - 1]
++        if let index = roomLevelProfiles.firstIndex(where: { $0.roomIndex == roomIndex }) {
++            if roomLevelProfiles[index].roomIdentifier != room.identifier {
++                let seed = RoomLevelGeometrySeed.make(room: room)
++                var profile = roomLevelProfiles[index]
++                profile = RoomLevelProfileRecord(
++                    id: profile.id,
++                    roomIndex: roomIndex,
++                    roomIdentifier: room.identifier,
++                    story: profile.story,
++                    roomPlanFloorElevationMeters: seed.floorElevationMeters,
++                    floorElevationMeters: profile.floorElevationMeters,
++                    structuralCeilingHeightMeters: profile.structuralCeilingHeightMeters,
++                    finishedCeilingHeightMeters: profile.finishedCeilingHeightMeters,
++                    createdAt: profile.createdAt,
++                    updatedAt: Date()
++                )
++                roomLevelProfiles[index] = profile
++                persistRoomLevelDocument()
++            }
++            return
++        }
++
++        let seed = RoomLevelGeometrySeed.make(room: room)
++        let now = Date()
++        roomLevelProfiles.append(
++            RoomLevelProfileRecord(
++                id: UUID(),
++                roomIndex: roomIndex,
++                roomIdentifier: room.identifier,
++                story: room.story,
++                roomPlanFloorElevationMeters: seed.floorElevationMeters,
++                floorElevationMeters: seed.floorElevationMeters,
++                structuralCeilingHeightMeters: seed.structuralCeilingHeightMeters,
++                finishedCeilingHeightMeters: seed.structuralCeilingHeightMeters,
++                createdAt: now,
++                updatedAt: now
++            )
++        )
++        roomLevelProfiles.sort { $0.roomIndex < $1.roomIndex }
++        persistRoomLevelDocument()
++    }
++
++    func ensureAllRoomLevelProfiles() {
++        guard !capturedRooms.isEmpty else { return }
++        for roomIndex in 1...capturedRooms.count {
++            ensureRoomLevelProfile(for: roomIndex)
++        }
++    }
++
++    func saveRoomLevelProfile(
++        roomIndex: Int,
++        story: Int,
++        floorElevationCentimeters: Double,
++        structuralCeilingCentimeters: Double,
++        finishedCeilingCentimeters: Double
++    ) {
++        ensureRoomLevelProfile(for: roomIndex)
++        guard let index = roomLevelProfiles.firstIndex(where: { $0.roomIndex == roomIndex }) else { return }
++        roomLevelProfiles[index].story = min(max(story, -10), 100)
++        roomLevelProfiles[index].floorElevationMeters = min(max(floorElevationCentimeters / 100, -100), 100)
++        roomLevelProfiles[index].structuralCeilingHeightMeters = min(max(structuralCeilingCentimeters / 100, 0.20), 20)
++        roomLevelProfiles[index].finishedCeilingHeightMeters = min(max(finishedCeilingCentimeters / 100, 0.20), 20)
++        roomLevelProfiles[index].updatedAt = Date()
++        persistRoomLevelDocument()
++        refreshProjectReviewIssues()
++        statusMessage = "تم حفظ منسوب الأرضية وارتفاعات السقف للغرفة \(roomIndex)."
++    }
++
++    func resetRoomLevelProfile(roomIndex: Int, deleteZones: Bool) {
++        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
++        let room = capturedRooms[roomIndex - 1]
++        let seed = RoomLevelGeometrySeed.make(room: room)
++        let old = roomLevelProfile(for: roomIndex)
++        let now = Date()
++        let replacement = RoomLevelProfileRecord(
++            id: old?.id ?? UUID(),
++            roomIndex: roomIndex,
++            roomIdentifier: room.identifier,
++            story: room.story,
++            roomPlanFloorElevationMeters: seed.floorElevationMeters,
++            floorElevationMeters: seed.floorElevationMeters,
++            structuralCeilingHeightMeters: seed.structuralCeilingHeightMeters,
++            finishedCeilingHeightMeters: seed.structuralCeilingHeightMeters,
++            createdAt: old?.createdAt ?? now,
++            updatedAt: now
++        )
++        if let index = roomLevelProfiles.firstIndex(where: { $0.roomIndex == roomIndex }) {
++            roomLevelProfiles[index] = replacement
++        } else {
++            roomLevelProfiles.append(replacement)
++        }
++        if deleteZones {
++            ceilingZoneRecords.removeAll { $0.roomIndex == roomIndex }
++        }
++        persistRoomLevelDocument()
++        refreshProjectReviewIssues()
++        statusMessage = "تمت استعادة مناسيب RoomPlan المقترحة للغرفة \(roomIndex)."
++    }
++
++    func suggestedCeilingZone(for roomIndex: Int) -> CeilingZoneRecord {
++        let now = Date()
++        guard roomIndex > 0, roomIndex <= capturedRooms.count else {
++            return CeilingZoneRecord(
++                id: UUID(), roomIndex: roomIndex, name: "", kind: .falseCeiling,
++                centerX: 0, centerZ: 0, widthMeters: 1, depthMeters: 1,
++                rotationDegrees: 0, heightAboveFloorMeters: 2.7,
++                createdAt: now, updatedAt: now
++            )
++        }
++        ensureRoomLevelProfile(for: roomIndex)
++        let room = capturedRooms[roomIndex - 1]
++        let seed = RoomLevelGeometrySeed.make(room: room)
++        let profile = roomLevelProfile(for: roomIndex)
++        let suggestedHeight = min(
++            profile?.finishedCeilingHeightMeters ?? seed.structuralCeilingHeightMeters,
++            profile?.structuralCeilingHeightMeters ?? seed.structuralCeilingHeightMeters
++        )
++        return CeilingZoneRecord(
++            id: UUID(),
++            roomIndex: roomIndex,
++            name: "سقف الغرفة \(roomIndex)",
++            kind: .falseCeiling,
++            centerX: seed.centerX,
++            centerZ: seed.centerZ,
++            widthMeters: max(seed.widthMeters * 0.90, 0.20),
++            depthMeters: max(seed.depthMeters * 0.90, 0.20),
++            rotationDegrees: seed.rotationDegrees,
++            heightAboveFloorMeters: max(suggestedHeight, 0.20),
++            createdAt: now,
++            updatedAt: now
++        )
++    }
++
++    func saveCeilingZone(_ zone: CeilingZoneRecord) {
++        guard zone.roomIndex > 0, zone.roomIndex <= capturedRooms.count else { return }
++        ensureRoomLevelProfile(for: zone.roomIndex)
++        if let index = ceilingZoneRecords.firstIndex(where: { $0.id == zone.id }) {
++            ceilingZoneRecords[index] = zone
++        } else {
++            ceilingZoneRecords.append(zone)
++        }
++        persistRoomLevelDocument()
++        refreshProjectReviewIssues()
++        statusMessage = "تم حفظ منطقة السقف للغرفة \(zone.roomIndex)."
++    }
++
++    func deleteCeilingZone(id: UUID) {
++        guard let record = ceilingZoneRecords.first(where: { $0.id == id }) else { return }
++        ceilingZoneRecords.removeAll { $0.id == id }
++        persistRoomLevelDocument()
++        refreshProjectReviewIssues()
++        statusMessage = "تم حذف منطقة السقف من الغرفة \(record.roomIndex)."
++    }
++
++    private func refreshRoomLevelProfileAfterRoomReplacement(roomIndex: Int) {
++        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
++        let room = capturedRooms[roomIndex - 1]
++        let seed = RoomLevelGeometrySeed.make(room: room)
++        if let index = roomLevelProfiles.firstIndex(where: { $0.roomIndex == roomIndex }) {
++            let old = roomLevelProfiles[index]
++            roomLevelProfiles[index] = RoomLevelProfileRecord(
++                id: old.id,
++                roomIndex: roomIndex,
++                roomIdentifier: room.identifier,
++                story: old.story,
++                roomPlanFloorElevationMeters: seed.floorElevationMeters,
++                floorElevationMeters: old.floorElevationMeters,
++                structuralCeilingHeightMeters: old.structuralCeilingHeightMeters,
++                finishedCeilingHeightMeters: old.finishedCeilingHeightMeters,
++                createdAt: old.createdAt,
++                updatedAt: Date()
++            )
++        } else {
++            ensureRoomLevelProfile(for: roomIndex)
++            return
++        }
++        persistRoomLevelDocument()
++    }
++
++    private func persistRoomLevelDocument() {
++        guard let buildingFolderURL else { return }
++        do {
++            let reviewFolder = buildingFolderURL.appendingPathComponent("Review", isDirectory: true)
++            try FileManager.default.createDirectory(at: reviewFolder, withIntermediateDirectories: true)
++            let document = RoomLevelDocument(
++                schemaVersion: 1,
++                updatedAt: Date(),
++                profiles: roomLevelProfiles.sorted { $0.roomIndex < $1.roomIndex },
++                ceilingZones: ceilingZoneRecords.sorted {
++                    ($0.roomIndex, $0.createdAt) < ($1.roomIndex, $1.createdAt)
++                }
++            )
++            try configuredEncoder().encode(document)
++                .write(to: reviewFolder.appendingPathComponent("room-levels.json"), options: .atomic)
++        } catch {
++            errorMessage = "تعذر حفظ مناسيب الأرضيات والأسقف: \(error.localizedDescription)"
++        }
++    }
++
++    private func loadRoomLevelDocument(from folder: URL) {
++        let url = folder
++            .appendingPathComponent("Review", isDirectory: true)
++            .appendingPathComponent("room-levels.json")
++        guard let data = try? Data(contentsOf: url),
++              let document = try? configuredDecoder().decode(RoomLevelDocument.self, from: data) else {
++            roomLevelProfiles = []
++            ceilingZoneRecords = []
++            return
++        }
++        let validRoomIndices = Set(1...max(capturedRooms.count, 1))
++        roomLevelProfiles = document.profiles
++            .filter { validRoomIndices.contains($0.roomIndex) }
++            .sorted { $0.roomIndex < $1.roomIndex }
++        ceilingZoneRecords = document.ceilingZones
++            .filter { validRoomIndices.contains($0.roomIndex) }
++            .sorted { ($0.roomIndex, $0.createdAt) < ($1.roomIndex, $1.createdAt) }
++    }
++}
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/README.md /mnt/data/phase6_work/3ELiDAR-0.15.0/README.md
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/README.md	2026-08-01 17:17:42.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/README.md	2026-08-01 18:25:34.268548914 +0000
+@@ -11,6 +11,14 @@
+ - App Folder: `Apps/LiDARLab`
+ - Future App Group: `group.com.essam.3e`
+ 
++## النسخة 0.16.0 — مناسيب الأرضيات ومناطق الأسقف
++
++- تستخدم أرضيات RoomPlan كبداية عندما تكون موجودة.
++- يمكن ضبط منسوب الأرضية وارتفاع السقف الإنشائي والتشطيب لكل غرفة بصورة مستقلة.
++- يمكن إضافة أكثر من منطقة جبس أو كمرة أو سقف مرتفع داخل الغرفة.
++- تظهر الأرضيات ومناطق السقف في العرضين 2D و3D.
++- تحفظ التعديلات داخل `Review/room-levels.json` دون تغيير ملفات RoomPlan الأصلية.
++
+ ## النسخة 0.15.0 — الفحص الهندسي وتحرير الحوائط
+ 
+ أضيفت طبقة مراجعة هندسية فوق نتائج RoomPlan. يفحص التطبيق المشروع ويعرض التعارضات المهمة والتحذيرات والمعلومات داخل تبويب **المشكلات**، مع إمكانية الانتقال مباشرة إلى الغرفة أو الحائط المرتبط بالمشكلة.
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/ROOMSCAN_LEVELS_CEILINGS_PHASE5G.md /mnt/data/phase6_work/3ELiDAR-0.15.0/ROOMSCAN_LEVELS_CEILINGS_PHASE5G.md
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/ROOMSCAN_LEVELS_CEILINGS_PHASE5G.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/ROOMSCAN_LEVELS_CEILINGS_PHASE5G.md	2026-08-01 18:25:34.268548914 +0000
+@@ -0,0 +1,49 @@
++# RoomScan Phase 5G — Floor Levels and Ceiling Zones
++
++الإصدار: `0.16.0` — البناء: `20`
++
++## ما تمت إضافته
++
++- ملف تعريف منسوب لكل غرفة يشمل الطابق، منسوب الأرضية، ارتفاع السقف الإنشائي، وارتفاع التشطيب الافتراضي.
++- الاستفادة من `CapturedRoom.floors` و`polygonCorners` من RoomPlan لتحديد بصمة الأرضية ومركزها واتجاهها.
++- استنتاج بديل من الحوائط عند غياب أرضية RoomPlan.
++- مناطق سقف مستقلة للجبس والكمـرات والسواقط والمناطق المرتفعة.
++- عرض أرضيات RoomPlan ومناطق السقف داخل SwiftUI Canvas وApple SceneKit.
++- تطبيق فرق منسوب الغرفة على الحوائط والأبواب في عرض SceneKit من دون تغيير البيانات الأصلية.
++- فحص تلقائي لفروق المناسيب وتعارضات ارتفاع السقف.
++
++## ملف الحفظ الجديد
++
++```text
++Review/room-levels.json
++```
++
++يحتوي الملف على:
++
++```text
++profiles[]
++├── roomIndex
++├── story
++├── roomPlanFloorElevationMeters
++├── floorElevationMeters
++├── structuralCeilingHeightMeters
++└── finishedCeilingHeightMeters
++
++ceilingZones[]
++├── roomIndex
++├── kind
++├── centerX / centerZ
++├── widthMeters / depthMeters
++├── rotationDegrees
++└── heightAboveFloorMeters
++```
++
++## مبدأ عدم إتلاف المصدر
++
++تبقى `CapturedRoom` و`CapturedStructure` وملفات JSON وUSDZ الأصلية كما هي. يطبق التطبيق المناسيب ومناطق السقف في طبقة العرض والتحرير الخاصة به فقط.
++
++## حدود المرحلة
++
++- مناطق السقف مستطيلة في هذه المرحلة، ولا يوجد محرر مضلع حر حتى الآن.
++- السقف اليدوي يظهر كلوح معماري في SceneKit، ولا ينفذ عمليات Boolean مع الحوائط.
++- فرق المنسوب بين غرفتين يظهر كتعارض للمراجعة؛ التطبيق لا يفترض تلقائيًا هل الفرق درجة حقيقية أم خطأ مسح.
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/TEST_3E.md /mnt/data/phase6_work/3ELiDAR-0.15.0/TEST_3E.md
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/TEST_3E.md	2026-08-01 17:19:56.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/TEST_3E.md	2026-08-01 18:25:34.268548914 +0000
+@@ -242,3 +242,16 @@
+ ```
+ 
+ 14. راجع أن `FrozenRooms/Room-XX/room.json` لم يتغير بسبب التحرير الهندسي.
++
++
++## 13. اختبار مناسيب الأرضيات ومناطق السقف — 0.16.0
++
++1. امسح غرفتين متجاورتين وثبتهما.
++2. افتح مركز المراجعة واختر الغرفة الأولى.
++3. افتح **المناسيب** وتأكد أن منسوب الأرضية وارتفاع السقف مقترحان تلقائيًا.
++4. غيّر منسوب الأرضية بمقدار 10 سم واحفظ.
++5. أضف منطقة سقف مستعار بارتفاع أقل من السقف الإنشائي.
++6. تحقق من ظهور بصمة الأرضية باللون البني ومنطقة السقف بالنيلي في 2D.
++7. افتح 3D وتأكد من انتقال الغرفة رأسيًا وظهور لوح السقف.
++8. اجعل سقف التشطيب أعلى من الإنشائي مؤقتًا وتأكد من ظهور مشكلة حرجة.
++9. أغلق التطبيق وافتح المشروع المكتمل وتأكد من استعادة القيم والمناطق.
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/VALIDATION.md /mnt/data/phase6_work/3ELiDAR-0.15.0/VALIDATION.md
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/VALIDATION.md	2026-08-01 17:17:42.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/VALIDATION.md	2026-08-01 18:25:34.268548914 +0000
+@@ -107,3 +107,12 @@
+ 6. استخدام «تثبيت على اتجاه المبنى» ومراجعة النتيجة قبل الحفظ.
+ 7. إغلاق التطبيق وفتح المشروع والتأكد من استعادة التعديلات والتقرير.
+ 8. استعادة هندسة RoomPlan الأصلية والتأكد من اختفاء التصحيح.
++
++
++## Phase 5G — 0.16.0
++
++- فحص Parsing لجميع ملفات Swift بعد إضافة نماذج المناسيب ومحررات السقف.
++- التحقق من استخدام `CapturedRoom.floors` و`polygonCorners` مع iOS 17.
++- التحقق من حفظ واستعادة `Review/room-levels.json`.
++- التحقق من تمرير بيانات المناسيب إلى مخطط 2D وعارض SceneKit.
++- التحقق من الإصدار `0.16.0` ورقم البناء `20`.
+diff -ruN '--exclude=_backup' '--exclude=ROOMSCAN_LEVELS_CEILINGS_PHASE5G.patch' /mnt/data/phase6_original/3ELiDAR-0.15.0/project.yml /mnt/data/phase6_work/3ELiDAR-0.15.0/project.yml
+--- /mnt/data/phase6_original/3ELiDAR-0.15.0/project.yml	2026-08-01 17:17:42.000000000 +0000
++++ /mnt/data/phase6_work/3ELiDAR-0.15.0/project.yml	2026-08-01 18:25:34.264548914 +0000
+@@ -9,8 +9,8 @@
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.15.0"
+-    CURRENT_PROJECT_VERSION: "19"
++    MARKETING_VERSION: "0.16.0"
++    CURRENT_PROJECT_VERSION: "20"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar

@@ -102,10 +102,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     @Published private(set) var wallGeometryOverrides: [WallGeometryOverrideRecord] = []
     @Published private(set) var projectReviewIssues: [ProjectReviewIssue] = []
 
-    /// Phase 5G: floor elevations, structural/finished ceiling heights, and local ceiling zones.
-    @Published private(set) var roomLevelProfiles: [RoomLevelProfileRecord] = []
-    @Published private(set) var ceilingZoneRecords: [CeilingZoneRecord] = []
-
     private weak var captureView: RoomCaptureView?
     private var pendingStartRequest: PendingStartRequest?
     private var shouldAcceptNextProcessedRoom = false
@@ -689,7 +685,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         persistWallMetadata()
         persistRoomWallMetadata(roomIndex: roomIndex)
         persistWallGeometryOverrideDocument()
-        refreshRoomLevelProfileAfterRoomReplacement(roomIndex: roomIndex)
         refreshProjectReviewIssues()
 
         updateRevisionDecision(id: pending.id, decision: .accepted)
@@ -1543,8 +1538,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             loadRoomCorrectionHistory(from: folder)
             loadManualOpeningDocument(from: folder)
             loadWallGeometryOverrideDocument(from: folder)
-            loadRoomLevelDocument(from: folder)
-            ensureAllRoomLevelProfiles()
             refreshProjectReviewIssues()
 
             activeRoomNumber = checkpoint.activeRoomNumber
@@ -2018,7 +2011,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         persistRoomFragmentsDocument(roomIndex: roomIndex, isFinalized: true)
         persistWallMetadata()
         persistRoomWallMetadata(roomIndex: roomIndex)
-        ensureRoomLevelProfile(for: roomIndex)
 
         isPaused = false
         activeRoomNumber = 0
@@ -2430,8 +2422,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         suppressedDetectedSurfaces = []
         wallGeometryOverrides = []
         projectReviewIssues = []
-        roomLevelProfiles = []
-        ceilingZoneRecords = []
         buildingWasFinishedBeforeRescan = false
         shouldAcceptNextProcessedRoom = false
         pendingStopAction = nil
@@ -2454,7 +2444,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             persistRoomCorrectionDocument()
             persistManualOpeningDocument()
             persistWallGeometryOverrideDocument()
-            persistRoomLevelDocument()
             refreshProjectReviewIssues()
             persistSessionCheckpoint()
             writeManifest()
@@ -2913,9 +2902,7 @@ extension RoomScanViewModel {
             assignments: roomWallAssignments,
             geometryOverrides: wallGeometryOverrides,
             manualOpenings: manualOpeningRecords,
-            suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers,
-            levelProfiles: roomLevelProfiles,
-            ceilingZones: ceilingZoneRecords
+            suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers
         ).makeIssues()
         persistProjectReviewIssueDocument()
     }
@@ -2981,240 +2968,5 @@ extension RoomScanViewModel {
         if value > 180 { value -= 360 }
         if value < -180 { value += 360 }
         return value
-    }
-}
-
-// MARK: - Phase 5G floor levels and ceiling zones
-
-extension RoomScanViewModel {
-    func roomLevelProfile(for roomIndex: Int) -> RoomLevelProfileRecord? {
-        roomLevelProfiles.first { $0.roomIndex == roomIndex }
-    }
-
-    func ceilingZones(for roomIndex: Int) -> [CeilingZoneRecord] {
-        ceilingZoneRecords
-            .filter { $0.roomIndex == roomIndex }
-            .sorted { ($0.name, $0.createdAt) < ($1.name, $1.createdAt) }
-    }
-
-    func ensureRoomLevelProfile(for roomIndex: Int) {
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
-        let room = capturedRooms[roomIndex - 1]
-        if let index = roomLevelProfiles.firstIndex(where: { $0.roomIndex == roomIndex }) {
-            if roomLevelProfiles[index].roomIdentifier != room.identifier {
-                let seed = RoomLevelGeometrySeed.make(room: room)
-                var profile = roomLevelProfiles[index]
-                profile = RoomLevelProfileRecord(
-                    id: profile.id,
-                    roomIndex: roomIndex,
-                    roomIdentifier: room.identifier,
-                    story: profile.story,
-                    roomPlanFloorElevationMeters: seed.floorElevationMeters,
-                    floorElevationMeters: profile.floorElevationMeters,
-                    structuralCeilingHeightMeters: profile.structuralCeilingHeightMeters,
-                    finishedCeilingHeightMeters: profile.finishedCeilingHeightMeters,
-                    createdAt: profile.createdAt,
-                    updatedAt: Date()
-                )
-                roomLevelProfiles[index] = profile
-                persistRoomLevelDocument()
-            }
-            return
-        }
-
-        let seed = RoomLevelGeometrySeed.make(room: room)
-        let now = Date()
-        roomLevelProfiles.append(
-            RoomLevelProfileRecord(
-                id: UUID(),
-                roomIndex: roomIndex,
-                roomIdentifier: room.identifier,
-                story: room.story,
-                roomPlanFloorElevationMeters: seed.floorElevationMeters,
-                floorElevationMeters: seed.floorElevationMeters,
-                structuralCeilingHeightMeters: seed.structuralCeilingHeightMeters,
-                finishedCeilingHeightMeters: seed.structuralCeilingHeightMeters,
-                createdAt: now,
-                updatedAt: now
-            )
-        )
-        roomLevelProfiles.sort { $0.roomIndex < $1.roomIndex }
-        persistRoomLevelDocument()
-    }
-
-    func ensureAllRoomLevelProfiles() {
-        guard !capturedRooms.isEmpty else { return }
-        for roomIndex in 1...capturedRooms.count {
-            ensureRoomLevelProfile(for: roomIndex)
-        }
-    }
-
-    func saveRoomLevelProfile(
-        roomIndex: Int,
-        story: Int,
-        floorElevationCentimeters: Double,
-        structuralCeilingCentimeters: Double,
-        finishedCeilingCentimeters: Double
-    ) {
-        ensureRoomLevelProfile(for: roomIndex)
-        guard let index = roomLevelProfiles.firstIndex(where: { $0.roomIndex == roomIndex }) else { return }
-        roomLevelProfiles[index].story = min(max(story, -10), 100)
-        roomLevelProfiles[index].floorElevationMeters = min(max(floorElevationCentimeters / 100, -100), 100)
-        roomLevelProfiles[index].structuralCeilingHeightMeters = min(max(structuralCeilingCentimeters / 100, 0.20), 20)
-        roomLevelProfiles[index].finishedCeilingHeightMeters = min(max(finishedCeilingCentimeters / 100, 0.20), 20)
-        roomLevelProfiles[index].updatedAt = Date()
-        persistRoomLevelDocument()
-        refreshProjectReviewIssues()
-        statusMessage = "تم حفظ منسوب الأرضية وارتفاعات السقف للغرفة \(roomIndex)."
-    }
-
-    func resetRoomLevelProfile(roomIndex: Int, deleteZones: Bool) {
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
-        let room = capturedRooms[roomIndex - 1]
-        let seed = RoomLevelGeometrySeed.make(room: room)
-        let old = roomLevelProfile(for: roomIndex)
-        let now = Date()
-        let replacement = RoomLevelProfileRecord(
-            id: old?.id ?? UUID(),
-            roomIndex: roomIndex,
-            roomIdentifier: room.identifier,
-            story: room.story,
-            roomPlanFloorElevationMeters: seed.floorElevationMeters,
-            floorElevationMeters: seed.floorElevationMeters,
-            structuralCeilingHeightMeters: seed.structuralCeilingHeightMeters,
-            finishedCeilingHeightMeters: seed.structuralCeilingHeightMeters,
-            createdAt: old?.createdAt ?? now,
-            updatedAt: now
-        )
-        if let index = roomLevelProfiles.firstIndex(where: { $0.roomIndex == roomIndex }) {
-            roomLevelProfiles[index] = replacement
-        } else {
-            roomLevelProfiles.append(replacement)
-        }
-        if deleteZones {
-            ceilingZoneRecords.removeAll { $0.roomIndex == roomIndex }
-        }
-        persistRoomLevelDocument()
-        refreshProjectReviewIssues()
-        statusMessage = "تمت استعادة مناسيب RoomPlan المقترحة للغرفة \(roomIndex)."
-    }
-
-    func suggestedCeilingZone(for roomIndex: Int) -> CeilingZoneRecord {
-        let now = Date()
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else {
-            return CeilingZoneRecord(
-                id: UUID(), roomIndex: roomIndex, name: "", kind: .falseCeiling,
-                centerX: 0, centerZ: 0, widthMeters: 1, depthMeters: 1,
-                rotationDegrees: 0, heightAboveFloorMeters: 2.7,
-                createdAt: now, updatedAt: now
-            )
-        }
-        ensureRoomLevelProfile(for: roomIndex)
-        let room = capturedRooms[roomIndex - 1]
-        let seed = RoomLevelGeometrySeed.make(room: room)
-        let profile = roomLevelProfile(for: roomIndex)
-        let suggestedHeight = min(
-            profile?.finishedCeilingHeightMeters ?? seed.structuralCeilingHeightMeters,
-            profile?.structuralCeilingHeightMeters ?? seed.structuralCeilingHeightMeters
-        )
-        return CeilingZoneRecord(
-            id: UUID(),
-            roomIndex: roomIndex,
-            name: "سقف الغرفة \(roomIndex)",
-            kind: .falseCeiling,
-            centerX: seed.centerX,
-            centerZ: seed.centerZ,
-            widthMeters: max(seed.widthMeters * 0.90, 0.20),
-            depthMeters: max(seed.depthMeters * 0.90, 0.20),
-            rotationDegrees: seed.rotationDegrees,
-            heightAboveFloorMeters: max(suggestedHeight, 0.20),
-            createdAt: now,
-            updatedAt: now
-        )
-    }
-
-    func saveCeilingZone(_ zone: CeilingZoneRecord) {
-        guard zone.roomIndex > 0, zone.roomIndex <= capturedRooms.count else { return }
-        ensureRoomLevelProfile(for: zone.roomIndex)
-        if let index = ceilingZoneRecords.firstIndex(where: { $0.id == zone.id }) {
-            ceilingZoneRecords[index] = zone
-        } else {
-            ceilingZoneRecords.append(zone)
-        }
-        persistRoomLevelDocument()
-        refreshProjectReviewIssues()
-        statusMessage = "تم حفظ منطقة السقف للغرفة \(zone.roomIndex)."
-    }
-
-    func deleteCeilingZone(id: UUID) {
-        guard let record = ceilingZoneRecords.first(where: { $0.id == id }) else { return }
-        ceilingZoneRecords.removeAll { $0.id == id }
-        persistRoomLevelDocument()
-        refreshProjectReviewIssues()
-        statusMessage = "تم حذف منطقة السقف من الغرفة \(record.roomIndex)."
-    }
-
-    private func refreshRoomLevelProfileAfterRoomReplacement(roomIndex: Int) {
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
-        let room = capturedRooms[roomIndex - 1]
-        let seed = RoomLevelGeometrySeed.make(room: room)
-        if let index = roomLevelProfiles.firstIndex(where: { $0.roomIndex == roomIndex }) {
-            let old = roomLevelProfiles[index]
-            roomLevelProfiles[index] = RoomLevelProfileRecord(
-                id: old.id,
-                roomIndex: roomIndex,
-                roomIdentifier: room.identifier,
-                story: old.story,
-                roomPlanFloorElevationMeters: seed.floorElevationMeters,
-                floorElevationMeters: old.floorElevationMeters,
-                structuralCeilingHeightMeters: old.structuralCeilingHeightMeters,
-                finishedCeilingHeightMeters: old.finishedCeilingHeightMeters,
-                createdAt: old.createdAt,
-                updatedAt: Date()
-            )
-        } else {
-            ensureRoomLevelProfile(for: roomIndex)
-            return
-        }
-        persistRoomLevelDocument()
-    }
-
-    private func persistRoomLevelDocument() {
-        guard let buildingFolderURL else { return }
-        do {
-            let reviewFolder = buildingFolderURL.appendingPathComponent("Review", isDirectory: true)
-            try FileManager.default.createDirectory(at: reviewFolder, withIntermediateDirectories: true)
-            let document = RoomLevelDocument(
-                schemaVersion: 1,
-                updatedAt: Date(),
-                profiles: roomLevelProfiles.sorted { $0.roomIndex < $1.roomIndex },
-                ceilingZones: ceilingZoneRecords.sorted {
-                    ($0.roomIndex, $0.createdAt) < ($1.roomIndex, $1.createdAt)
-                }
-            )
-            try configuredEncoder().encode(document)
-                .write(to: reviewFolder.appendingPathComponent("room-levels.json"), options: .atomic)
-        } catch {
-            errorMessage = "تعذر حفظ مناسيب الأرضيات والأسقف: \(error.localizedDescription)"
-        }
-    }
-
-    private func loadRoomLevelDocument(from folder: URL) {
-        let url = folder
-            .appendingPathComponent("Review", isDirectory: true)
-            .appendingPathComponent("room-levels.json")
-        guard let data = try? Data(contentsOf: url),
-              let document = try? configuredDecoder().decode(RoomLevelDocument.self, from: data) else {
-            roomLevelProfiles = []
-            ceilingZoneRecords = []
-            return
-        }
-        let validRoomIndices = Set(1...max(capturedRooms.count, 1))
-        roomLevelProfiles = document.profiles
-            .filter { validRoomIndices.contains($0.roomIndex) }
-            .sorted { $0.roomIndex < $1.roomIndex }
-        ceilingZoneRecords = document.ceilingZones
-            .filter { validRoomIndices.contains($0.roomIndex) }
-            .sorted { ($0.roomIndex, $0.createdAt) < ($1.roomIndex, $1.createdAt) }
     }
 }

@@ -12,7 +12,6 @@ struct RoomScanProjectReviewView: View {
     @State private var showingWallEditor = false
     @State private var showingOpeningsManager = false
     @State private var showingGeometryEditor = false
-    @State private var showingLevelsEditor = false
     @State private var previewURL: URL?
     @State private var rescanConfirmationRoom: Int?
     @State private var correctionConfirmationRoom: Int?
@@ -92,13 +91,6 @@ struct RoomScanProjectReviewView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingLevelsEditor) {
-                if let selectedRoomIndex {
-                    NavigationStack {
-                        RoomLevelsEditorView(model: model, roomIndex: selectedRoomIndex)
-                    }
-                }
-            }
             .sheet(
                 item: Binding(
                     get: { previewURL.map(PreviewItem.init) },
@@ -147,7 +139,6 @@ struct RoomScanProjectReviewView: View {
                 Text("امسح المنطقة المفقودة فقط. ستُحفظ كطبقة مكملة ولن تستبدل الغرفة الأصلية.")
             }
             .onAppear {
-                model.ensureAllRoomLevelProfiles()
                 model.refreshProjectReviewIssues()
                 if selectedRoomIndex == nil {
                     selectedRoomIndex = model.roomReviewSummaries.first?.roomIndex
@@ -170,8 +161,6 @@ struct RoomScanProjectReviewView: View {
                 manualOpenings: model.manualOpeningOverlays,
                 suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
                 geometryOverrides: model.wallGeometryOverrides,
-                levelProfiles: model.roomLevelProfiles,
-                ceilingZones: model.ceilingZoneRecords,
                 issueWallIdentifiers: model.issueWallIdentifiers,
                 selectedRoomIndex: $selectedRoomIndex,
                 selectedWall: $selectedWall
@@ -200,7 +189,7 @@ struct RoomScanProjectReviewView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("نموذج المشروع التفاعلي", systemImage: "cube.transparent")
                         .font(.headline)
-                    Text("يعرض سماكات الحوائط، مناسيب الأرضيات، مناطق السقف، الأجزاء المكملة، والعناصر اليدوية.")
+                    Text("يعرض سماكات الحوائط، الأجزاء المكملة، العناصر اليدوية، والعناصر التي أخفيتها من نتيجة RoomPlan.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -215,8 +204,6 @@ struct RoomScanProjectReviewView: View {
                     manualOpenings: model.resolvedManualOpeningRecords,
                     suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
                     geometryOverrides: model.wallGeometryOverrides,
-                    levelProfiles: model.roomLevelProfiles,
-                    ceilingZones: model.ceilingZoneRecords,
                     issueWallIdentifiers: model.issueWallIdentifiers
                 )
                 .frame(height: 380)
@@ -491,19 +478,6 @@ struct RoomScanProjectReviewView: View {
                 }
             }
 
-            if let profile = model.roomLevelProfile(for: summary.roomIndex) {
-                HStack(spacing: 12) {
-                    Label("أرضية \(Int((profile.floorElevationMeters * 100).rounded())) سم", systemImage: "arrow.up.and.down")
-                    Label("سقف \(Int((profile.finishedCeilingHeightMeters * 100).rounded())) سم", systemImage: "rectangle.tophalf.inset.filled")
-                    if !model.ceilingZones(for: summary.roomIndex).isEmpty {
-                        Text("\(model.ceilingZones(for: summary.roomIndex).count) مناطق")
-                            .foregroundStyle(.indigo)
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
-
             HStack(spacing: 8) {
                 Button {
                     showingWallEditor = true
@@ -536,18 +510,9 @@ struct RoomScanProjectReviewView: View {
 
             HStack(spacing: 8) {
                 Button {
-                    showingLevelsEditor = true
-                } label: {
-                    Label("المناسيب", systemImage: "square.3.layers.3d.down.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
-
-                Button {
                     correctionConfirmationRoom = summary.roomIndex
                 } label: {
-                    Label("جزء ناقص", systemImage: "plus.viewfinder")
+                    Label("إضافة جزء ناقص", systemImage: "plus.viewfinder")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -557,14 +522,13 @@ struct RoomScanProjectReviewView: View {
                 Button {
                     rescanConfirmationRoom = summary.roomIndex
                 } label: {
-                    Label("إعادة", systemImage: "viewfinder")
+                    Label("إعادة الغرفة", systemImage: "viewfinder")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .tint(.orange)
                 .disabled(!model.isBuildingFinished)
             }
-            .font(.caption)
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -655,8 +619,6 @@ private struct RoomPlan2DCanvas: View {
     let manualOpenings: [ProjectOpeningOverlay]
     let suppressedSurfaceIdentifiers: Set<UUID>
     let geometryOverrides: [WallGeometryOverrideRecord]
-    let levelProfiles: [RoomLevelProfileRecord]
-    let ceilingZones: [CeilingZoneRecord]
     let issueWallIdentifiers: Set<UUID>
     @Binding var selectedRoomIndex: Int?
     @Binding var selectedWall: RoomWallSelection?
@@ -673,9 +635,7 @@ private struct RoomPlan2DCanvas: View {
             wallAssignments: wallAssignments,
             manualOpenings: manualOpenings,
             suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers,
-            geometryOverrides: geometryOverrides,
-            levelProfiles: levelProfiles,
-            ceilingZones: ceilingZones
+            geometryOverrides: geometryOverrides
         )
     }
 
@@ -713,7 +673,6 @@ private struct RoomPlan2DCanvas: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("اسحب للتحريك • كبّر بإصبعين", systemImage: "hand.draw")
                     Label("اضغط على حائط لاختياره", systemImage: "cursorarrow.click")
-                    Label("البني = أرضية RoomPlan • النيلي = منطقة سقف", systemImage: "square.3.layers.3d.down.right")
                     Label("البنفسجي = جزء مكمل • الأحمر/السماوي = يدوي", systemImage: "paintpalette")
                     Label("الحائط الأحمر المتقطع = يحتاج مراجعة", systemImage: "exclamationmark.triangle")
                 }
@@ -768,41 +727,6 @@ private struct RoomPlan2DCanvas: View {
             return
         }
 
-        for floor in snapshot.floorPolygons where floor.points.count >= 3 {
-            var path = Path()
-            path.move(to: screenPoint(for: floor.points[0], size: size))
-            for point in floor.points.dropFirst() {
-                path.addLine(to: screenPoint(for: point, size: size))
-            }
-            path.closeSubpath()
-            let selected = floor.roomIndex == selectedRoomIndex
-            context.fill(path, with: .color(Color.brown.opacity(selected ? 0.18 : 0.08)))
-            context.stroke(
-                path,
-                with: .color(Color.brown.opacity(selected ? 0.55 : 0.25)),
-                style: StrokeStyle(lineWidth: selected ? 1.6 : 1, dash: [5, 4])
-            )
-        }
-
-        for zone in snapshot.ceilingZoneShapes {
-            let corners = zone.corners.map { screenPoint(for: $0, size: size) }
-            guard corners.count == 4 else { continue }
-            var path = Path()
-            path.move(to: corners[0])
-            for point in corners.dropFirst() { path.addLine(to: point) }
-            path.closeSubpath()
-            context.fill(path, with: .color(Color.indigo.opacity(0.10)))
-            context.stroke(
-                path,
-                with: .color(Color.indigo.opacity(0.75)),
-                style: StrokeStyle(lineWidth: 2, dash: [6, 4])
-            )
-            context.draw(
-                Text(zone.title).font(.caption2.bold()).foregroundStyle(Color.indigo),
-                at: screenPoint(for: zone.center, size: size)
-            )
-        }
-
         for segment in snapshot.segments {
             let start = screenPoint(for: segment.start, size: size)
             let end = screenPoint(for: segment.end, size: size)
@@ -850,10 +774,9 @@ private struct RoomPlan2DCanvas: View {
             let point = screenPoint(for: label.position, size: size)
             let selected = label.roomIndex == selectedRoomIndex
             context.draw(
-                Text("غرفة \(label.roomIndex)\n\(label.levelText)")
+                Text("غرفة \(label.roomIndex)")
                     .font(.caption.bold())
-                    .foregroundStyle(selected ? Color.cyan : Color.primary)
-                    .multilineTextAlignment(.center),
+                    .foregroundStyle(selected ? Color.cyan : Color.primary),
                 at: point
             )
         }
@@ -915,21 +838,6 @@ private struct FloorPlanSnapshot {
     struct Label {
         let roomIndex: Int
         let position: SIMD2<Float>
-        let levelText: String
-    }
-
-    struct FloorPolygon: Identifiable {
-        let id: String
-        let roomIndex: Int
-        let points: [SIMD2<Float>]
-    }
-
-    struct CeilingZoneShape: Identifiable {
-        let id: UUID
-        let roomIndex: Int
-        let title: String
-        let center: SIMD2<Float>
-        let corners: [SIMD2<Float>]
     }
 
     struct Bounds {
@@ -941,8 +849,6 @@ private struct FloorPlanSnapshot {
 
     let segments: [Segment]
     let labels: [Label]
-    let floorPolygons: [FloorPolygon]
-    let ceilingZoneShapes: [CeilingZoneShape]
     let bounds: Bounds
 
     init(
@@ -951,15 +857,10 @@ private struct FloorPlanSnapshot {
         wallAssignments: [RoomWallAssignment],
         manualOpenings: [ProjectOpeningOverlay],
         suppressedSurfaceIdentifiers: Set<UUID>,
-        geometryOverrides: [WallGeometryOverrideRecord],
-        levelProfiles: [RoomLevelProfileRecord],
-        ceilingZones: [CeilingZoneRecord]
+        geometryOverrides: [WallGeometryOverrideRecord]
     ) {
         var newSegments: [Segment] = []
         var newLabels: [Label] = []
-        var newFloorPolygons: [FloorPolygon] = []
-        var newCeilingZoneShapes: [CeilingZoneShape] = []
-        let profileByRoom = Dictionary(uniqueKeysWithValues: levelProfiles.map { ($0.roomIndex, $0) })
         var assignmentByKey: [WallKey: RoomWallAssignment] = [:]
         for assignment in wallAssignments {
             let key = WallKey(roomIndex: assignment.roomIndex, wallIdentifier: assignment.wallIdentifier)
@@ -1032,53 +933,12 @@ private struct FloorPlanSnapshot {
 
             if addLabel, !wallCenters.isEmpty {
                 let sum = wallCenters.reduce(SIMD2<Float>(repeating: 0), +)
-                let profile = profileByRoom[roomIndex]
-                let floorCM = Int(((profile?.floorElevationMeters ?? 0) * 100).rounded())
-                let ceilingCM = Int(((profile?.finishedCeilingHeightMeters ?? 0) * 100).rounded())
-                newLabels.append(
-                    Label(
-                        roomIndex: roomIndex,
-                        position: sum / Float(wallCenters.count),
-                        levelText: "أرضية \(floorCM) سم • سقف \(ceilingCM) سم"
-                    )
-                )
+                newLabels.append(Label(roomIndex: roomIndex, position: sum / Float(wallCenters.count)))
             }
         }
 
         for (offset, room) in rooms.enumerated() {
-            let roomIndex = offset + 1
-            appendRoom(room, roomIndex: roomIndex, source: .roomPlan, addLabel: true)
-            if room.floors.isEmpty {
-                let seed = RoomLevelGeometrySeed.make(room: room)
-                let angle = Float(seed.rotationDegrees * .pi / 180)
-                let axis = SIMD2<Float>(cos(angle), sin(angle))
-                let normal = SIMD2<Float>(-axis.y, axis.x)
-                let center = SIMD2<Float>(Float(seed.centerX), Float(seed.centerZ))
-                let halfWidth = Float(seed.widthMeters / 2)
-                let halfDepth = Float(seed.depthMeters / 2)
-                newFloorPolygons.append(
-                    FloorPolygon(
-                        id: "fallback-floor-\(roomIndex)",
-                        roomIndex: roomIndex,
-                        points: [
-                            center - axis * halfWidth - normal * halfDepth,
-                            center + axis * halfWidth - normal * halfDepth,
-                            center + axis * halfWidth + normal * halfDepth,
-                            center - axis * halfWidth + normal * halfDepth
-                        ]
-                    )
-                )
-            } else {
-                for floor in room.floors {
-                    newFloorPolygons.append(
-                        FloorPolygon(
-                            id: floor.identifier.uuidString,
-                            roomIndex: roomIndex,
-                            points: RoomLevelGeometrySeed.floorFootprint(surface: floor)
-                        )
-                    )
-                }
-            }
+            appendRoom(room, roomIndex: offset + 1, source: .roomPlan, addLabel: true)
         }
         for correction in corrections {
             appendRoom(correction.room, roomIndex: correction.roomIndex, source: .correction, addLabel: false)
@@ -1104,47 +964,19 @@ private struct FloorPlanSnapshot {
             )
         }
 
-        for zone in ceilingZones {
-            let angle = Float(zone.rotationDegrees * .pi / 180)
-            let axis = SIMD2<Float>(cos(angle), sin(angle))
-            let normal = SIMD2<Float>(-axis.y, axis.x)
-            let center = SIMD2<Float>(Float(zone.centerX), Float(zone.centerZ))
-            let halfWidth = Float(zone.widthMeters / 2)
-            let halfDepth = Float(zone.depthMeters / 2)
-            newCeilingZoneShapes.append(
-                CeilingZoneShape(
-                    id: zone.id,
-                    roomIndex: zone.roomIndex,
-                    title: "\(zone.name.isEmpty ? zone.kind.arabicTitle : zone.name) • \(Int((zone.heightAboveFloorMeters * 100).rounded())) سم",
-                    center: center,
-                    corners: [
-                        center - axis * halfWidth - normal * halfDepth,
-                        center + axis * halfWidth - normal * halfDepth,
-                        center + axis * halfWidth + normal * halfDepth,
-                        center - axis * halfWidth + normal * halfDepth
-                    ]
-                )
-            )
-        }
-
         segments = newSegments
         labels = newLabels
-        floorPolygons = newFloorPolygons
-        ceilingZoneShapes = newCeilingZoneShapes
 
-        let allPoints = newSegments.flatMap { [$0.start, $0.end] }
-            + newFloorPolygons.flatMap(\.points)
-            + newCeilingZoneShapes.flatMap(\.corners)
-        if let first = allPoints.first {
-            var minX = first.x
-            var maxX = first.x
-            var minY = first.y
-            var maxY = first.y
-            for point in allPoints.dropFirst() {
-                minX = min(minX, point.x)
-                maxX = max(maxX, point.x)
-                minY = min(minY, point.y)
-                maxY = max(maxY, point.y)
+        if let first = newSegments.first {
+            var minX = min(first.start.x, first.end.x)
+            var maxX = max(first.start.x, first.end.x)
+            var minY = min(first.start.y, first.end.y)
+            var maxY = max(first.start.y, first.end.y)
+            for segment in newSegments.dropFirst() {
+                minX = min(minX, min(segment.start.x, segment.end.x))
+                maxX = max(maxX, max(segment.start.x, segment.end.x))
+                minY = min(minY, min(segment.start.y, segment.end.y))
+                maxY = max(maxY, max(segment.start.y, segment.end.y))
             }
             bounds = Bounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY)
         } else {
