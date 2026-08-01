@@ -106,10 +106,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     @Published private(set) var roomLevelProfiles: [RoomLevelProfileRecord] = []
     @Published private(set) var ceilingZoneRecords: [CeilingZoneRecord] = []
 
-    /// Phase 6: final export package generated from the reviewed, non-destructive building model.
-    @Published private(set) var isCreatingProjectExport = false
-    @Published private(set) var latestProjectExportPackage: RoomScanProjectExportPackage?
-
     private weak var captureView: RoomCaptureView?
     private var pendingStartRequest: PendingStartRequest?
     private var shouldAcceptNextProcessedRoom = false
@@ -3222,39 +3218,3 @@ extension RoomScanViewModel {
             .sorted { ($0.roomIndex, $0.createdAt) < ($1.roomIndex, $1.createdAt) }
     }
 }
-
-// MARK: - Phase 6 final reviewed-project export
-
-extension RoomScanViewModel {
-    func exportReviewedProjectPackage() {
-        guard !capturedRooms.isEmpty else {
-            errorMessage = "لا توجد غرف مثبتة لتصديرها."
-            return
-        }
-        guard !isCreatingProjectExport else { return }
-
-        isCreatingProjectExport = true
-        errorMessage = nil
-        ensureAllRoomLevelProfiles()
-        refreshProjectReviewIssues()
-
-        do {
-            let storage = LiDARLabStorage.shared
-            try storage.ensureDirectories()
-            let folder = storage.exportsURL.appendingPathComponent(
-                storage.timestampedName(prefix: "RoomScan-Reviewed"),
-                isDirectory: true
-            )
-            let package = try RoomScanProjectExporter.export(model: self, folder: folder)
-            latestProjectExportPackage = package
-            statusMessage = "تم إنشاء حزمة التصدير النهائية: PDF وPNG وJSON وCSV وDXF."
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-        } catch {
-            errorMessage = "تعذر تصدير المشروع: \(error.localizedDescription)"
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-        }
-
-        isCreatingProjectExport = false
-    }
-}
-

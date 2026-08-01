@@ -11,7 +11,7 @@
 - App Folder: `Apps/LiDARLab`
 - Future App Group: `group.com.essam.3e`
 
-## النسخة 0.17.0 — دمج القياس المتعدد مع RoomScan
+## النسخة 0.18.0 — دمج القياس المتعدد مع RoomScan
 
 تجمع هذه النسخة خط التطوير الكامل لمسح الغرف مع وظيفة القياس المتعدد التي أضيفت بصورة مستقلة. لم يتم استبدال أي ملف داخل `Features/RoomScan`.
 
@@ -232,3 +232,7 @@ lidar://open?path=Apps/LiDARLab/Projects/FileName
 - جهاز يدعم ARKit.
 - وظائف العمق والتسجيل تحتاج Scene Depth وحساس LiDAR.
 - مسح الغرفة يحتاج جهازًا يدعم RoomPlan.
+
+## RoomScan final export (0.18.0)
+
+The RoomScan review center can generate a final reviewed project package in PDF, PNG, JSON, CSV and DXF. The export is built from the app-owned corrected model while preserving the original RoomPlan results.

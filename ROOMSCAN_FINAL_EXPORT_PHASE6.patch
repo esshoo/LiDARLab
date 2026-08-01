@@ -1,0 +1,1591 @@
+diff -ruN '--exclude=_backup' '--exclude=*.patch' /mnt/data/phase6_export/diff_old/CHANGELOG.md /mnt/data/phase6_export/diff_new/CHANGELOG.md
+--- /mnt/data/phase6_export/diff_old/CHANGELOG.md	2026-08-01 18:46:07.000000000 +0000
++++ /mnt/data/phase6_export/diff_new/CHANGELOG.md	2026-08-01 18:59:58.132469712 +0000
+@@ -1,3 +1,17 @@
++# Changelog
++
++## 0.18.0 (Build 23) - Final Reviewed Project Export
++
++- Added a dedicated Export tab to the RoomScan review center.
++- Added reviewed-project PDF export with a scaled floor plan and paginated data report.
++- Added high-resolution PNG floor-plan export.
++- Added a complete app-owned JSON model containing rooms, physical walls, wall faces, openings, levels, ceiling zones, correction layers and issues.
++- Added UTF-8 CSV files for rooms, walls, openings, ceiling zones and review issues.
++- Added DXF export in meters with separate CAD layers for walls, doors, windows, openings, floors, ceilings, corrections, room labels and issues.
++- Exported walls use the confirmed physical-wall thickness and applied geometry overrides without changing the original RoomPlan JSON.
++- Added PDF preview and per-file/all-files sharing from the review center.
++- Final packages are saved under `Exports/RoomScan-Reviewed-<timestamp>/`.
++
+ ## 0.17.0
+ 
+ - دمج وظيفة **القياس المتعدد** المرسلة من المستخدم مع أحدث نسخة RoomScan 0.16.1 دون استبدال أي ملف داخل `Features/RoomScan`.
+diff -ruN '--exclude=_backup' '--exclude=*.patch' /mnt/data/phase6_export/diff_old/LiDARLab/Features/RoomScan/RoomScanProjectExport.swift /mnt/data/phase6_export/diff_new/LiDARLab/Features/RoomScan/RoomScanProjectExport.swift
+--- /mnt/data/phase6_export/diff_old/LiDARLab/Features/RoomScan/RoomScanProjectExport.swift	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/phase6_export/diff_new/LiDARLab/Features/RoomScan/RoomScanProjectExport.swift	2026-08-01 18:58:41.712472645 +0000
+@@ -0,0 +1,1256 @@
++import Foundation
++import RoomPlan
++import UIKit
++import simd
++
++struct RoomScanProjectExportPackage: Identifiable {
++    let id = UUID()
++    let folderURL: URL
++    let pdfURL: URL
++    let pngURL: URL
++    let jsonURL: URL
++    let dxfURL: URL
++    let csvURLs: [URL]
++    let manifestURL: URL
++
++    var shareItems: [Any] {
++        [pdfURL, pngURL, jsonURL, dxfURL, manifestURL] + csvURLs
++    }
++}
++
++private struct ProjectExportPoint: Codable {
++    let x: Double
++    let y: Double
++}
++
++private struct ProjectExportRoom: Codable {
++    let roomIndex: Int
++    let identifier: UUID
++    let story: Int
++    let floorElevationMeters: Double
++    let structuralCeilingHeightMeters: Double
++    let finishedCeilingHeightMeters: Double
++    let wallCount: Int
++    let doorCount: Int
++    let windowCount: Int
++    let openingCount: Int
++    let objectCount: Int
++    let acceptedCorrectionCount: Int
++    let floorPolygons: [[ProjectExportPoint]]
++}
++
++private struct ProjectExportWallFace: Codable {
++    let assignmentID: UUID
++    let roomIndex: Int
++    let wallNumber: Int
++    let wallIdentifier: UUID
++    let start: ProjectExportPoint
++    let end: ProjectExportPoint
++    let centerY: Double
++    let lengthMeters: Double
++    let heightMeters: Double
++}
++
++private struct ProjectExportWall: Codable {
++    let buildingWallID: UUID
++    let roomIndices: [Int]
++    let start: ProjectExportPoint
++    let end: ProjectExportPoint
++    let center: ProjectExportPoint
++    let lengthMeters: Double
++    let thicknessMeters: Double
++    let source: String
++    let isShared: Bool
++    let hasReviewIssue: Bool
++    let faces: [ProjectExportWallFace]
++}
++
++private struct ProjectExportOpening: Codable {
++    let identifier: UUID
++    let source: String
++    let kind: String
++    let roomIndex: Int
++    let buildingWallID: UUID?
++    let connectsRoomIndex: Int?
++    let start: ProjectExportPoint
++    let end: ProjectExportPoint
++    let widthMeters: Double
++    let heightMeters: Double
++    let sillHeightMeters: Double
++    let isSuppressed: Bool
++}
++
++private struct ProjectExportCeilingZone: Codable {
++    let identifier: UUID
++    let roomIndex: Int
++    let name: String
++    let kind: String
++    let center: ProjectExportPoint
++    let widthMeters: Double
++    let depthMeters: Double
++    let rotationDegrees: Double
++    let heightAboveFloorMeters: Double
++    let corners: [ProjectExportPoint]
++}
++
++private struct ProjectExportCorrection: Codable {
++    let identifier: UUID
++    let roomIndex: Int
++    let correctionNumber: Int
++    let wallCount: Int
++    let doorCount: Int
++    let windowCount: Int
++    let openingCount: Int
++}
++
++private struct EditableRoomScanProjectDocument: Codable {
++    let schemaVersion: Int
++    let generatedAt: Date
++    let coordinateSystem: String
++    let linearUnit: String
++    let source: String
++    let roomCount: Int
++    let physicalWallCount: Int
++    let sharedWallCount: Int
++    let rooms: [ProjectExportRoom]
++    let walls: [ProjectExportWall]
++    let openings: [ProjectExportOpening]
++    let ceilingZones: [ProjectExportCeilingZone]
++    let corrections: [ProjectExportCorrection]
++    let issues: [ProjectReviewIssue]
++}
++
++private struct ProjectExportManifest: Codable {
++    let schemaVersion: Int
++    let generatedAt: Date
++    let appVersion: String
++    let projectFolder: String?
++    let formats: [String]
++    let files: [String]
++    let notes: [String]
++}
++
++@MainActor
++enum RoomScanProjectExporter {
++    private enum PlanElementKind {
++        case wall
++        case door
++        case window
++        case opening
++        case correction
++    }
++
++    private struct PlanSegment {
++        let id: String
++        let kind: PlanElementKind
++        let start: SIMD2<Double>
++        let end: SIMD2<Double>
++        let thicknessMeters: Double
++        let label: String?
++        let hasIssue: Bool
++    }
++
++    private struct PlanPolygon {
++        let id: String
++        let points: [SIMD2<Double>]
++        let title: String?
++    }
++
++    private struct PlanLabel {
++        let roomIndex: Int
++        let position: SIMD2<Double>
++        let floorMeters: Double
++        let ceilingMeters: Double
++    }
++
++    private struct PlanSnapshot {
++        let floors: [PlanPolygon]
++        let ceilings: [PlanPolygon]
++        let segments: [PlanSegment]
++        let labels: [PlanLabel]
++        let minX: Double
++        let minY: Double
++        let maxX: Double
++        let maxY: Double
++
++        var width: Double { max(maxX - minX, 0.5) }
++        var height: Double { max(maxY - minY, 0.5) }
++    }
++
++    static func export(model: RoomScanViewModel, folder: URL) throws -> RoomScanProjectExportPackage {
++        guard !model.capturedRooms.isEmpty else {
++            throw ExportError.noRooms
++        }
++
++        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
++
++        let generatedAt = Date()
++        let document = makeDocument(model: model, generatedAt: generatedAt)
++        let snapshot = makePlanSnapshot(model: model, document: document)
++
++        let jsonURL = folder.appendingPathComponent("project-model.json")
++        let pdfURL = folder.appendingPathComponent("floor-plan.pdf")
++        let pngURL = folder.appendingPathComponent("floor-plan.png")
++        let dxfURL = folder.appendingPathComponent("floor-plan.dxf")
++        let roomsCSVURL = folder.appendingPathComponent("rooms.csv")
++        let wallsCSVURL = folder.appendingPathComponent("walls.csv")
++        let openingsCSVURL = folder.appendingPathComponent("openings.csv")
++        let ceilingsCSVURL = folder.appendingPathComponent("ceiling-zones.csv")
++        let issuesCSVURL = folder.appendingPathComponent("issues.csv")
++        let manifestURL = folder.appendingPathComponent("export-manifest.json")
++
++        let encoder = JSONEncoder()
++        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++        encoder.dateEncodingStrategy = .iso8601
++        try encoder.encode(document).write(to: jsonURL, options: .atomic)
++
++        try renderPNG(snapshot: snapshot, document: document, to: pngURL)
++        try renderPDF(snapshot: snapshot, document: document, to: pdfURL)
++        try makeDXF(snapshot: snapshot, document: document).write(to: dxfURL, atomically: true, encoding: .utf8)
++
++        try writeUTF8CSV(makeRoomsCSV(document.rooms), to: roomsCSVURL)
++        try writeUTF8CSV(makeWallsCSV(document.walls), to: wallsCSVURL)
++        try writeUTF8CSV(makeOpeningsCSV(document.openings), to: openingsCSVURL)
++        try writeUTF8CSV(makeCeilingZonesCSV(document.ceilingZones), to: ceilingsCSVURL)
++        try writeUTF8CSV(makeIssuesCSV(document.issues), to: issuesCSVURL)
++
++        let files = [
++            pdfURL, pngURL, jsonURL, dxfURL,
++            roomsCSVURL, wallsCSVURL, openingsCSVURL, ceilingsCSVURL, issuesCSVURL
++        ]
++        let manifest = ProjectExportManifest(
++            schemaVersion: 1,
++            generatedAt: generatedAt,
++            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
++            projectFolder: model.buildingFolderURL?.lastPathComponent,
++            formats: ["PDF", "PNG", "JSON", "CSV", "DXF"],
++            files: files.map(\.lastPathComponent),
++            notes: [
++                "RoomPlan source files remain unchanged.",
++                "The exported plan includes app-owned wall thickness, geometry, openings, levels and ceiling zones.",
++                "DXF uses meters and English layer names for broad CAD compatibility."
++            ]
++        )
++        try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
++
++        return RoomScanProjectExportPackage(
++            folderURL: folder,
++            pdfURL: pdfURL,
++            pngURL: pngURL,
++            jsonURL: jsonURL,
++            dxfURL: dxfURL,
++            csvURLs: [roomsCSVURL, wallsCSVURL, openingsCSVURL, ceilingsCSVURL, issuesCSVURL],
++            manifestURL: manifestURL
++        )
++    }
++
++    private static func makeDocument(
++        model: RoomScanViewModel,
++        generatedAt: Date
++    ) -> EditableRoomScanProjectDocument {
++        let profiles = Dictionary(uniqueKeysWithValues: model.roomLevelProfiles.map { ($0.roomIndex, $0) })
++        let roomItems = model.capturedRooms.enumerated().map { offset, room -> ProjectExportRoom in
++            let roomIndex = offset + 1
++            let seed = RoomLevelGeometrySeed.make(room: room)
++            let profile = profiles[roomIndex]
++            let floorPolygons: [[ProjectExportPoint]]
++            if room.floors.isEmpty {
++                floorPolygons = [fallbackFloorPolygon(seed: seed).map(exportPoint)]
++            } else {
++                floorPolygons = room.floors.map {
++                    RoomLevelGeometrySeed.floorFootprint(surface: $0)
++                        .map { exportPoint(SIMD2<Double>(Double($0.x), Double($0.y))) }
++                }
++            }
++            return ProjectExportRoom(
++                roomIndex: roomIndex,
++                identifier: room.identifier,
++                story: profile?.story ?? room.story,
++                floorElevationMeters: profile?.floorElevationMeters ?? seed.floorElevationMeters,
++                structuralCeilingHeightMeters: profile?.structuralCeilingHeightMeters ?? seed.structuralCeilingHeightMeters,
++                finishedCeilingHeightMeters: profile?.finishedCeilingHeightMeters ?? seed.structuralCeilingHeightMeters,
++                wallCount: room.walls.count,
++                doorCount: room.doors.count,
++                windowCount: room.windows.count,
++                openingCount: room.openings.count,
++                objectCount: room.objects.count,
++                acceptedCorrectionCount: model.acceptedRoomCorrections.filter { $0.roomIndex == roomIndex }.count,
++                floorPolygons: floorPolygons
++            )
++        }
++
++        let issueWallIDs = Set(model.projectReviewIssues.compactMap(\.buildingWallID))
++        let wallRecordByID = Dictionary(uniqueKeysWithValues: model.buildingWallRecords.map { ($0.id, $0) })
++        let groupedAssignments = Dictionary(grouping: uniqueAssignments(model.roomWallAssignments), by: \.buildingWallID)
++        let wallItems = groupedAssignments.compactMap { buildingWallID, assignments -> ProjectExportWall? in
++            guard let first = assignments.first else { return nil }
++            let baseTangent = normalized(
++                SIMD2<Double>(Double(first.geometry.tangentX), Double(first.geometry.tangentZ)),
++                fallback: SIMD2<Double>(1, 0)
++            )
++            let effectiveItems = assignments.map { assignment -> (RoomWallAssignment, EffectiveWallGeometry, SIMD2<Double>) in
++                let geometry = model.effectiveWallGeometry(for: assignment)
++                var tangent = normalized(
++                    SIMD2<Double>(Double(geometry.tangentX), Double(geometry.tangentZ)),
++                    fallback: baseTangent
++                )
++                if simd_dot(tangent, baseTangent) < 0 { tangent *= -1 }
++                return (assignment, geometry, tangent)
++            }
++            let center = effectiveItems.reduce(SIMD2<Double>(repeating: 0)) {
++                $0 + SIMD2<Double>(Double($1.1.centerX), Double($1.1.centerZ))
++            } / Double(effectiveItems.count)
++            let tangentSum = effectiveItems.reduce(SIMD2<Double>(repeating: 0)) { $0 + $1.2 }
++            let tangent = normalized(tangentSum, fallback: baseTangent)
++            let length = effectiveItems.map { Double($0.1.widthMeters) }.max() ?? Double(first.geometry.widthMeters)
++            let start = center - tangent * (length / 2)
++            let end = center + tangent * (length / 2)
++            let record = wallRecordByID[buildingWallID]
++            let roomIndices = Array(Set(assignments.map(\.roomIndex))).sorted()
++            let faces = effectiveItems.map { assignment, geometry, faceTangent in
++                let faceCenter = SIMD2<Double>(Double(geometry.centerX), Double(geometry.centerZ))
++                let faceLength = Double(geometry.widthMeters)
++                return ProjectExportWallFace(
++                    assignmentID: assignment.id,
++                    roomIndex: assignment.roomIndex,
++                    wallNumber: assignment.wallNumber,
++                    wallIdentifier: assignment.wallIdentifier,
++                    start: exportPoint(faceCenter - faceTangent * (faceLength / 2)),
++                    end: exportPoint(faceCenter + faceTangent * (faceLength / 2)),
++                    centerY: Double(geometry.centerY),
++                    lengthMeters: faceLength,
++                    heightMeters: Double(geometry.heightMeters)
++                )
++            }.sorted { ($0.roomIndex, $0.wallNumber) < ($1.roomIndex, $1.wallNumber) }
++            return ProjectExportWall(
++                buildingWallID: buildingWallID,
++                roomIndices: roomIndices,
++                start: exportPoint(start),
++                end: exportPoint(end),
++                center: exportPoint(center),
++                lengthMeters: length,
++                thicknessMeters: record?.thicknessMeters ?? model.buildingDefaultWallThicknessMeters,
++                source: record?.source.rawValue ?? WallThicknessSource.buildingDefault.rawValue,
++                isShared: roomIndices.count > 1,
++                hasReviewIssue: issueWallIDs.contains(buildingWallID),
++                faces: faces
++            )
++        }.sorted {
++            let lhsRoom = $0.roomIndices.first ?? Int.max
++            let rhsRoom = $1.roomIndices.first ?? Int.max
++            return (lhsRoom, $0.buildingWallID.uuidString) < (rhsRoom, $1.buildingWallID.uuidString)
++        }
++
++        var openingItems: [ProjectExportOpening] = []
++        for record in model.resolvedManualOpeningRecords {
++            let tangent = normalized(
++                SIMD2<Double>(Double(record.tangentX), Double(record.tangentZ)),
++                fallback: SIMD2<Double>(1, 0)
++            )
++            let center = SIMD2<Double>(Double(record.centerX), Double(record.centerZ))
++            openingItems.append(
++                ProjectExportOpening(
++                    identifier: record.id,
++                    source: "manual",
++                    kind: record.kind.rawValue,
++                    roomIndex: record.sourceRoomIndex,
++                    buildingWallID: record.buildingWallID,
++                    connectsRoomIndex: record.connectsRoomIndex,
++                    start: exportPoint(center - tangent * (record.widthMeters / 2)),
++                    end: exportPoint(center + tangent * (record.widthMeters / 2)),
++                    widthMeters: record.widthMeters,
++                    heightMeters: record.heightMeters,
++                    sillHeightMeters: record.sillHeightMeters,
++                    isSuppressed: false
++                )
++            )
++        }
++
++        for (offset, room) in model.capturedRooms.enumerated() {
++            let roomIndex = offset + 1
++            func appendDetected(_ surfaces: [CapturedRoom.Surface], kind: String) {
++                for surface in surfaces {
++                    let center = SIMD2<Double>(Double(surface.transform.columns.3.x), Double(surface.transform.columns.3.z))
++                    let tangent = normalized(
++                        SIMD2<Double>(Double(surface.transform.columns.0.x), Double(surface.transform.columns.0.z)),
++                        fallback: SIMD2<Double>(1, 0)
++                    )
++                    let width = Double(max(surface.dimensions.x, 0.05))
++                    let assignment = surface.parentIdentifier.flatMap { parentID in
++                        model.roomWallAssignments.first {
++                            $0.roomIndex == roomIndex && $0.wallIdentifier == parentID
++                        }
++                    }
++                    openingItems.append(
++                        ProjectExportOpening(
++                            identifier: surface.identifier,
++                            source: "roomPlan",
++                            kind: kind,
++                            roomIndex: roomIndex,
++                            buildingWallID: assignment?.buildingWallID,
++                            connectsRoomIndex: nil,
++                            start: exportPoint(center - tangent * (width / 2)),
++                            end: exportPoint(center + tangent * (width / 2)),
++                            widthMeters: width,
++                            heightMeters: Double(max(surface.dimensions.y, 0.05)),
++                            sillHeightMeters: 0,
++                            isSuppressed: model.suppressedSurfaceIdentifiers.contains(surface.identifier)
++                        )
++                    )
++                }
++            }
++            appendDetected(room.doors, kind: ManualOpeningKind.door.rawValue)
++            appendDetected(room.windows, kind: ManualOpeningKind.window.rawValue)
++            appendDetected(room.openings, kind: ManualOpeningKind.opening.rawValue)
++        }
++        openingItems.sort { ($0.roomIndex, $0.kind, $0.identifier.uuidString) < ($1.roomIndex, $1.kind, $1.identifier.uuidString) }
++
++        let ceilingItems = model.ceilingZoneRecords.map { zone -> ProjectExportCeilingZone in
++            let corners = ceilingCorners(zone).map(exportPoint)
++            return ProjectExportCeilingZone(
++                identifier: zone.id,
++                roomIndex: zone.roomIndex,
++                name: zone.name,
++                kind: zone.kind.rawValue,
++                center: ProjectExportPoint(x: zone.centerX, y: zone.centerZ),
++                widthMeters: zone.widthMeters,
++                depthMeters: zone.depthMeters,
++                rotationDegrees: zone.rotationDegrees,
++                heightAboveFloorMeters: zone.heightAboveFloorMeters,
++                corners: corners
++            )
++        }.sorted { ($0.roomIndex, $0.name, $0.identifier.uuidString) < ($1.roomIndex, $1.name, $1.identifier.uuidString) }
++
++        let correctionItems = model.acceptedRoomCorrections.map { correction in
++            ProjectExportCorrection(
++                identifier: correction.id,
++                roomIndex: correction.roomIndex,
++                correctionNumber: correction.record.correctionNumber,
++                wallCount: correction.room.walls.count,
++                doorCount: correction.room.doors.count,
++                windowCount: correction.room.windows.count,
++                openingCount: correction.room.openings.count
++            )
++        }
++
++        return EditableRoomScanProjectDocument(
++            schemaVersion: 1,
++            generatedAt: generatedAt,
++            coordinateSystem: "RoomPlan shared AR world space; X/Z exported as 2D X/Y",
++            linearUnit: "meter",
++            source: "RoomPlan plus non-destructive 3ELiDAR review layers",
++            roomCount: model.roomCount,
++            physicalWallCount: wallItems.count,
++            sharedWallCount: wallItems.filter(\.isShared).count,
++            rooms: roomItems,
++            walls: wallItems,
++            openings: openingItems,
++            ceilingZones: ceilingItems,
++            corrections: correctionItems,
++            issues: model.projectReviewIssues
++        )
++    }
++
++    private static func makePlanSnapshot(
++        model: RoomScanViewModel,
++        document: EditableRoomScanProjectDocument
++    ) -> PlanSnapshot {
++        let floorPolygons = document.rooms.flatMap { room in
++            room.floorPolygons.enumerated().map { offset, points in
++                PlanPolygon(
++                    id: "floor-\(room.roomIndex)-\(offset)",
++                    points: points.map { SIMD2<Double>($0.x, $0.y) },
++                    title: nil
++                )
++            }
++        }
++        let ceilingPolygons = document.ceilingZones.map { zone in
++            PlanPolygon(
++                id: zone.identifier.uuidString,
++                points: zone.corners.map { SIMD2<Double>($0.x, $0.y) },
++                title: zone.name.isEmpty ? zone.kind : zone.name
++            )
++        }
++
++        var segments = document.walls.map { wall in
++            PlanSegment(
++                id: wall.buildingWallID.uuidString,
++                kind: .wall,
++                start: SIMD2<Double>(wall.start.x, wall.start.y),
++                end: SIMD2<Double>(wall.end.x, wall.end.y),
++                thicknessMeters: wall.thicknessMeters,
++                label: String(format: "%.2f m / %.0f cm", wall.lengthMeters, wall.thicknessMeters * 100),
++                hasIssue: wall.hasReviewIssue
++            )
++        }
++        for opening in document.openings where !opening.isSuppressed {
++            let kind: PlanElementKind
++            switch opening.kind {
++            case ManualOpeningKind.door.rawValue: kind = .door
++            case ManualOpeningKind.window.rawValue: kind = .window
++            default: kind = .opening
++            }
++            segments.append(
++                PlanSegment(
++                    id: opening.identifier.uuidString,
++                    kind: kind,
++                    start: SIMD2<Double>(opening.start.x, opening.start.y),
++                    end: SIMD2<Double>(opening.end.x, opening.end.y),
++                    thicknessMeters: 0,
++                    label: nil,
++                    hasIssue: false
++                )
++            )
++        }
++        for correction in model.acceptedRoomCorrections {
++            for wall in correction.room.walls {
++                let center = SIMD2<Double>(Double(wall.transform.columns.3.x), Double(wall.transform.columns.3.z))
++                let tangent = normalized(
++                    SIMD2<Double>(Double(wall.transform.columns.0.x), Double(wall.transform.columns.0.z)),
++                    fallback: SIMD2<Double>(1, 0)
++                )
++                let half = Double(max(wall.dimensions.x, 0.05)) / 2
++                segments.append(
++                    PlanSegment(
++                        id: "correction-\(correction.id.uuidString)-\(wall.identifier.uuidString)",
++                        kind: .correction,
++                        start: center - tangent * half,
++                        end: center + tangent * half,
++                        thicknessMeters: 0,
++                        label: nil,
++                        hasIssue: false
++                    )
++                )
++            }
++        }
++
++        let labels = document.rooms.map { room -> PlanLabel in
++            let points = room.floorPolygons.flatMap { $0 }.map { SIMD2<Double>($0.x, $0.y) }
++            let position: SIMD2<Double>
++            if points.isEmpty {
++                let wallPoints = document.walls
++                    .filter { $0.roomIndices.contains(room.roomIndex) }
++                    .map { SIMD2<Double>($0.center.x, $0.center.y) }
++                position = average(wallPoints) ?? SIMD2<Double>(repeating: 0)
++            } else {
++                position = average(points) ?? SIMD2<Double>(repeating: 0)
++            }
++            return PlanLabel(
++                roomIndex: room.roomIndex,
++                position: position,
++                floorMeters: room.floorElevationMeters,
++                ceilingMeters: room.finishedCeilingHeightMeters
++            )
++        }
++
++        let allPoints = floorPolygons.flatMap(\.points)
++            + ceilingPolygons.flatMap(\.points)
++            + segments.flatMap { [$0.start, $0.end] }
++        let minX = allPoints.map(\.x).min() ?? -1
++        let maxX = allPoints.map(\.x).max() ?? 1
++        let minY = allPoints.map(\.y).min() ?? -1
++        let maxY = allPoints.map(\.y).max() ?? 1
++
++        return PlanSnapshot(
++            floors: floorPolygons,
++            ceilings: ceilingPolygons,
++            segments: segments,
++            labels: labels,
++            minX: minX,
++            minY: minY,
++            maxX: maxX,
++            maxY: maxY
++        )
++    }
++
++    private static func renderPNG(
++        snapshot: PlanSnapshot,
++        document: EditableRoomScanProjectDocument,
++        to url: URL
++    ) throws {
++        let size = CGSize(width: 2400, height: 1800)
++        let format = UIGraphicsImageRendererFormat()
++        format.scale = 1
++        format.opaque = true
++        let renderer = UIGraphicsImageRenderer(size: size, format: format)
++        let image = renderer.image { rendererContext in
++            drawPlan(
++                context: rendererContext.cgContext,
++                rect: CGRect(origin: .zero, size: size),
++                snapshot: snapshot,
++                document: document,
++                title: "3ELiDAR - مخطط المشروع المعدل"
++            )
++        }
++        guard let data = image.pngData() else { throw ExportError.cannotEncodePNG }
++        try data.write(to: url, options: .atomic)
++    }
++
++    private static func renderPDF(
++        snapshot: PlanSnapshot,
++        document: EditableRoomScanProjectDocument,
++        to url: URL
++    ) throws {
++        let pageRect = CGRect(x: 0, y: 0, width: 1190.55, height: 841.89)
++        let format = UIGraphicsPDFRendererFormat()
++        format.documentInfo = [
++            kCGPDFContextTitle as String: "3ELiDAR Edited Floor Plan",
++            kCGPDFContextCreator as String: "3ELiDAR"
++        ]
++        let renderer = UIGraphicsPDFRenderer(bounds: pageRect, format: format)
++        try renderer.writePDF(to: url) { context in
++            context.beginPage()
++            drawPlan(
++                context: context.cgContext,
++                rect: pageRect,
++                snapshot: snapshot,
++                document: document,
++                title: "3ELiDAR - مخطط المشروع المعدل"
++            )
++
++            let reportLines = makeReportLines(document: document)
++            let linesPerPage = 38
++            for chunkStart in stride(from: 0, to: reportLines.count, by: linesPerPage) {
++                context.beginPage()
++                let chunkEnd = min(chunkStart + linesPerPage, reportLines.count)
++                drawReportPage(
++                    context: context.cgContext,
++                    rect: pageRect,
++                    lines: Array(reportLines[chunkStart..<chunkEnd]),
++                    pageNumber: chunkStart / linesPerPage + 2
++                )
++            }
++        }
++    }
++
++    private static func drawPlan(
++        context: CGContext,
++        rect: CGRect,
++        snapshot: PlanSnapshot,
++        document: EditableRoomScanProjectDocument,
++        title: String
++    ) {
++        context.setFillColor(UIColor.white.cgColor)
++        context.fill(rect)
++
++        let headerHeight: CGFloat = max(74, rect.height * 0.09)
++        let footerHeight: CGFloat = max(54, rect.height * 0.07)
++        let planRect = rect.insetBy(dx: rect.width * 0.045, dy: 0)
++            .inset(by: UIEdgeInsets(top: headerHeight, left: 0, bottom: footerHeight, right: 0))
++
++        drawText(
++            title,
++            in: CGRect(x: rect.minX + 36, y: rect.minY + 22, width: rect.width - 72, height: 34),
++            font: .boldSystemFont(ofSize: rect.width > 1500 ? 34 : 22),
++            color: .label,
++            alignment: .right
++        )
++        let subtitle = "الغرف: \(document.roomCount)   الحوائط: \(document.physicalWallCount)   المشتركة: \(document.sharedWallCount)   المشكلات: \(document.issues.count)"
++        drawText(
++            subtitle,
++            in: CGRect(x: rect.minX + 36, y: rect.minY + 55, width: rect.width - 72, height: 25),
++            font: .systemFont(ofSize: rect.width > 1500 ? 21 : 13),
++            color: .secondaryLabel,
++            alignment: .right
++        )
++
++        let transform = makeDrawingTransform(snapshot: snapshot, rect: planRect)
++
++        context.saveGState()
++        context.setFillColor(UIColor.systemBrown.withAlphaComponent(0.07).cgColor)
++        context.setStrokeColor(UIColor.systemBrown.withAlphaComponent(0.35).cgColor)
++        context.setLineWidth(1)
++        context.setLineDash(phase: 0, lengths: [6, 4])
++        for floor in snapshot.floors where floor.points.count >= 3 {
++            let path = polygonPath(points: floor.points, transform: transform)
++            context.addPath(path)
++            context.drawPath(using: .fillStroke)
++        }
++        context.restoreGState()
++
++        context.saveGState()
++        context.setFillColor(UIColor.systemIndigo.withAlphaComponent(0.08).cgColor)
++        context.setStrokeColor(UIColor.systemIndigo.withAlphaComponent(0.75).cgColor)
++        context.setLineWidth(1.5)
++        context.setLineDash(phase: 0, lengths: [8, 5])
++        for ceiling in snapshot.ceilings where ceiling.points.count >= 3 {
++            let path = polygonPath(points: ceiling.points, transform: transform)
++            context.addPath(path)
++            context.drawPath(using: .fillStroke)
++        }
++        context.restoreGState()
++
++        for segment in snapshot.segments {
++            let start = transform.point(segment.start)
++            let end = transform.point(segment.end)
++            switch segment.kind {
++            case .wall:
++                drawWall(
++                    context: context,
++                    start: start,
++                    end: end,
++                    thicknessPixels: max(CGFloat(segment.thicknessMeters) * transform.scale, 2.5),
++                    hasIssue: segment.hasIssue
++                )
++                if let label = segment.label {
++                    drawRotatedLabel(context: context, text: label, start: start, end: end)
++                }
++            case .door:
++                drawLine(context: context, start: start, end: end, color: .systemOrange, width: 5)
++            case .window:
++                drawLine(context: context, start: start, end: end, color: .systemBlue, width: 5)
++            case .opening:
++                drawLine(context: context, start: start, end: end, color: .systemTeal, width: 5)
++            case .correction:
++                context.saveGState()
++                context.setLineDash(phase: 0, lengths: [8, 5])
++                drawLine(context: context, start: start, end: end, color: .systemPurple, width: 3)
++                context.restoreGState()
++            }
++        }
++
++        for label in snapshot.labels {
++            let point = transform.point(label.position)
++            let text = "غرفة \(label.roomIndex)\nأرضية \(Int((label.floorMeters * 100).rounded())) سم - سقف \(Int((label.ceilingMeters * 100).rounded())) سم"
++            drawText(
++                text,
++                in: CGRect(x: point.x - 85, y: point.y - 24, width: 170, height: 50),
++                font: .boldSystemFont(ofSize: rect.width > 1500 ? 18 : 10),
++                color: .label,
++                alignment: .center
++            )
++        }
++
++        drawScaleBar(context: context, rect: planRect, scale: transform.scale)
++        drawLegend(context: context, rect: CGRect(x: rect.minX + 36, y: rect.maxY - footerHeight + 8, width: rect.width - 72, height: footerHeight - 14))
++    }
++
++    private static func drawReportPage(
++        context: CGContext,
++        rect: CGRect,
++        lines: [String],
++        pageNumber: Int
++    ) {
++        context.setFillColor(UIColor.white.cgColor)
++        context.fill(rect)
++        drawText(
++            "3ELiDAR - تقرير بيانات المشروع",
++            in: CGRect(x: 50, y: 35, width: rect.width - 100, height: 40),
++            font: .boldSystemFont(ofSize: 24),
++            color: .label,
++            alignment: .right
++        )
++        drawText(
++            "صفحة \(pageNumber)",
++            in: CGRect(x: 50, y: rect.height - 40, width: rect.width - 100, height: 20),
++            font: .systemFont(ofSize: 10),
++            color: .secondaryLabel,
++            alignment: .center
++        )
++        var y: CGFloat = 92
++        for line in lines {
++            let isHeading = line.hasPrefix("## ")
++            let text = isHeading ? String(line.dropFirst(3)) : line
++            drawText(
++                text,
++                in: CGRect(x: 60, y: y, width: rect.width - 120, height: isHeading ? 28 : 18),
++                font: isHeading ? .boldSystemFont(ofSize: 17) : .systemFont(ofSize: 11),
++                color: isHeading ? .label : .darkGray,
++                alignment: .right
++            )
++            y += isHeading ? 34 : 18
++        }
++    }
++
++    private static func makeReportLines(document: EditableRoomScanProjectDocument) -> [String] {
++        var lines: [String] = [
++            "## ملخص المشروع",
++            "تاريخ التصدير: \(document.generatedAt.formatted(date: .long, time: .shortened))",
++            "عدد الغرف: \(document.roomCount)",
++            "عدد الحوائط الفعلية: \(document.physicalWallCount)",
++            "عدد الحوائط المشتركة: \(document.sharedWallCount)",
++            "عدد الأبواب والنوافذ والفتحات: \(document.openings.filter { !$0.isSuppressed }.count)",
++            "عدد مناطق السقف: \(document.ceilingZones.count)",
++            "عدد المشكلات: \(document.issues.count)",
++            ""
++        ]
++        lines.append("## الغرف")
++        for room in document.rooms {
++            lines.append(
++                "غرفة \(room.roomIndex): دور \(room.story)، أرضية \(formatMeters(room.floorElevationMeters))، سقف تشطيب \(formatMeters(room.finishedCeilingHeightMeters))، \(room.wallCount) حائط، \(room.doorCount) باب"
++            )
++        }
++        lines.append("")
++        lines.append("## الحوائط")
++        for wall in document.walls {
++            let rooms = wall.roomIndices.map(String.init).joined(separator: ",")
++            lines.append(
++                "\(wall.buildingWallID.uuidString.prefix(8)): غرف [\(rooms)]، طول \(formatMeters(wall.lengthMeters))، سماكة \(Int((wall.thicknessMeters * 100).rounded())) سم\(wall.hasReviewIssue ? "، يحتاج مراجعة" : "")"
++            )
++        }
++        if !document.issues.isEmpty {
++            lines.append("")
++            lines.append("## المشكلات")
++            for issue in document.issues {
++                lines.append("[\(issue.severity.arabicTitle)] \(issue.title): \(issue.details)")
++            }
++        }
++        return lines
++    }
++
++    private static func makeDXF(
++        snapshot: PlanSnapshot,
++        document: EditableRoomScanProjectDocument
++    ) -> String {
++        var lines: [String] = []
++        func pair(_ code: Int, _ value: String) {
++            lines.append(String(code))
++            lines.append(value)
++        }
++        func number(_ value: Double) -> String {
++            String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), value)
++        }
++        func addLayer(_ name: String, color: Int) {
++            pair(0, "LAYER")
++            pair(2, name)
++            pair(70, "0")
++            pair(62, String(color))
++            pair(6, "CONTINUOUS")
++        }
++        func addLine(_ layer: String, start: SIMD2<Double>, end: SIMD2<Double>) {
++            pair(0, "LINE")
++            pair(8, layer)
++            pair(10, number(start.x))
++            pair(20, number(start.y))
++            pair(30, "0.0")
++            pair(11, number(end.x))
++            pair(21, number(end.y))
++            pair(31, "0.0")
++        }
++        func addPolyline(_ layer: String, points: [SIMD2<Double>], closed: Bool) {
++            guard points.count >= 2 else { return }
++            pair(0, "LWPOLYLINE")
++            pair(8, layer)
++            pair(90, String(points.count))
++            pair(70, closed ? "1" : "0")
++            for point in points {
++                pair(10, number(point.x))
++                pair(20, number(point.y))
++            }
++        }
++        func addText(_ layer: String, text: String, point: SIMD2<Double>, height: Double) {
++            pair(0, "TEXT")
++            pair(8, layer)
++            pair(10, number(point.x))
++            pair(20, number(point.y))
++            pair(30, "0.0")
++            pair(40, number(height))
++            pair(1, text)
++        }
++
++        pair(0, "SECTION")
++        pair(2, "HEADER")
++        pair(9, "$ACADVER")
++        pair(1, "AC1027")
++        pair(9, "$INSUNITS")
++        pair(70, "6")
++        pair(0, "ENDSEC")
++
++        pair(0, "SECTION")
++        pair(2, "TABLES")
++        pair(0, "TABLE")
++        pair(2, "LAYER")
++        pair(70, "9")
++        addLayer("WALLS", color: 7)
++        addLayer("DOORS", color: 30)
++        addLayer("WINDOWS", color: 5)
++        addLayer("OPENINGS", color: 3)
++        addLayer("FLOORS", color: 33)
++        addLayer("CEILINGS", color: 6)
++        addLayer("CORRECTIONS", color: 200)
++        addLayer("ROOMS", color: 2)
++        addLayer("ISSUES", color: 1)
++        pair(0, "ENDTAB")
++        pair(0, "ENDSEC")
++
++        pair(0, "SECTION")
++        pair(2, "ENTITIES")
++
++        for floor in snapshot.floors {
++            addPolyline("FLOORS", points: floor.points, closed: true)
++        }
++        for ceiling in snapshot.ceilings {
++            addPolyline("CEILINGS", points: ceiling.points, closed: true)
++        }
++        for segment in snapshot.segments {
++            switch segment.kind {
++            case .wall:
++                let axis = normalized(segment.end - segment.start, fallback: SIMD2<Double>(1, 0))
++                let normal = SIMD2<Double>(-axis.y, axis.x)
++                let half = max(segment.thicknessMeters, 0.01) / 2
++                let polygon = [
++                    segment.start + normal * half,
++                    segment.end + normal * half,
++                    segment.end - normal * half,
++                    segment.start - normal * half
++                ]
++                addPolyline(segment.hasIssue ? "ISSUES" : "WALLS", points: polygon, closed: true)
++            case .door:
++                addLine("DOORS", start: segment.start, end: segment.end)
++            case .window:
++                addLine("WINDOWS", start: segment.start, end: segment.end)
++            case .opening:
++                addLine("OPENINGS", start: segment.start, end: segment.end)
++            case .correction:
++                addLine("CORRECTIONS", start: segment.start, end: segment.end)
++            }
++        }
++        for label in snapshot.labels {
++            addText("ROOMS", text: "ROOM_\(label.roomIndex)", point: label.position, height: 0.20)
++        }
++
++        pair(0, "ENDSEC")
++        pair(0, "EOF")
++        return lines.joined(separator: "\n") + "\n"
++    }
++
++    private static func makeRoomsCSV(_ rooms: [ProjectExportRoom]) -> String {
++        var rows = [[
++            "room_index", "identifier", "story", "floor_elevation_m", "structural_ceiling_m",
++            "finished_ceiling_m", "walls", "doors", "windows", "openings", "objects", "accepted_corrections"
++        ]]
++        rows += rooms.map {
++            [
++                String($0.roomIndex), $0.identifier.uuidString, String($0.story), csvNumber($0.floorElevationMeters),
++                csvNumber($0.structuralCeilingHeightMeters), csvNumber($0.finishedCeilingHeightMeters),
++                String($0.wallCount), String($0.doorCount), String($0.windowCount), String($0.openingCount),
++                String($0.objectCount), String($0.acceptedCorrectionCount)
++            ]
++        }
++        return rows.map(csvRow).joined(separator: "\n") + "\n"
++    }
++
++    private static func makeWallsCSV(_ walls: [ProjectExportWall]) -> String {
++        var rows = [[
++            "building_wall_id", "room_indices", "start_x_m", "start_y_m", "end_x_m", "end_y_m",
++            "length_m", "thickness_m", "source", "is_shared", "has_review_issue", "face_count"
++        ]]
++        rows += walls.map {
++            [
++                $0.buildingWallID.uuidString, $0.roomIndices.map(String.init).joined(separator: "|"),
++                csvNumber($0.start.x), csvNumber($0.start.y), csvNumber($0.end.x), csvNumber($0.end.y),
++                csvNumber($0.lengthMeters), csvNumber($0.thicknessMeters), $0.source,
++                String($0.isShared), String($0.hasReviewIssue), String($0.faces.count)
++            ]
++        }
++        return rows.map(csvRow).joined(separator: "\n") + "\n"
++    }
++
++    private static func makeOpeningsCSV(_ openings: [ProjectExportOpening]) -> String {
++        var rows = [[
++            "identifier", "source", "kind", "room_index", "building_wall_id", "connects_room_index",
++            "start_x_m", "start_y_m", "end_x_m", "end_y_m", "width_m", "height_m", "sill_height_m", "suppressed"
++        ]]
++        rows += openings.map {
++            [
++                $0.identifier.uuidString, $0.source, $0.kind, String($0.roomIndex),
++                $0.buildingWallID?.uuidString ?? "", $0.connectsRoomIndex.map(String.init) ?? "",
++                csvNumber($0.start.x), csvNumber($0.start.y), csvNumber($0.end.x), csvNumber($0.end.y),
++                csvNumber($0.widthMeters), csvNumber($0.heightMeters), csvNumber($0.sillHeightMeters), String($0.isSuppressed)
++            ]
++        }
++        return rows.map(csvRow).joined(separator: "\n") + "\n"
++    }
++
++    private static func makeCeilingZonesCSV(_ zones: [ProjectExportCeilingZone]) -> String {
++        var rows = [[
++            "identifier", "room_index", "name", "kind", "center_x_m", "center_y_m", "width_m",
++            "depth_m", "rotation_deg", "height_above_floor_m"
++        ]]
++        rows += zones.map {
++            [
++                $0.identifier.uuidString, String($0.roomIndex), $0.name, $0.kind,
++                csvNumber($0.center.x), csvNumber($0.center.y), csvNumber($0.widthMeters),
++                csvNumber($0.depthMeters), csvNumber($0.rotationDegrees), csvNumber($0.heightAboveFloorMeters)
++            ]
++        }
++        return rows.map(csvRow).joined(separator: "\n") + "\n"
++    }
++
++    private static func makeIssuesCSV(_ issues: [ProjectReviewIssue]) -> String {
++        var rows = [[
++            "identifier", "severity", "kind", "room_index", "building_wall_id", "wall_identifier",
++            "title", "details", "suggested_action"
++        ]]
++        rows += issues.map {
++            [
++                $0.id.uuidString, $0.severity.arabicTitle, $0.kind.rawValue,
++                $0.roomIndex.map(String.init) ?? "", $0.buildingWallID?.uuidString ?? "",
++                $0.wallIdentifier?.uuidString ?? "", $0.title, $0.details, $0.suggestedAction
++            ]
++        }
++        return rows.map(csvRow).joined(separator: "\n") + "\n"
++    }
++
++    private static func writeUTF8CSV(_ text: String, to url: URL) throws {
++        var data = Data([0xEF, 0xBB, 0xBF])
++        guard let textData = text.data(using: .utf8) else { throw ExportError.cannotEncodeCSV }
++        data.append(textData)
++        try data.write(to: url, options: .atomic)
++    }
++
++    private static func csvRow(_ values: [String]) -> String {
++        values.map(csvEscape).joined(separator: ",")
++    }
++
++    private static func csvEscape(_ value: String) -> String {
++        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
++        if escaped.contains(",") || escaped.contains("\"") || escaped.contains("\n") || escaped.contains("\r") {
++            return "\"\(escaped)\""
++        }
++        return escaped
++    }
++
++    private static func csvNumber(_ value: Double) -> String {
++        String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), value)
++    }
++
++    private static func exportPoint(_ value: SIMD2<Double>) -> ProjectExportPoint {
++        ProjectExportPoint(x: value.x, y: value.y)
++    }
++
++    private static func uniqueAssignments(_ assignments: [RoomWallAssignment]) -> [RoomWallAssignment] {
++        struct Key: Hashable {
++            let roomIndex: Int
++            let wallIdentifier: UUID
++        }
++        var values: [Key: RoomWallAssignment] = [:]
++        for assignment in assignments {
++            let key = Key(roomIndex: assignment.roomIndex, wallIdentifier: assignment.wallIdentifier)
++            if let current = values[key] {
++                if assignment.fragmentIndex < current.fragmentIndex { values[key] = assignment }
++            } else {
++                values[key] = assignment
++            }
++        }
++        return Array(values.values)
++    }
++
++    private static func fallbackFloorPolygon(seed: RoomLevelGeometrySeed) -> [SIMD2<Double>] {
++        let angle = seed.rotationDegrees * .pi / 180
++        let axis = SIMD2<Double>(cos(angle), sin(angle))
++        let normal = SIMD2<Double>(-axis.y, axis.x)
++        let center = SIMD2<Double>(seed.centerX, seed.centerZ)
++        let halfWidth = seed.widthMeters / 2
++        let halfDepth = seed.depthMeters / 2
++        return [
++            center - axis * halfWidth - normal * halfDepth,
++            center + axis * halfWidth - normal * halfDepth,
++            center + axis * halfWidth + normal * halfDepth,
++            center - axis * halfWidth + normal * halfDepth
++        ]
++    }
++
++    private static func ceilingCorners(_ zone: CeilingZoneRecord) -> [SIMD2<Double>] {
++        let angle = zone.rotationDegrees * .pi / 180
++        let axis = SIMD2<Double>(cos(angle), sin(angle))
++        let normal = SIMD2<Double>(-axis.y, axis.x)
++        let center = SIMD2<Double>(zone.centerX, zone.centerZ)
++        let halfWidth = zone.widthMeters / 2
++        let halfDepth = zone.depthMeters / 2
++        return [
++            center - axis * halfWidth - normal * halfDepth,
++            center + axis * halfWidth - normal * halfDepth,
++            center + axis * halfWidth + normal * halfDepth,
++            center - axis * halfWidth + normal * halfDepth
++        ]
++    }
++
++    private static func normalized(_ value: SIMD2<Double>, fallback: SIMD2<Double>) -> SIMD2<Double> {
++        let length = simd_length(value)
++        return length > 0.000001 ? value / length : fallback
++    }
++
++    private static func average(_ values: [SIMD2<Double>]) -> SIMD2<Double>? {
++        guard !values.isEmpty else { return nil }
++        return values.reduce(SIMD2<Double>(repeating: 0), +) / Double(values.count)
++    }
++
++    private static func formatMeters(_ value: Double) -> String {
++        String(format: "%.2f م", value)
++    }
++
++    private struct DrawingTransform {
++        let scale: CGFloat
++        let centerX: CGFloat
++        let centerY: CGFloat
++        let rect: CGRect
++
++        func point(_ world: SIMD2<Double>) -> CGPoint {
++            CGPoint(
++                x: rect.midX + (CGFloat(world.x) - centerX) * scale,
++                y: rect.midY - (CGFloat(world.y) - centerY) * scale
++            )
++        }
++    }
++
++    private static func makeDrawingTransform(snapshot: PlanSnapshot, rect: CGRect) -> DrawingTransform {
++        let scale = min(
++            rect.width / CGFloat(snapshot.width * 1.12),
++            rect.height / CGFloat(snapshot.height * 1.12)
++        )
++        return DrawingTransform(
++            scale: max(scale, 1),
++            centerX: CGFloat((snapshot.minX + snapshot.maxX) / 2),
++            centerY: CGFloat((snapshot.minY + snapshot.maxY) / 2),
++            rect: rect
++        )
++    }
++
++    private static func polygonPath(points: [SIMD2<Double>], transform: DrawingTransform) -> CGPath {
++        let path = CGMutablePath()
++        guard let first = points.first else { return path }
++        path.move(to: transform.point(first))
++        for point in points.dropFirst() { path.addLine(to: transform.point(point)) }
++        path.closeSubpath()
++        return path
++    }
++
++    private static func drawWall(
++        context: CGContext,
++        start: CGPoint,
++        end: CGPoint,
++        thicknessPixels: CGFloat,
++        hasIssue: Bool
++    ) {
++        let dx = end.x - start.x
++        let dy = end.y - start.y
++        let length = max(hypot(dx, dy), 0.001)
++        let nx = -dy / length
++        let ny = dx / length
++        let half = thicknessPixels / 2
++        let path = CGMutablePath()
++        path.move(to: CGPoint(x: start.x + nx * half, y: start.y + ny * half))
++        path.addLine(to: CGPoint(x: end.x + nx * half, y: end.y + ny * half))
++        path.addLine(to: CGPoint(x: end.x - nx * half, y: end.y - ny * half))
++        path.addLine(to: CGPoint(x: start.x - nx * half, y: start.y - ny * half))
++        path.closeSubpath()
++        context.saveGState()
++        context.setFillColor((hasIssue ? UIColor.systemRed : UIColor.darkGray).withAlphaComponent(0.22).cgColor)
++        context.setStrokeColor((hasIssue ? UIColor.systemRed : UIColor.black).cgColor)
++        context.setLineWidth(hasIssue ? 2.2 : 1.2)
++        if hasIssue { context.setLineDash(phase: 0, lengths: [7, 4]) }
++        context.addPath(path)
++        context.drawPath(using: .fillStroke)
++        context.restoreGState()
++    }
++
++    private static func drawLine(
++        context: CGContext,
++        start: CGPoint,
++        end: CGPoint,
++        color: UIColor,
++        width: CGFloat
++    ) {
++        context.saveGState()
++        context.setStrokeColor(color.cgColor)
++        context.setLineWidth(width)
++        context.setLineCap(.round)
++        context.move(to: start)
++        context.addLine(to: end)
++        context.strokePath()
++        context.restoreGState()
++    }
++
++    private static func drawRotatedLabel(
++        context: CGContext,
++        text: String,
++        start: CGPoint,
++        end: CGPoint
++    ) {
++        let midpoint = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
++        var angle = atan2(end.y - start.y, end.x - start.x)
++        if angle > .pi / 2 || angle < -.pi / 2 { angle += .pi }
++        context.saveGState()
++        context.translateBy(x: midpoint.x, y: midpoint.y)
++        context.rotate(by: angle)
++        drawText(
++            text,
++            in: CGRect(x: -58, y: -18, width: 116, height: 14),
++            font: .systemFont(ofSize: 8),
++            color: .darkGray,
++            alignment: .center
++        )
++        context.restoreGState()
++    }
++
++    private static func drawScaleBar(context: CGContext, rect: CGRect, scale: CGFloat) {
++        let oneMeter = scale
++        guard oneMeter > 8 else { return }
++        let start = CGPoint(x: rect.minX + 12, y: rect.maxY - 22)
++        let end = CGPoint(x: start.x + oneMeter, y: start.y)
++        drawLine(context: context, start: start, end: end, color: .label, width: 2)
++        drawLine(context: context, start: CGPoint(x: start.x, y: start.y - 5), end: CGPoint(x: start.x, y: start.y + 5), color: .label, width: 1)
++        drawLine(context: context, start: CGPoint(x: end.x, y: end.y - 5), end: CGPoint(x: end.x, y: end.y + 5), color: .label, width: 1)
++        drawText("1 m", in: CGRect(x: start.x, y: start.y + 5, width: oneMeter, height: 14), font: .systemFont(ofSize: 9), color: .label, alignment: .center)
++    }
++
++    private static func drawLegend(context: CGContext, rect: CGRect) {
++        let entries: [(String, UIColor)] = [
++            ("حائط", .darkGray), ("باب", .systemOrange), ("نافذة", .systemBlue),
++            ("فتحة", .systemTeal), ("جزء مكمل", .systemPurple), ("مشكلة", .systemRed)
++        ]
++        let width = rect.width / CGFloat(entries.count)
++        for (index, entry) in entries.enumerated() {
++            let x = rect.minX + CGFloat(index) * width
++            drawLine(
++                context: context,
++                start: CGPoint(x: x + 8, y: rect.midY),
++                end: CGPoint(x: x + 32, y: rect.midY),
++                color: entry.1,
++                width: 4
++            )
++            drawText(
++                entry.0,
++                in: CGRect(x: x + 37, y: rect.midY - 9, width: width - 42, height: 18),
++                font: .systemFont(ofSize: 9),
++                color: .label,
++                alignment: .right
++            )
++        }
++    }
++
++    private static func drawText(
++        _ text: String,
++        in rect: CGRect,
++        font: UIFont,
++        color: UIColor,
++        alignment: NSTextAlignment
++    ) {
++        let paragraph = NSMutableParagraphStyle()
++        paragraph.alignment = alignment
++        paragraph.lineBreakMode = .byTruncatingTail
++        (text as NSString).draw(
++            in: rect,
++            withAttributes: [
++                .font: font,
++                .foregroundColor: color,
++                .paragraphStyle: paragraph
++            ]
++        )
++    }
++
++    enum ExportError: LocalizedError {
++        case noRooms
++        case cannotEncodePNG
++        case cannotEncodeCSV
++
++        var errorDescription: String? {
++            switch self {
++            case .noRooms: return "لا توجد غرف مثبتة لتصديرها."
++            case .cannotEncodePNG: return "تعذر إنشاء صورة PNG للمخطط."
++            case .cannotEncodeCSV: return "تعذر ترميز ملف CSV."
++            }
++        }
++    }
++}
+diff -ruN '--exclude=_backup' '--exclude=*.patch' /mnt/data/phase6_export/diff_old/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift /mnt/data/phase6_export/diff_new/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift
+--- /mnt/data/phase6_export/diff_old/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift	2026-08-01 18:33:35.000000000 +0000
++++ /mnt/data/phase6_export/diff_new/LiDARLab/Features/RoomScan/RoomScanProjectReviewView.swift	2026-08-01 18:59:25.440470967 +0000
+@@ -14,6 +14,7 @@
+     @State private var showingGeometryEditor = false
+     @State private var showingLevelsEditor = false
+     @State private var previewURL: URL?
++    @State private var exportSharePayload: ProjectExportSharePayload?
+     @State private var rescanConfirmationRoom: Int?
+     @State private var correctionConfirmationRoom: Int?
+ 
+@@ -22,6 +23,7 @@
+         case preview3D = "3D"
+         case issues = "المشكلات"
+         case rooms = "الغرف"
++        case export = "تصدير"
+ 
+         var id: String { rawValue }
+     }
+@@ -57,6 +59,8 @@
+                         issuesView
+                     case .rooms:
+                         roomListView
++                    case .export:
++                        exportView
+                     }
+                 }
+             }
+@@ -108,6 +112,9 @@
+                 QuickLookPreview(url: item.url)
+                     .ignoresSafeArea()
+             }
++            .sheet(item: $exportSharePayload) { payload in
++                ActivityView(items: payload.items)
++            }
+             .confirmationDialog(
+                 "إعادة مسح الغرفة؟",
+                 isPresented: Binding(
+@@ -474,6 +481,125 @@
+         }
+     }
+ 
++    private var exportView: some View {
++        ScrollView {
++            VStack(spacing: 16) {
++                VStack(alignment: .leading, spacing: 10) {
++                    Label("حزمة المشروع المعدل", systemImage: "square.and.arrow.up.on.square")
++                        .font(.title3.bold())
++                    Text("يتم التصدير من النموذج بعد تطبيق سماكات الحوائط، التصحيحات الهندسية، الأبواب اليدوية، مناسيب الأرضيات ومناطق الأسقف. ملفات RoomPlan الأصلية لا تتغير.")
++                        .font(.caption)
++                        .foregroundStyle(.secondary)
++
++                    HStack(spacing: 8) {
++                        exportFormatChip("PDF", icon: "doc.richtext")
++                        exportFormatChip("PNG", icon: "photo")
++                        exportFormatChip("JSON", icon: "curlybraces")
++                        exportFormatChip("CSV", icon: "tablecells")
++                        exportFormatChip("DXF", icon: "ruler")
++                    }
++                }
++                .frame(maxWidth: .infinity, alignment: .leading)
++                .padding(16)
++                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
++
++                Button {
++                    model.exportReviewedProjectPackage()
++                } label: {
++                    HStack {
++                        if model.isCreatingProjectExport {
++                            ProgressView().tint(.white)
++                        }
++                        Label(
++                            model.isCreatingProjectExport ? "جارٍ إنشاء الملفات…" : "إنشاء حزمة التصدير النهائية",
++                            systemImage: "shippingbox.and.arrow.backward"
++                        )
++                        .frame(maxWidth: .infinity)
++                    }
++                }
++                .buttonStyle(.borderedProminent)
++                .controlSize(.large)
++                .disabled(model.isCreatingProjectExport || model.roomCount == 0)
++
++                if let package = model.latestProjectExportPackage {
++                    VStack(alignment: .leading, spacing: 12) {
++                        Label("تم إنشاء الحزمة", systemImage: "checkmark.seal.fill")
++                            .font(.headline)
++                            .foregroundStyle(.green)
++                        Text(package.folderURL.lastPathComponent)
++                            .font(.caption.monospaced())
++                            .foregroundStyle(.secondary)
++
++                        exportFileRow(title: "المخطط PDF", url: package.pdfURL, icon: "doc.richtext")
++                        exportFileRow(title: "صورة المخطط PNG", url: package.pngURL, icon: "photo")
++                        exportFileRow(title: "نموذج المشروع JSON", url: package.jsonURL, icon: "curlybraces")
++                        exportFileRow(title: "مخطط CAD بصيغة DXF", url: package.dxfURL, icon: "ruler")
++                        exportFileRow(title: "جداول CSV", url: package.csvURLs.first, icon: "tablecells")
++
++                        HStack(spacing: 10) {
++                            Button {
++                                previewURL = package.pdfURL
++                            } label: {
++                                Label("معاينة PDF", systemImage: "eye")
++                                    .frame(maxWidth: .infinity)
++                            }
++                            .buttonStyle(.bordered)
++
++                            Button {
++                                exportSharePayload = ProjectExportSharePayload(items: package.shareItems)
++                            } label: {
++                                Label("مشاركة الكل", systemImage: "square.and.arrow.up")
++                                    .frame(maxWidth: .infinity)
++                            }
++                            .buttonStyle(.borderedProminent)
++                        }
++                    }
++                    .padding(16)
++                    .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
++                }
++
++                VStack(alignment: .leading, spacing: 8) {
++                    Label("محتوى التصدير", systemImage: "info.circle")
++                        .font(.headline)
++                    Text("• PDF متعدد الصفحات: المخطط، ملخص الغرف والحوائط، وقائمة المشكلات.")
++                    Text("• PNG عالي الدقة للمخطط ثنائي الأبعاد.")
++                    Text("• JSON يحفظ النموذج المعدل والعلاقات بين الغرف والحوائط.")
++                    Text("• CSV منفصل للغرف والحوائط والفتحات والأسقف والمشكلات.")
++                    Text("• DXF بوحدة المتر وطبقات مستقلة لبرامج CAD.")
++                }
++                .font(.caption)
++                .frame(maxWidth: .infinity, alignment: .leading)
++                .padding(16)
++                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
++            }
++            .padding()
++        }
++    }
++
++    private func exportFormatChip(_ title: String, icon: String) -> some View {
++        Label(title, systemImage: icon)
++            .font(.caption2.bold())
++            .padding(.horizontal, 8)
++            .padding(.vertical, 6)
++            .background(Color.accentColor.opacity(0.12), in: Capsule())
++    }
++
++    private func exportFileRow(title: String, url: URL?, icon: String) -> some View {
++        HStack {
++            Label(title, systemImage: icon)
++            Spacer()
++            if let url {
++                Button {
++                    exportSharePayload = ProjectExportSharePayload(items: [url])
++                } label: {
++                    Image(systemName: "square.and.arrow.up")
++                }
++                .buttonStyle(.borderless)
++            }
++        }
++        .font(.subheadline)
++    }
++
+     private func selectedRoomCard(_ summary: RoomReviewSummary) -> some View {
+         VStack(alignment: .leading, spacing: 10) {
+             HStack {
+@@ -648,6 +774,11 @@
+     var id: String { url.path }
+ }
+ 
++private struct ProjectExportSharePayload: Identifiable {
++    let id = UUID()
++    let items: [Any]
++}
++
+ private struct RoomPlan2DCanvas: View {
+     let rooms: [CapturedRoom]
+     let corrections: [AcceptedRoomCorrectionLayer]
+diff -ruN '--exclude=_backup' '--exclude=*.patch' /mnt/data/phase6_export/diff_old/LiDARLab/Features/RoomScan/RoomScanViewModel.swift /mnt/data/phase6_export/diff_new/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
+--- /mnt/data/phase6_export/diff_old/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-08-01 18:21:36.000000000 +0000
++++ /mnt/data/phase6_export/diff_new/LiDARLab/Features/RoomScan/RoomScanViewModel.swift	2026-08-01 18:58:55.592472112 +0000
+@@ -106,6 +106,10 @@
+     @Published private(set) var roomLevelProfiles: [RoomLevelProfileRecord] = []
+     @Published private(set) var ceilingZoneRecords: [CeilingZoneRecord] = []
+ 
++    /// Phase 6: final export package generated from the reviewed, non-destructive building model.
++    @Published private(set) var isCreatingProjectExport = false
++    @Published private(set) var latestProjectExportPackage: RoomScanProjectExportPackage?
++
+     private weak var captureView: RoomCaptureView?
+     private var pendingStartRequest: PendingStartRequest?
+     private var shouldAcceptNextProcessedRoom = false
+@@ -3218,3 +3222,39 @@
+             .sorted { ($0.roomIndex, $0.createdAt) < ($1.roomIndex, $1.createdAt) }
+     }
+ }
++
++// MARK: - Phase 6 final reviewed-project export
++
++extension RoomScanViewModel {
++    func exportReviewedProjectPackage() {
++        guard !capturedRooms.isEmpty else {
++            errorMessage = "لا توجد غرف مثبتة لتصديرها."
++            return
++        }
++        guard !isCreatingProjectExport else { return }
++
++        isCreatingProjectExport = true
++        errorMessage = nil
++        ensureAllRoomLevelProfiles()
++        refreshProjectReviewIssues()
++
++        do {
++            let storage = LiDARLabStorage.shared
++            try storage.ensureDirectories()
++            let folder = storage.exportsURL.appendingPathComponent(
++                storage.timestampedName(prefix: "RoomScan-Reviewed"),
++                isDirectory: true
++            )
++            let package = try RoomScanProjectExporter.export(model: self, folder: folder)
++            latestProjectExportPackage = package
++            statusMessage = "تم إنشاء حزمة التصدير النهائية: PDF وPNG وJSON وCSV وDXF."
++            UINotificationFeedbackGenerator().notificationOccurred(.success)
++        } catch {
++            errorMessage = "تعذر تصدير المشروع: \(error.localizedDescription)"
++            UINotificationFeedbackGenerator().notificationOccurred(.error)
++        }
++
++        isCreatingProjectExport = false
++    }
++}
++
+diff -ruN '--exclude=_backup' '--exclude=*.patch' /mnt/data/phase6_export/diff_old/README.md /mnt/data/phase6_export/diff_new/README.md
+--- /mnt/data/phase6_export/diff_old/README.md	2026-08-01 18:46:07.000000000 +0000
++++ /mnt/data/phase6_export/diff_new/README.md	2026-08-01 18:59:58.136469712 +0000
+@@ -11,7 +11,7 @@
+ - App Folder: `Apps/LiDARLab`
+ - Future App Group: `group.com.essam.3e`
+ 
+-## النسخة 0.17.0 — دمج القياس المتعدد مع RoomScan
++## النسخة 0.18.0 — دمج القياس المتعدد مع RoomScan
+ 
+ تجمع هذه النسخة خط التطوير الكامل لمسح الغرف مع وظيفة القياس المتعدد التي أضيفت بصورة مستقلة. لم يتم استبدال أي ملف داخل `Features/RoomScan`.
+ 
+@@ -232,3 +232,7 @@
+ - جهاز يدعم ARKit.
+ - وظائف العمق والتسجيل تحتاج Scene Depth وحساس LiDAR.
+ - مسح الغرفة يحتاج جهازًا يدعم RoomPlan.
++
++## RoomScan final export (0.18.0)
++
++The RoomScan review center can generate a final reviewed project package in PDF, PNG, JSON, CSV and DXF. The export is built from the app-owned corrected model while preserving the original RoomPlan results.
+diff -ruN '--exclude=_backup' '--exclude=*.patch' /mnt/data/phase6_export/diff_old/ROOMSCAN_FINAL_EXPORT_PHASE6.md /mnt/data/phase6_export/diff_new/ROOMSCAN_FINAL_EXPORT_PHASE6.md
+--- /mnt/data/phase6_export/diff_old/ROOMSCAN_FINAL_EXPORT_PHASE6.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/phase6_export/diff_new/ROOMSCAN_FINAL_EXPORT_PHASE6.md	2026-08-01 18:59:58.132469712 +0000
+@@ -0,0 +1,42 @@
++# RoomScan Phase 6 - Final Reviewed Project Export
++
++Version: **0.18.0**  
++Build: **23**
++
++## Output folder
++
++`Exports/RoomScan-Reviewed-<timestamp>/`
++
++## Generated files
++
++- `floor-plan.pdf` - scaled plan plus paginated room/wall/issue report.
++- `floor-plan.png` - high-resolution 2D plan.
++- `project-model.json` - reviewed non-destructive building model.
++- `floor-plan.dxf` - meter-based CAD plan with separate layers.
++- `rooms.csv`
++- `walls.csv`
++- `openings.csv`
++- `ceiling-zones.csv`
++- `issues.csv`
++- `export-manifest.json`
++
++## Data rules
++
++- RoomPlan source JSON and USDZ files are never rewritten.
++- Physical walls are grouped by `buildingWallID`.
++- Shared wall faces are combined into one exported physical wall.
++- Confirmed thickness and wall-geometry overrides control the exported wall rectangle.
++- Suppressed RoomPlan openings remain in JSON/CSV with `suppressed=true` but are excluded from the drawing.
++- Manual openings, room levels, ceiling zones, accepted correction scans and review issues are included.
++- CSV files include a UTF-8 BOM for Arabic-compatible spreadsheet import.
++- DXF uses meters and English layer names for CAD compatibility.
++
++## Device test
++
++1. Finish a multi-room project.
++2. Open Review Center > Export.
++3. Create the final package.
++4. Preview the PDF.
++5. Share all files.
++6. Open the DXF in a CAD viewer and verify units/layers.
++7. Reopen JSON and CSV files from Files or Export Center.
+diff -ruN '--exclude=_backup' '--exclude=*.patch' /mnt/data/phase6_export/diff_old/project.yml /mnt/data/phase6_export/diff_new/project.yml
+--- /mnt/data/phase6_export/diff_old/project.yml	2026-08-01 18:46:06.000000000 +0000
++++ /mnt/data/phase6_export/diff_new/project.yml	2026-08-01 18:59:58.132469712 +0000
+@@ -9,8 +9,8 @@
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.17.0"
+-    CURRENT_PROJECT_VERSION: "22"
++    MARKETING_VERSION: "0.18.0"
++    CURRENT_PROJECT_VERSION: "23"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar

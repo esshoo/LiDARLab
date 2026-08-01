@@ -14,7 +14,6 @@ struct RoomScanProjectReviewView: View {
     @State private var showingGeometryEditor = false
     @State private var showingLevelsEditor = false
     @State private var previewURL: URL?
-    @State private var exportSharePayload: ProjectExportSharePayload?
     @State private var rescanConfirmationRoom: Int?
     @State private var correctionConfirmationRoom: Int?
 
@@ -23,7 +22,6 @@ struct RoomScanProjectReviewView: View {
         case preview3D = "3D"
         case issues = "المشكلات"
         case rooms = "الغرف"
-        case export = "تصدير"
 
         var id: String { rawValue }
     }
@@ -59,8 +57,6 @@ struct RoomScanProjectReviewView: View {
                         issuesView
                     case .rooms:
                         roomListView
-                    case .export:
-                        exportView
                     }
                 }
             }
@@ -111,9 +107,6 @@ struct RoomScanProjectReviewView: View {
             ) { item in
                 QuickLookPreview(url: item.url)
                     .ignoresSafeArea()
-            }
-            .sheet(item: $exportSharePayload) { payload in
-                ActivityView(items: payload.items)
             }
             .confirmationDialog(
                 "إعادة مسح الغرفة؟",
@@ -481,125 +474,6 @@ struct RoomScanProjectReviewView: View {
         }
     }
 
-    private var exportView: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("حزمة المشروع المعدل", systemImage: "square.and.arrow.up.on.square")
-                        .font(.title3.bold())
-                    Text("يتم التصدير من النموذج بعد تطبيق سماكات الحوائط، التصحيحات الهندسية، الأبواب اليدوية، مناسيب الأرضيات ومناطق الأسقف. ملفات RoomPlan الأصلية لا تتغير.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        exportFormatChip("PDF", icon: "doc.richtext")
-                        exportFormatChip("PNG", icon: "photo")
-                        exportFormatChip("JSON", icon: "curlybraces")
-                        exportFormatChip("CSV", icon: "tablecells")
-                        exportFormatChip("DXF", icon: "ruler")
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-
-                Button {
-                    model.exportReviewedProjectPackage()
-                } label: {
-                    HStack {
-                        if model.isCreatingProjectExport {
-                            ProgressView().tint(.white)
-                        }
-                        Label(
-                            model.isCreatingProjectExport ? "جارٍ إنشاء الملفات…" : "إنشاء حزمة التصدير النهائية",
-                            systemImage: "shippingbox.and.arrow.backward"
-                        )
-                        .frame(maxWidth: .infinity)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(model.isCreatingProjectExport || model.roomCount == 0)
-
-                if let package = model.latestProjectExportPackage {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("تم إنشاء الحزمة", systemImage: "checkmark.seal.fill")
-                            .font(.headline)
-                            .foregroundStyle(.green)
-                        Text(package.folderURL.lastPathComponent)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-
-                        exportFileRow(title: "المخطط PDF", url: package.pdfURL, icon: "doc.richtext")
-                        exportFileRow(title: "صورة المخطط PNG", url: package.pngURL, icon: "photo")
-                        exportFileRow(title: "نموذج المشروع JSON", url: package.jsonURL, icon: "curlybraces")
-                        exportFileRow(title: "مخطط CAD بصيغة DXF", url: package.dxfURL, icon: "ruler")
-                        exportFileRow(title: "جداول CSV", url: package.csvURLs.first, icon: "tablecells")
-
-                        HStack(spacing: 10) {
-                            Button {
-                                previewURL = package.pdfURL
-                            } label: {
-                                Label("معاينة PDF", systemImage: "eye")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-
-                            Button {
-                                exportSharePayload = ProjectExportSharePayload(items: package.shareItems)
-                            } label: {
-                                Label("مشاركة الكل", systemImage: "square.and.arrow.up")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-                    .padding(16)
-                    .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("محتوى التصدير", systemImage: "info.circle")
-                        .font(.headline)
-                    Text("• PDF متعدد الصفحات: المخطط، ملخص الغرف والحوائط، وقائمة المشكلات.")
-                    Text("• PNG عالي الدقة للمخطط ثنائي الأبعاد.")
-                    Text("• JSON يحفظ النموذج المعدل والعلاقات بين الغرف والحوائط.")
-                    Text("• CSV منفصل للغرف والحوائط والفتحات والأسقف والمشكلات.")
-                    Text("• DXF بوحدة المتر وطبقات مستقلة لبرامج CAD.")
-                }
-                .font(.caption)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
-            }
-            .padding()
-        }
-    }
-
-    private func exportFormatChip(_ title: String, icon: String) -> some View {
-        Label(title, systemImage: icon)
-            .font(.caption2.bold())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
-    }
-
-    private func exportFileRow(title: String, url: URL?, icon: String) -> some View {
-        HStack {
-            Label(title, systemImage: icon)
-            Spacer()
-            if let url {
-                Button {
-                    exportSharePayload = ProjectExportSharePayload(items: [url])
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .buttonStyle(.borderless)
-            }
-        }
-        .font(.subheadline)
-    }
-
     private func selectedRoomCard(_ summary: RoomReviewSummary) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -772,11 +646,6 @@ struct RoomScanProjectReviewView: View {
 private struct PreviewItem: Identifiable {
     let url: URL
     var id: String { url.path }
-}
-
-private struct ProjectExportSharePayload: Identifiable {
-    let id = UUID()
-    let items: [Any]
 }
 
 private struct RoomPlan2DCanvas: View {

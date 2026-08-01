@@ -1,3 +1,17 @@
+# Changelog
+
+## 0.18.0 (Build 23) - Final Reviewed Project Export
+
+- Added a dedicated Export tab to the RoomScan review center.
+- Added reviewed-project PDF export with a scaled floor plan and paginated data report.
+- Added high-resolution PNG floor-plan export.
+- Added a complete app-owned JSON model containing rooms, physical walls, wall faces, openings, levels, ceiling zones, correction layers and issues.
+- Added UTF-8 CSV files for rooms, walls, openings, ceiling zones and review issues.
+- Added DXF export in meters with separate CAD layers for walls, doors, windows, openings, floors, ceilings, corrections, room labels and issues.
+- Exported walls use the confirmed physical-wall thickness and applied geometry overrides without changing the original RoomPlan JSON.
+- Added PDF preview and per-file/all-files sharing from the review center.
+- Final packages are saved under `Exports/RoomScan-Reviewed-<timestamp>/`.
+
 ## 0.17.0
 
 - دمج وظيفة **القياس المتعدد** المرسلة من المستخدم مع أحدث نسخة RoomScan 0.16.1 دون استبدال أي ملف داخل `Features/RoomScan`.
