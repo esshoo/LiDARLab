@@ -51,3 +51,10 @@
 9. أعد المسح مرة ثانية واعتمد النتيجة الجديدة.
 10. تأكد من تحديث المخطط وملفات المراجعة والنموذج المجمّع.
 11. أغلق التطبيق وافتحه، ثم اضغط **فتح أحدث مشروع مكتمل** وتأكد من ظهور سجل المراجعات.
+
+
+## Hotfix 0.13.1
+
+- Removed duplicate top-level `QuickLookPreview` declaration from `ThreeEURLRouter.swift`.
+- Kept the shared implementation in `LiDARLab/Shared/QuickLookPreview.swift`.
+- Parsed all Swift source files with `swiftc -frontend -parse`.

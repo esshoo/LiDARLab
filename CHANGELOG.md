@@ -1,3 +1,10 @@
+## 0.13.1
+
+- إصلاح فشل البناء الناتج عن تعريف `QuickLookPreview` مرتين.
+- توحيد كل شاشات المعاينة على المكوّن المشترك داخل `Shared/QuickLookPreview.swift`.
+- إزالة تعريف Quick Look المحلي من `ThreeEURLRouter.swift`.
+- تحديث رقم البناء إلى `17`.
+
 # Changelog
 
 ## 0.13.0
