@@ -15,10 +15,6 @@ struct RoomScanView: View {
             RoomCaptureViewContainer(model: model)
                 .ignoresSafeArea(edges: .bottom)
 
-            if model.isPaused {
-                pausedCameraOverlay
-            }
-
             VStack(spacing: 12) {
                 statusPanel
                 Spacer(minLength: 10)
@@ -110,25 +106,9 @@ struct RoomScanView: View {
                 .foregroundStyle(.yellow)
             }
 
-            if model.isPaused {
-                VStack(alignment: .leading, spacing: 5) {
-                    Label(
-                        "الغرفة \(model.activeRoomNumber) متوقفة مؤقتًا، والكاميرا والتتبع متوقفان.",
-                        systemImage: "pause.circle.fill"
-                    )
-                    Label(
-                        "الأجزاء المحفوظة: \(model.activeRoomFragmentCount). الاستكمال متاح ما دامت شاشة التطبيق الحالية مفتوحة.",
-                        systemImage: "square.stack.3d.up.fill"
-                    )
-                }
-                .font(.caption)
-                .foregroundStyle(.orange)
-            }
-
             if model.roomCount > 0 {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
                     MetricChip(title: "غرف مثبتة", value: "\(model.roomCount)", systemImage: "square.grid.2x2")
-                    MetricChip(title: "أجزاء محفوظة", value: "\(model.totalFragmentCount)", systemImage: "square.stack.3d.up")
                     MetricChip(title: "حوائط فعلية", value: "\(model.physicalWallCount)", systemImage: "rectangle.split.3x1")
                     MetricChip(title: "حوائط مشتركة", value: "\(model.sharedPhysicalWallCount)", systemImage: "link")
                     MetricChip(title: "كل الأبواب", value: "\(model.totalDoorCount)", systemImage: "door.left.hand.open")
@@ -161,7 +141,7 @@ struct RoomScanView: View {
         VStack(spacing: 10) {
             primaryControls
 
-            if model.capturedRoom != nil, !model.isScanning, !model.isPaused, !model.isProcessing {
+            if model.capturedRoom != nil, !model.isScanning, !model.isProcessing {
                 Button {
                     showingWallEditor = true
                 } label: {
@@ -214,35 +194,14 @@ struct RoomScanView: View {
     @ViewBuilder
     private var primaryControls: some View {
         if model.isScanning {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { activeScanControls }
-                VStack(spacing: 10) { activeScanControls }
+            Button {
+                model.finishCurrentRoom()
+            } label: {
+                Label("إنهاء وتثبيت الغرفة \(model.activeRoomNumber)", systemImage: "stop.fill")
+                    .frame(maxWidth: .infinity)
             }
-        } else if model.isPaused {
-            VStack(spacing: 10) {
-                Button {
-                    model.resumePausedRoom()
-                } label: {
-                    Label("استكمال الغرفة \(model.activeRoomNumber)", systemImage: "camera.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-
-                Button {
-                    model.finishPausedRoom()
-                } label: {
-                    Label("اعتماد الأجزاء وإنهاء الغرفة", systemImage: "checkmark.seal")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-
-                Text("لا تغلق التطبيق في هذه المرحلة؛ الاستكمال بعد إغلاق التطبيق سيُضاف في المرحلة التالية.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         } else if model.isProcessing {
             Button {} label: {
                 Label("جارٍ المعالجة…", systemImage: "gearshape.2.fill")
@@ -286,27 +245,6 @@ struct RoomScanView: View {
     }
 
     @ViewBuilder
-    private var activeScanControls: some View {
-        Button {
-            model.pauseCurrentRoom()
-        } label: {
-            Label("توقف مؤقت", systemImage: "pause.fill")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
-
-        Button {
-            model.finishCurrentRoom()
-        } label: {
-            Label("إنهاء وتثبيت الغرفة \(model.activeRoomNumber)", systemImage: "stop.fill")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-    }
-
-    @ViewBuilder
     private var continuationControls: some View {
         Button {
             presentThicknessSetup(.nextRoom)
@@ -346,31 +284,9 @@ struct RoomScanView: View {
         .buttonStyle(.bordered)
     }
 
-    private var pausedCameraOverlay: some View {
-        ZStack {
-            Color.black
-                .ignoresSafeArea(edges: .bottom)
-
-            VStack(spacing: 14) {
-                Image(systemName: "camera.slash.fill")
-                    .font(.system(size: 52))
-                    .foregroundStyle(.orange)
-                Text("الكاميرا متوقفة مؤقتًا")
-                    .font(.title3.bold())
-                Text("تم حفظ الجزء الحالي من الغرفة. عند الاستكمال، ابدأ من نفس الموضع ووجّه الهاتف إلى حائط أو باب سبق مسحه.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 320)
-            }
-            .padding(.bottom, 40)
-        }
-    }
-
     private var stateIcon: String {
         if model.isProcessing { return "gearshape.2.fill" }
         if model.isBuildingFinished { return "checkmark.seal.fill" }
-        if model.isPaused { return "pause.circle.fill" }
         if model.isScanning { return "record.circle" }
         if model.roomCount > 0 { return "square.grid.2x2.fill" }
         return "building.2"
@@ -378,7 +294,6 @@ struct RoomScanView: View {
 
     private var stateColor: Color {
         if model.isBuildingFinished { return .green }
-        if model.isPaused { return .orange }
         if model.isScanning { return .red }
         if model.roomCount > 0 { return .cyan }
         return .cyan

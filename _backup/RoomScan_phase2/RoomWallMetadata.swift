@@ -5,7 +5,6 @@ enum WallThicknessSource: String, Codable, CaseIterable {
     case buildingDefault
     case roomDefault
     case inheritedSharedWall
-    case continuedFragment
     case userConfirmed
 
     var arabicTitle: String {
@@ -16,8 +15,6 @@ enum WallThicknessSource: String, Codable, CaseIterable {
             return "افتراضي الغرفة"
         case .inheritedSharedWall:
             return "موروث من حائط مشترك"
-        case .continuedFragment:
-            return "مستكمل من جزء سابق"
         case .userConfirmed:
             return "مؤكد يدويًا"
         }
@@ -53,7 +50,6 @@ struct RoomWallAssignment: Codable, Identifiable, Equatable {
     let id: UUID
     let roomIndex: Int
     let roomIdentifier: UUID
-    let fragmentIndex: Int
     let wallIdentifier: UUID
     let wallNumber: Int
     let buildingWallID: UUID

@@ -1,28 +1,22 @@
-# رفع تحديث 3ELiDAR 0.8.1
+# رفع تحديث 3ELiDAR 0.11.0
 
 ## الطريقة الأسرع
 
-1. فك ضغط `3ELiDAR-v0.8.1-update-only.zip`.
-2. انسخ محتوياته إلى جذر مستودع `esshoo/LiDARLab`.
-3. وافق على استبدال الملفات الموجودة.
-4. ارفع التغييرات إلى GitHub.
-5. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
+1. فك ضغط ملف المشروع الكامل.
+2. انسخ مجلد `3ELiDAR` إلى مستودع المشروع أو استبدل محتوى المستودع بمحتوياته.
+3. ارفع التغييرات إلى GitHub.
+4. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
+5. نزّل ملف IPA وثبّته بالطريقة التجريبية المعتادة.
 
-## أهم الملفات المعدلة
+## أهم ملفات مرحلة التوقف المؤقت
 
 - `project.yml`
-- `LiDARLab/Info.plist`
-- `LiDARLab/App/LiDARLabApp.swift`
-- `LiDARLab/Core/Storage/LiDARLabStorage.swift`
-- `LiDARLab/Core/Storage/ThreeEStorageConstants.swift`
-- `LiDARLab/Core/Storage/ThreeEFolderPicker.swift`
-- `LiDARLab/Core/Storage/ThreeERegistry.swift`
-- `LiDARLab/Core/Storage/ThreeEURLRouter.swift`
-- `LiDARLab/Features/Home/HomeView.swift`
-- `LiDARLab/Features/Home/ThreeEStorageStatusView.swift`
-- `LiDARLab/Features/DepthPhoto/DepthPhotoViewModel.swift`
+- `LiDARLab/Features/RoomScan/RoomScanView.swift`
 - `LiDARLab/Features/RoomScan/RoomScanViewModel.swift`
-- `LiDARLab/Features/Export/ExportCenterView.swift`
-- `LiDARLab/Features/Export/ExportCenterViewModel.swift`
+- `LiDARLab/Features/RoomScan/RoomWallMetadata.swift`
+- `LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift`
+- `ROOMSCAN_PAUSE_RESUME_PHASE3.md`
 
-لا تضف ملف entitlements ولا تفعّل App Groups في Signing & Capabilities عند استخدام التوقيع المجاني.
+يمكن استخدام `PAUSE_RESUME_PHASE3.patch` بدل استبدال المشروع الكامل عند العمل داخل Git.
+
+لا تضف ملف Entitlements ولا تفعّل App Groups في Signing & Capabilities عند استخدام التوقيع المجاني.

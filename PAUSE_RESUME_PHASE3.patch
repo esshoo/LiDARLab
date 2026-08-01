@@ -1,0 +1,1421 @@
+--- a/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanViewModel.swift
+@@ -26,7 +26,10 @@
+     let createdAt: Date
+     let updatedAt: Date
+     let roomCount: Int
++    let fragmentCount: Int
+     let isFinished: Bool
++    let isPaused: Bool
++    let activeRoomNumber: Int
+     let coordinateSpace: String
+     let buildingDefaultWallThicknessMeters: Double
+     let physicalWallCount: Int
+@@ -41,9 +44,11 @@
+     let sharedARSession = ARSession()
+ 
+     @Published private(set) var isScanning = false
++    @Published private(set) var isPaused = false
+     @Published private(set) var isProcessing = false
+     @Published private(set) var isBuildingFinished = false
+     @Published private(set) var activeRoomNumber = 0
++    @Published private(set) var activeRoomFragmentCount = 0
+ 
+     /// The last finalized room, kept for the existing metrics and room export controls.
+     @Published private(set) var capturedRoom: CapturedRoom?
+@@ -51,6 +56,7 @@
+     /// Frozen value-type results. Later scans never replace or mutate previous entries.
+     @Published private(set) var capturedRooms: [CapturedRoom] = []
+     @Published private(set) var capturedStructure: CapturedStructure?
++    @Published private(set) var fragmentMetadata: [RoomScanFragmentMetadata] = []
+ 
+     /// App-owned wall metadata. RoomPlan geometry is never rewritten.
+     @Published private(set) var buildingDefaultWallThicknessMeters = 0.15
+@@ -66,14 +72,26 @@
+     private weak var captureView: RoomCaptureView?
+     private var pendingStartRequest: PendingStartRequest?
+     private var shouldAcceptNextProcessedRoom = false
++    private var pendingStopAction: PendingStopAction?
+     private var activeRoomDefaultThicknessMeters = 0.15
+     private var scanCreatedAt = Date()
++    private var capturedFragments: [CapturedFragment] = []
+ 
+     private enum PendingStartRequest {
+         case building(defaultThicknessCentimeters: Double)
+         case room(defaultThicknessCentimeters: Double)
+     }
+ 
++    private enum PendingStopAction: Equatable {
++        case pauseRoom
++        case finalizeRoom
++    }
++
++    private struct CapturedFragment {
++        let metadata: RoomScanFragmentMetadata
++        let room: CapturedRoom
++    }
++
+     private struct SharedWallMatch {
+         let assignment: RoomWallAssignment
+         let confidence: Double
+@@ -112,10 +130,12 @@
+         (roomWallConfigurations.last?.defaultThicknessMeters ?? buildingDefaultWallThicknessMeters) * 100.0
+     }
+ 
++    var totalFragmentCount: Int { fragmentMetadata.count }
++
+     var physicalWallCount: Int { buildingWallRecords.count }
+ 
+     var sharedPhysicalWallCount: Int {
+-        assignmentCountsByBuildingWallID.values.filter { $0 > 1 }.count
++        distinctRoomCountsByBuildingWallID.values.filter { $0 > 1 }.count
+     }
+ 
+     var latestRoomSharedFaceCount: Int {
+@@ -124,11 +144,19 @@
+     }
+ 
+     var canStartNextRoom: Bool {
+-        !isScanning && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
++        !isScanning && !isPaused && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
+     }
+ 
+     var canFinishBuilding: Bool {
+-        !isScanning && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
++        !isScanning && !isPaused && !isProcessing && !isBuildingFinished && !capturedRooms.isEmpty
++    }
++
++    var canPauseCurrentRoom: Bool {
++        isScanning && !isProcessing
++    }
++
++    var canResumePausedRoom: Bool {
++        isPaused && !isScanning && !isProcessing && activeRoomNumber > 0
+     }
+ 
+     func attach(to view: RoomCaptureView) {
+@@ -161,39 +189,82 @@
+         buildingDefaultWallThicknessMeters = validatedThicknessMeters(fromCentimeters: defaultWallThicknessCentimeters)
+         scanCreatedAt = Date()
+         prepareBuildingFolder()
+-        beginRoomScan(defaultThicknessMeters: buildingDefaultWallThicknessMeters)
++        beginRoomFragment(
++            roomNumber: 1,
++            defaultThicknessMeters: buildingDefaultWallThicknessMeters,
++            isResume: false
++        )
+     }
+ 
+-    /// Starts another independent RoomPlan scan while preserving the shared ARSession.
++    /// Starts another independent logical room while preserving the shared ARSession.
+     func startNextRoomScan(defaultWallThicknessCentimeters: Double) {
+         guard RoomCaptureSession.isSupported else {
+             errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
+             return
+         }
+-        guard !isScanning, !isProcessing, !isBuildingFinished else { return }
++        guard !isScanning, !isPaused, !isProcessing, !isBuildingFinished else { return }
+         guard captureView != nil else {
+             pendingStartRequest = .room(defaultThicknessCentimeters: defaultWallThicknessCentimeters)
+             return
+         }
+ 
+         let thicknessMeters = validatedThicknessMeters(fromCentimeters: defaultWallThicknessCentimeters)
+-        beginRoomScan(defaultThicknessMeters: thicknessMeters)
++        beginRoomFragment(
++            roomNumber: capturedRooms.count + 1,
++            defaultThicknessMeters: thicknessMeters,
++            isResume: false
++        )
+     }
+ 
+-    private func beginRoomScan(defaultThicknessMeters: Double) {
++    private func beginRoomFragment(
++        roomNumber: Int,
++        defaultThicknessMeters: Double,
++        isResume: Bool
++    ) {
+         guard let captureView else { return }
+ 
+         latestExport = nil
+         capturedStructure = nil
+-        activeRoomNumber = capturedRooms.count + 1
++        activeRoomNumber = roomNumber
+         activeRoomDefaultThicknessMeters = defaultThicknessMeters
++        activeRoomFragmentCount = fragmentMetadata.filter { $0.roomIndex == roomNumber }.count
+         shouldAcceptNextProcessedRoom = false
++        pendingStopAction = nil
++        isPaused = false
+ 
++        let nextFragment = activeRoomFragmentCount + 1
+         let thicknessText = centimetersText(defaultThicknessMeters * 100.0)
+-        statusMessage = "امسح الغرفة رقم \(activeRoomNumber) فقط. سماكة الجدران الجديدة \(thicknessText) سم، والمشتركة ترث قيمتها السابقة."
++        if isResume {
++            statusMessage = "استكمال الغرفة رقم \(roomNumber)، الجزء \(nextFragment). وجّه الهاتف إلى مكان معروف ثم تحرك ببطء."
++        } else {
++            statusMessage = "امسح الغرفة رقم \(roomNumber) فقط. سماكة الجدران الجديدة \(thicknessText) سم، والمشتركة ترث قيمتها السابقة."
++        }
+ 
+         captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
+         isScanning = true
++        persistSessionCheckpoint()
++    }
++
++    /// Stops the current partial capture and asks RoomPlan to pause the shared ARSession.
++    /// Resuming starts a new RoomPlan fragment that belongs to the same logical room.
++    func pauseCurrentRoom() {
++        guard canPauseCurrentRoom else { return }
++        isScanning = false
++        isProcessing = true
++        shouldAcceptNextProcessedRoom = true
++        pendingStopAction = .pauseRoom
++        statusMessage = "تم إيقاف الكاميرا، وجارٍ حفظ الجزء الحالي من الغرفة رقم \(activeRoomNumber)…"
++        captureView?.captureSession.stop(pauseARSession: true)
++    }
++
++    func resumePausedRoom() {
++        guard canResumePausedRoom else { return }
++        let roomNumber = activeRoomNumber
++        beginRoomFragment(
++            roomNumber: roomNumber,
++            defaultThicknessMeters: activeRoomDefaultThicknessMeters,
++            isResume: true
++        )
+     }
+ 
+     /// Finalizes only the current room. The underlying ARSession remains alive so the
+@@ -203,10 +274,25 @@
+         isScanning = false
+         isProcessing = true
+         shouldAcceptNextProcessedRoom = true
+-        statusMessage = "جارٍ تثبيت الغرفة رقم \(activeRoomNumber) وربط حوائطها المشتركة…"
++        pendingStopAction = .finalizeRoom
++        statusMessage = "جارٍ تثبيت الغرفة رقم \(activeRoomNumber) وربط كل أجزائها وحوائطها المشتركة…"
+         captureView?.captureSession.stop(pauseARSession: false)
+     }
+ 
++    /// Finalizes a paused room from its already saved fragments without reopening camera.
++    func finishPausedRoom() {
++        guard canResumePausedRoom else { return }
++        guard capturedFragments.contains(where: { $0.metadata.roomIndex == activeRoomNumber }) else {
++            errorMessage = "لا يوجد جزء محفوظ يمكن اعتماد الغرفة منه."
++            return
++        }
++
++        let roomNumber = activeRoomNumber
++        isPaused = false
++        finalizeLogicalRoom(roomIndex: roomNumber)
++        persistSessionCheckpoint()
++    }
++
+     /// Ends the multi-room workflow, pauses AR tracking, and creates a comparison merge.
+     /// The original frozen rooms remain the source of truth even after StructureBuilder runs.
+     func finishBuilding() {
+@@ -218,13 +304,16 @@
+         guard capturedRooms.count > 1 else {
+             statusMessage = "انتهى المسح بغرفة واحدة. تم حفظ الغرفة وسماكات حوائطها كما هي."
+             persistWallMetadata()
++            persistSessionCheckpoint()
+             writeManifest()
+             return
+         }
+ 
+         isProcessing = true
+         statusMessage = "جارٍ إنشاء نموذج مجمّع للمقارنة مع الغرف المجمدة…"
+-        let frozenRooms = capturedRooms
++        let frozenRooms = capturedFragments.isEmpty
++            ? capturedRooms
++            : capturedFragments.map(\.room)
+ 
+         Task {
+             do {
+@@ -235,6 +324,7 @@
+                 statusMessage = "تم إنهاء المبنى: \(capturedRooms.count) غرف، و\(sharedPhysicalWallCount) حوائط مشتركة."
+                 persistStructureJSON(structure)
+                 persistWallMetadata()
++                persistSessionCheckpoint()
+                 writeManifest()
+                 UINotificationFeedbackGenerator().notificationOccurred(.success)
+             } catch {
+@@ -242,6 +332,7 @@
+                 errorMessage = "تم حفظ الغرف والسماكات منفصلة، لكن تعذر دمج RoomPlan: \(error.localizedDescription)"
+                 statusMessage = "الغرف وبيانات الحوائط سليمة، وفشل النموذج المجمّع فقط."
+                 persistWallMetadata()
++                persistSessionCheckpoint()
+                 writeManifest()
+             }
+         }
+@@ -250,6 +341,7 @@
+     func resetBuilding() {
+         shouldAcceptNextProcessedRoom = false
+         pendingStartRequest = nil
++        pendingStopAction = nil
+ 
+         if isScanning {
+             captureView?.captureSession.stop(pauseARSession: true)
+@@ -265,10 +357,16 @@
+     func stopWithoutProcessing() {
+         shouldAcceptNextProcessedRoom = false
+         pendingStartRequest = nil
++        pendingStopAction = nil
+         isScanning = false
++        isPaused = false
+         isProcessing = false
++        activeRoomNumber = 0
++        activeRoomFragmentCount = 0
+         captureView?.captureSession.stop(pauseARSession: true)
+         sharedARSession.pause()
++        persistSessionCheckpoint()
++        writeManifest()
+     }
+ 
+     func exportLatestRoomParametric() {
+@@ -295,7 +393,7 @@
+ 
+             let metadataURL = folder.appendingPathComponent("wall-metadata.json")
+             let wallDocument = BuildingWallMetadataDocument(
+-                schemaVersion: 1,
++                schemaVersion: 2,
+                 updatedAt: Date(),
+                 buildingDefaultThicknessMeters: buildingDefaultWallThicknessMeters,
+                 roomConfigurations: roomWallConfigurations,
+@@ -326,16 +424,38 @@
+ 
+     func wallItems(for roomIndex: Int) -> [RoomWallDisplayItem] {
+         let recordsByID = Dictionary(uniqueKeysWithValues: buildingWallRecords.map { ($0.id, $0) })
+-        let counts = assignmentCountsByBuildingWallID
++        let distinctRoomCounts = distinctRoomCountsByBuildingWallID
++        let groupedAssignments = Dictionary(
++            grouping: roomWallAssignments.filter { $0.roomIndex == roomIndex },
++            by: \.buildingWallID
++        )
+ 
+-        return roomWallAssignments
+-            .filter { $0.roomIndex == roomIndex }
+-            .sorted { $0.wallNumber < $1.wallNumber }
+-            .compactMap { assignment in
+-                guard let record = recordsByID[assignment.buildingWallID] else { return nil }
+-                let displaySource: WallThicknessSource = record.source == .userConfirmed
+-                    ? .userConfirmed
+-                    : assignment.assignmentSource
++        return groupedAssignments.values
++            .compactMap { group -> (RoomWallAssignment, BuildingWallRecord)? in
++                guard let representative = group.min(by: {
++                    if $0.wallNumber == $1.wallNumber {
++                        return $0.fragmentIndex < $1.fragmentIndex
++                    }
++                    return $0.wallNumber < $1.wallNumber
++                }), let record = recordsByID[representative.buildingWallID] else {
++                    return nil
++                }
++                return (representative, record)
++            }
++            .sorted { $0.0.wallNumber < $1.0.wallNumber }
++            .map { pair in
++                let (assignment, record) = pair
++                let group = groupedAssignments[assignment.buildingWallID] ?? [assignment]
++                let displaySource: WallThicknessSource
++                if record.source == .userConfirmed {
++                    displaySource = .userConfirmed
++                } else if group.contains(where: { $0.assignmentSource == .inheritedSharedWall }) {
++                    displaySource = .inheritedSharedWall
++                } else if group.contains(where: { $0.assignmentSource == .continuedFragment }) {
++                    displaySource = .continuedFragment
++                } else {
++                    displaySource = assignment.assignmentSource
++                }
+ 
+                 return RoomWallDisplayItem(
+                     id: assignment.id,
+@@ -345,9 +465,9 @@
+                     buildingWallID: assignment.buildingWallID,
+                     thicknessCentimeters: record.thicknessMeters * 100.0,
+                     source: displaySource,
+-                    isShared: (counts[assignment.buildingWallID] ?? 0) > 1,
+-                    matchConfidence: assignment.matchConfidence,
+-                    faceSeparationCentimeters: assignment.faceSeparationMeters.map { $0 * 100.0 }
++                    isShared: (distinctRoomCounts[assignment.buildingWallID] ?? 0) > 1,
++                    matchConfidence: group.compactMap(\.matchConfidence).max(),
++                    faceSeparationCentimeters: group.compactMap(\.faceSeparationMeters).max().map { $0 * 100.0 }
+                 )
+             }
+     }
+@@ -365,7 +485,7 @@
+     }
+ 
+     func applyThicknessToUnsharedWalls(roomIndex: Int, centimeters: Double) {
+-        let counts = assignmentCountsByBuildingWallID
++        let counts = distinctRoomCountsByBuildingWallID
+         let wallIDs = Set(
+             roomWallAssignments
+                 .filter { $0.roomIndex == roomIndex && (counts[$0.buildingWallID] ?? 0) == 1 }
+@@ -390,98 +510,213 @@
+     // MARK: - RoomCaptureViewDelegate
+ 
+     func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
+-        guard shouldAcceptNextProcessedRoom else {
++        guard shouldAcceptNextProcessedRoom, pendingStopAction != nil else {
+             isProcessing = false
+             return false
+         }
+ 
+         if let error {
+             shouldAcceptNextProcessedRoom = false
++            pendingStopAction = nil
+             isProcessing = false
++            sharedARSession.pause()
++            isPaused = activeRoomNumber > 0
+             errorMessage = error.localizedDescription
+-            statusMessage = "حدث خطأ أثناء تثبيت الغرفة."
++            statusMessage = "تعذر حفظ الجزء الحالي. يمكنك محاولة استكمال الغرفة من نفس المكان."
++            persistSessionCheckpoint()
++            writeManifest()
+             return false
+         }
+ 
+         isScanning = false
+         isProcessing = true
+-        statusMessage = "جارٍ إنشاء النتيجة النهائية للغرفة رقم \(activeRoomNumber)…"
++        let fragmentNumber = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count + 1
++        statusMessage = "جارٍ إنشاء نتيجة الجزء \(fragmentNumber) من الغرفة رقم \(activeRoomNumber)…"
+         return true
+     }
+ 
+     func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
+-        guard shouldAcceptNextProcessedRoom else { return }
++        guard shouldAcceptNextProcessedRoom, let stopAction = pendingStopAction else { return }
+         shouldAcceptNextProcessedRoom = false
++        pendingStopAction = nil
+         isProcessing = false
+ 
+         if let error {
++            sharedARSession.pause()
++            isPaused = activeRoomNumber > 0
+             errorMessage = error.localizedDescription
+-            statusMessage = "تعذر معالجة الغرفة رقم \(activeRoomNumber)."
++            statusMessage = "تعذر معالجة الجزء الحالي من الغرفة رقم \(activeRoomNumber). يمكنك محاولة الاستكمال من نفس المكان."
++            persistSessionCheckpoint()
++            writeManifest()
+             return
+         }
+ 
+-        // CapturedRoom is a value result. Appending it freezes this scan independently
+-        // from all later RoomPlan sessions.
+-        capturedRooms.append(processedResult)
+-        capturedRoom = processedResult
+-        let finalizedRoomIndex = capturedRooms.count
++        let roomIndex = activeRoomNumber
++        let fragmentIndex = fragmentMetadata.filter { $0.roomIndex == roomIndex }.count + 1
++        let reason: RoomScanFragmentReason = stopAction == .pauseRoom ? .manualPause : .roomCompletion
++        let metadata = makeFragmentMetadata(
++            for: processedResult,
++            roomIndex: roomIndex,
++            fragmentIndex: fragmentIndex,
++            reason: reason
++        )
++
++        capturedFragments.append(CapturedFragment(metadata: metadata, room: processedResult))
++        fragmentMetadata.append(metadata)
++        activeRoomFragmentCount = fragmentIndex
+ 
+         registerWallMetadata(
+             for: processedResult,
+-            roomIndex: finalizedRoomIndex,
++            roomIndex: roomIndex,
++            fragmentIndex: fragmentIndex,
+             defaultThicknessMeters: activeRoomDefaultThicknessMeters
+         )
+ 
+-        activeRoomNumber = 0
+-        persistFrozenRoom(processedResult, index: finalizedRoomIndex)
++        persistRoomFragment(processedResult, metadata: metadata)
++        persistWallMetadata()
++        persistRoomWallMetadata(roomIndex: roomIndex)
++        persistRoomFragmentsDocument(roomIndex: roomIndex, isFinalized: stopAction == .finalizeRoom)
++
++        switch stopAction {
++        case .pauseRoom:
++            sharedARSession.pause()
++            isPaused = true
++            statusMessage = "تم حفظ الجزء \(fragmentIndex) من الغرفة \(roomIndex) وإغلاق الكاميرا. لا تحرك الهاتف كثيرًا قبل الاستكمال."
++            persistSessionCheckpoint()
++            writeManifest()
++            UINotificationFeedbackGenerator().notificationOccurred(.success)
++
++        case .finalizeRoom:
++            finalizeLogicalRoom(roomIndex: roomIndex)
++        }
++    }
++
++    private func finalizeLogicalRoom(roomIndex: Int) {
++        let roomFragments = capturedFragments.filter { $0.metadata.roomIndex == roomIndex }
++        guard let primary = roomFragments.max(by: { fragmentQualityScore($0.room) < fragmentQualityScore($1.room) }) else {
++            errorMessage = "لا توجد نتيجة محفوظة لاعتماد الغرفة رقم \(roomIndex)."
++            return
++        }
++
++        if capturedRooms.count < roomIndex {
++            capturedRooms.append(primary.room)
++        } else if roomIndex > 0 && roomIndex <= capturedRooms.count {
++            capturedRooms[roomIndex - 1] = primary.room
++        }
++        capturedRoom = primary.room
++
++        persistFrozenRoom(primary.room, index: roomIndex)
++        persistRoomFragmentsDocument(roomIndex: roomIndex, isFinalized: true)
+         persistWallMetadata()
+-        persistRoomWallMetadata(roomIndex: finalizedRoomIndex)
++        persistRoomWallMetadata(roomIndex: roomIndex)
++
++        isPaused = false
++        activeRoomNumber = 0
++        activeRoomFragmentCount = 0
+         writeManifest()
++        persistSessionCheckpoint()
+ 
+-        let sharedCount = wallItems(for: finalizedRoomIndex).filter(\.isShared).count
++        let sharedCount = wallItems(for: roomIndex).filter(\.isShared).count
++        let fragmentCount = roomFragments.count
+         if sharedCount > 0 {
+-            statusMessage = "تم تثبيت الغرفة رقم \(finalizedRoomIndex)، وربط \(sharedCount) وجه حائط بحوائط الغرف السابقة."
++            statusMessage = "تم تثبيت الغرفة رقم \(roomIndex) من \(fragmentCount) أجزاء، وربط \(sharedCount) حائط بالغرف السابقة."
+         } else {
+-            statusMessage = "تم تثبيت الغرفة رقم \(finalizedRoomIndex). لم يُعثر على حائط مشترك مؤكد تلقائيًا."
++            statusMessage = "تم تثبيت الغرفة رقم \(roomIndex) من \(fragmentCount) أجزاء. لم يُعثر على حائط مشترك مؤكد تلقائيًا."
+         }
+         UINotificationFeedbackGenerator().notificationOccurred(.success)
+     }
+ 
++    private func fragmentQualityScore(_ room: CapturedRoom) -> Int {
++        room.walls.count * 100
++            + room.doors.count * 20
++            + room.windows.count * 15
++            + room.openings.count * 10
++            + room.objects.count
++    }
++
++    private func makeFragmentMetadata(
++        for room: CapturedRoom,
++        roomIndex: Int,
++        fragmentIndex: Int,
++        reason: RoomScanFragmentReason
++    ) -> RoomScanFragmentMetadata {
++        let relativePath = String(
++            format: "FrozenRooms/Room-%02d/Fragments/Fragment-%02d/room.json",
++            roomIndex,
++            fragmentIndex
++        )
++        return RoomScanFragmentMetadata(
++            id: UUID(),
++            roomIndex: roomIndex,
++            fragmentIndex: fragmentIndex,
++            capturedRoomIdentifier: room.identifier,
++            reason: reason,
++            createdAt: Date(),
++            wallCount: room.walls.count,
++            doorCount: room.doors.count,
++            windowCount: room.windows.count,
++            openingCount: room.openings.count,
++            objectCount: room.objects.count,
++            relativeJSONPath: relativePath
++        )
++    }
++
+     // MARK: - Wall matching
+ 
+     private func registerWallMetadata(
+         for room: CapturedRoom,
+         roomIndex: Int,
++        fragmentIndex: Int,
+         defaultThicknessMeters: Double
+     ) {
+-        roomWallConfigurations.append(
+-            RoomWallConfiguration(
+-                roomIndex: roomIndex,
+-                roomIdentifier: room.identifier,
+-                defaultThicknessMeters: defaultThicknessMeters,
+-                confirmedAt: Date()
++        if !roomWallConfigurations.contains(where: { $0.roomIndex == roomIndex }) {
++            roomWallConfigurations.append(
++                RoomWallConfiguration(
++                    roomIndex: roomIndex,
++                    roomIdentifier: room.identifier,
++                    defaultThicknessMeters: defaultThicknessMeters,
++                    confirmedAt: Date()
++                )
+             )
+-        )
++        }
+ 
+-        for (wallOffset, wall) in room.walls.enumerated() {
++        var nextWallNumber = (roomWallAssignments
++            .filter { $0.roomIndex == roomIndex }
++            .map(\.wallNumber)
++            .max() ?? 0) + 1
++
++        for wall in room.walls {
+             let geometry = geometrySnapshot(for: wall)
+-            let match = bestSharedWallMatch(
++            let continuationMatch = bestContinuationWallMatch(
+                 for: geometry,
+-                currentRoomIndex: roomIndex
++                roomIndex: roomIndex
+             )
++            let sharedMatch = continuationMatch == nil
++                ? bestSharedWallMatch(for: geometry, currentRoomIndex: roomIndex)
++                : nil
+ 
+             let buildingWallID: UUID
+             let source: WallThicknessSource
+             let matchedWallIdentifier: UUID?
+             let confidence: Double?
+             let separation: Double?
++            let wallNumber: Int
+ 
+-            if let match {
+-                buildingWallID = match.assignment.buildingWallID
++            if let continuationMatch {
++                buildingWallID = continuationMatch.assignment.buildingWallID
++                source = .continuedFragment
++                matchedWallIdentifier = continuationMatch.assignment.wallIdentifier
++                confidence = continuationMatch.confidence
++                separation = continuationMatch.faceSeparationMeters
++                wallNumber = continuationMatch.assignment.wallNumber
++            } else if let sharedMatch {
++                buildingWallID = sharedMatch.assignment.buildingWallID
+                 source = .inheritedSharedWall
+-                matchedWallIdentifier = match.assignment.wallIdentifier
+-                confidence = match.confidence
+-                separation = match.faceSeparationMeters
++                matchedWallIdentifier = sharedMatch.assignment.wallIdentifier
++                confidence = sharedMatch.confidence
++                separation = sharedMatch.faceSeparationMeters
++                wallNumber = nextWallNumber
++                nextWallNumber += 1
+             } else {
+                 let record = BuildingWallRecord(
+                     id: UUID(),
+@@ -496,6 +731,8 @@
+                 matchedWallIdentifier = nil
+                 confidence = nil
+                 separation = nil
++                wallNumber = nextWallNumber
++                nextWallNumber += 1
+             }
+ 
+             roomWallAssignments.append(
+@@ -503,8 +740,9 @@
+                     id: UUID(),
+                     roomIndex: roomIndex,
+                     roomIdentifier: room.identifier,
++                    fragmentIndex: fragmentIndex,
+                     wallIdentifier: wall.identifier,
+-                    wallNumber: wallOffset + 1,
++                    wallNumber: wallNumber,
+                     buildingWallID: buildingWallID,
+                     geometry: geometry,
+                     assignmentSource: source,
+@@ -516,6 +754,92 @@
+         }
+     }
+ 
++    private func bestContinuationWallMatch(
++        for current: RoomWallGeometrySnapshot,
++        roomIndex: Int
++    ) -> SharedWallMatch? {
++        let previousAssignments = roomWallAssignments.filter { $0.roomIndex == roomIndex }
++        guard !previousAssignments.isEmpty else { return nil }
++
++        var best: SharedWallMatch?
++        for previous in previousAssignments {
++            guard let candidate = scoreContinuationWallMatch(
++                current: current,
++                previous: previous.geometry
++            ) else { continue }
++
++            if best == nil || candidate.confidence > best!.confidence {
++                best = SharedWallMatch(
++                    assignment: previous,
++                    confidence: candidate.confidence,
++                    faceSeparationMeters: candidate.separationMeters
++                )
++            }
++        }
++
++        guard let best, best.confidence >= 0.70 else { return nil }
++        return best
++    }
++
++    private func scoreContinuationWallMatch(
++        current: RoomWallGeometrySnapshot,
++        previous: RoomWallGeometrySnapshot
++    ) -> (confidence: Double, separationMeters: Double)? {
++        let currentTangent = normalized2D(SIMD2<Float>(current.tangentX, current.tangentZ))
++        let previousTangent = normalized2D(SIMD2<Float>(previous.tangentX, previous.tangentZ))
++        let currentNormal = normalized2D(SIMD2<Float>(current.normalX, current.normalZ))
++        let previousNormal = normalized2D(SIMD2<Float>(previous.normalX, previous.normalZ))
++
++        let tangentAlignment = abs(Double(simd_dot(currentTangent, previousTangent)))
++        let normalAlignment = abs(Double(simd_dot(currentNormal, previousNormal)))
++        guard tangentAlignment >= 0.975, normalAlignment >= 0.95 else { return nil }
++
++        let currentCenter = SIMD2<Float>(current.centerX, current.centerZ)
++        let previousCenter = SIMD2<Float>(previous.centerX, previous.centerZ)
++        let delta = previousCenter - currentCenter
++        let planeSeparation = abs(Double(simd_dot(delta, currentNormal)))
++        guard planeSeparation <= 0.18 else { return nil }
++
++        let axis = currentTangent
++        let currentAxisCenter = Double(simd_dot(currentCenter, axis))
++        let previousAxisCenter = Double(simd_dot(previousCenter, axis))
++        let currentHalfWidth = Double(current.widthMeters) * 0.5
++        let previousHalfWidth = Double(previous.widthMeters) * 0.5 * tangentAlignment
++        let currentStart = currentAxisCenter - currentHalfWidth
++        let currentEnd = currentAxisCenter + currentHalfWidth
++        let previousStart = previousAxisCenter - previousHalfWidth
++        let previousEnd = previousAxisCenter + previousHalfWidth
++        let overlap = max(0.0, min(currentEnd, previousEnd) - max(currentStart, previousStart))
++        let gap = max(0.0, max(currentStart, previousStart) - min(currentEnd, previousEnd))
++        guard overlap >= 0.15 || gap <= 0.45 else { return nil }
++
++        let currentBottom = Double(current.centerY) - Double(current.heightMeters) * 0.5
++        let currentTop = Double(current.centerY) + Double(current.heightMeters) * 0.5
++        let previousBottom = Double(previous.centerY) - Double(previous.heightMeters) * 0.5
++        let previousTop = Double(previous.centerY) + Double(previous.heightMeters) * 0.5
++        let verticalOverlap = max(0.0, min(currentTop, previousTop) - max(currentBottom, previousBottom))
++        let shorterHeight = max(0.01, min(Double(current.heightMeters), Double(previous.heightMeters)))
++        let verticalRatio = verticalOverlap / shorterHeight
++        guard verticalOverlap >= 0.50, verticalRatio >= 0.25 else { return nil }
++
++        let shorterWidth = max(0.01, min(Double(current.widthMeters), Double(previous.widthMeters)))
++        let overlapRatio = min(1.0, overlap / shorterWidth)
++        let horizontalScore = overlap > 0
++            ? max(0.45, overlapRatio)
++            : max(0.0, 1.0 - gap / 0.45) * 0.70
++        let planeScore = max(0.0, 1.0 - planeSeparation / 0.18)
++        let angleScore = min(tangentAlignment, normalAlignment)
++        let heightScore = min(1.0, verticalRatio)
++
++        let confidence = (
++            angleScore * 0.36
++            + planeScore * 0.26
++            + horizontalScore * 0.24
++            + heightScore * 0.14
++        )
++        return (confidence, planeSeparation)
++    }
++
+     private func bestSharedWallMatch(
+         for current: RoomWallGeometrySnapshot,
+         currentRoomIndex: Int
+@@ -640,26 +964,31 @@
+         return value / length
+     }
+ 
+-    private var assignmentCountsByBuildingWallID: [UUID: Int] {
++    private var distinctRoomCountsByBuildingWallID: [UUID: Int] {
+         Dictionary(grouping: roomWallAssignments, by: \.buildingWallID)
+-            .mapValues(\.count)
++            .mapValues { assignments in Set(assignments.map(\.roomIndex)).count }
+     }
+ 
+     // MARK: - Persistence and export
+ 
+     private func resetPublishedResults() {
+         isScanning = false
++        isPaused = false
+         isProcessing = false
+         isBuildingFinished = false
+         activeRoomNumber = 0
++        activeRoomFragmentCount = 0
+         capturedRoom = nil
+         capturedRooms = []
+         capturedStructure = nil
++        fragmentMetadata = []
++        capturedFragments = []
+         roomWallConfigurations = []
+         buildingWallRecords = []
+         roomWallAssignments = []
+         latestExport = nil
+         shouldAcceptNextProcessedRoom = false
++        pendingStopAction = nil
+         activeRoomDefaultThicknessMeters = buildingDefaultWallThicknessMeters
+     }
+ 
+@@ -676,6 +1005,7 @@
+             )
+             buildingFolderURL = folder
+             persistWallMetadata()
++            persistSessionCheckpoint()
+             writeManifest()
+         } catch {
+             buildingFolderURL = nil
+@@ -683,6 +1013,71 @@
+         }
+     }
+ 
++    private func persistRoomFragment(
++        _ room: CapturedRoom,
++        metadata: RoomScanFragmentMetadata
++    ) {
++        guard let buildingFolderURL else { return }
++
++        do {
++            let jsonURL = buildingFolderURL.appendingPathComponent(metadata.relativeJSONPath)
++            try FileManager.default.createDirectory(
++                at: jsonURL.deletingLastPathComponent(),
++                withIntermediateDirectories: true
++            )
++            try configuredEncoder().encode(room).write(to: jsonURL, options: .atomic)
++        } catch {
++            errorMessage = "تم حفظ الجزء داخل الجلسة، لكن تعذر كتابة ملفه: \(error.localizedDescription)"
++        }
++    }
++
++    private func persistRoomFragmentsDocument(roomIndex: Int, isFinalized: Bool) {
++        guard let buildingFolderURL else { return }
++
++        let document = RoomFragmentsDocument(
++            schemaVersion: 1,
++            updatedAt: Date(),
++            roomIndex: roomIndex,
++            isRoomFinalized: isFinalized,
++            fragments: fragmentMetadata
++                .filter { $0.roomIndex == roomIndex }
++                .sorted { $0.fragmentIndex < $1.fragmentIndex }
++        )
++
++        do {
++            let roomFolder = buildingFolderURL
++                .appendingPathComponent("FrozenRooms", isDirectory: true)
++                .appendingPathComponent(String(format: "Room-%02d", roomIndex), isDirectory: true)
++            try FileManager.default.createDirectory(at: roomFolder, withIntermediateDirectories: true)
++            let url = roomFolder.appendingPathComponent("fragments.json")
++            try configuredEncoder().encode(document).write(to: url, options: .atomic)
++        } catch {
++            errorMessage = "تعذر تحديث فهرس أجزاء الغرفة رقم \(roomIndex): \(error.localizedDescription)"
++        }
++    }
++
++    private func persistSessionCheckpoint() {
++        guard let buildingFolderURL else { return }
++
++        let checkpoint = RoomScanSessionCheckpoint(
++            schemaVersion: 1,
++            updatedAt: Date(),
++            completedRoomCount: capturedRooms.count,
++            totalFragmentCount: fragmentMetadata.count,
++            isPaused: isPaused,
++            activeRoomNumber: activeRoomNumber,
++            activeRoomFragmentCount: activeRoomFragmentCount,
++            resumeScope: "same-app-process-shared-ARSession"
++        )
++
++        do {
++            let url = buildingFolderURL.appendingPathComponent("session-checkpoint.json")
++            try configuredEncoder().encode(checkpoint).write(to: url, options: .atomic)
++        } catch {
++            // A checkpoint failure must not invalidate frozen room and wall files.
++        }
++    }
++
+     private func persistFrozenRoom(_ room: CapturedRoom, index: Int) {
+         guard let buildingFolderURL else { return }
+ 
+@@ -703,7 +1098,7 @@
+         guard let buildingFolderURL else { return }
+ 
+         let document = BuildingWallMetadataDocument(
+-            schemaVersion: 1,
++            schemaVersion: 2,
+             updatedAt: Date(),
+             buildingDefaultThicknessMeters: buildingDefaultWallThicknessMeters,
+             roomConfigurations: roomWallConfigurations,
+@@ -727,7 +1122,7 @@
+         let referencedIDs = Set(assignments.map(\.buildingWallID))
+         let records = buildingWallRecords.filter { referencedIDs.contains($0.id) }
+         let document = BuildingWallMetadataDocument(
+-            schemaVersion: 1,
++            schemaVersion: 2,
+             updatedAt: Date(),
+             buildingDefaultThicknessMeters: buildingDefaultWallThicknessMeters,
+             roomConfigurations: [roomConfiguration],
+@@ -774,12 +1169,15 @@
+ 
+         do {
+             let manifest = MultiRoomScanManifest(
+-                schemaVersion: 2,
++                schemaVersion: 3,
+                 createdAt: scanCreatedAt,
+                 updatedAt: Date(),
+                 roomCount: capturedRooms.count,
++                fragmentCount: fragmentMetadata.count,
+                 isFinished: isBuildingFinished,
+-                coordinateSpace: "continuous-shared-ARSession",
++                isPaused: isPaused,
++                activeRoomNumber: activeRoomNumber,
++                coordinateSpace: "continuous-shared-ARSession-with-room-fragments",
+                 buildingDefaultWallThicknessMeters: buildingDefaultWallThicknessMeters,
+                 physicalWallCount: physicalWallCount,
+                 sharedPhysicalWallCount: sharedPhysicalWallCount,
+@@ -810,7 +1208,7 @@
+                 let assignments = roomWallAssignments.filter { $0.roomIndex == roomCount }
+                 let referencedIDs = Set(assignments.map(\.buildingWallID))
+                 let wallDocument = BuildingWallMetadataDocument(
+-                    schemaVersion: 1,
++                    schemaVersion: 2,
+                     updatedAt: Date(),
+                     buildingDefaultThicknessMeters: buildingDefaultWallThicknessMeters,
+                     roomConfigurations: roomWallConfigurations.filter { $0.roomIndex == roomCount },
+--- a/LiDARLab/Features/RoomScan/RoomScanView.swift
++++ b/LiDARLab/Features/RoomScan/RoomScanView.swift
+@@ -15,6 +15,10 @@
+             RoomCaptureViewContainer(model: model)
+                 .ignoresSafeArea(edges: .bottom)
+ 
++            if model.isPaused {
++                pausedCameraOverlay
++            }
++
+             VStack(spacing: 12) {
+                 statusPanel
+                 Spacer(minLength: 10)
+@@ -106,9 +110,25 @@
+                 .foregroundStyle(.yellow)
+             }
+ 
++            if model.isPaused {
++                VStack(alignment: .leading, spacing: 5) {
++                    Label(
++                        "الغرفة \(model.activeRoomNumber) متوقفة مؤقتًا، والكاميرا والتتبع متوقفان.",
++                        systemImage: "pause.circle.fill"
++                    )
++                    Label(
++                        "الأجزاء المحفوظة: \(model.activeRoomFragmentCount). الاستكمال متاح ما دامت شاشة التطبيق الحالية مفتوحة.",
++                        systemImage: "square.stack.3d.up.fill"
++                    )
++                }
++                .font(.caption)
++                .foregroundStyle(.orange)
++            }
++
+             if model.roomCount > 0 {
+                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
+                     MetricChip(title: "غرف مثبتة", value: "\(model.roomCount)", systemImage: "square.grid.2x2")
++                    MetricChip(title: "أجزاء محفوظة", value: "\(model.totalFragmentCount)", systemImage: "square.stack.3d.up")
+                     MetricChip(title: "حوائط فعلية", value: "\(model.physicalWallCount)", systemImage: "rectangle.split.3x1")
+                     MetricChip(title: "حوائط مشتركة", value: "\(model.sharedPhysicalWallCount)", systemImage: "link")
+                     MetricChip(title: "كل الأبواب", value: "\(model.totalDoorCount)", systemImage: "door.left.hand.open")
+@@ -141,7 +161,7 @@
+         VStack(spacing: 10) {
+             primaryControls
+ 
+-            if model.capturedRoom != nil, !model.isScanning, !model.isProcessing {
++            if model.capturedRoom != nil, !model.isScanning, !model.isPaused, !model.isProcessing {
+                 Button {
+                     showingWallEditor = true
+                 } label: {
+@@ -194,14 +214,35 @@
+     @ViewBuilder
+     private var primaryControls: some View {
+         if model.isScanning {
+-            Button {
+-                model.finishCurrentRoom()
+-            } label: {
+-                Label("إنهاء وتثبيت الغرفة \(model.activeRoomNumber)", systemImage: "stop.fill")
+-                    .frame(maxWidth: .infinity)
++            ViewThatFits(in: .horizontal) {
++                HStack(spacing: 10) { activeScanControls }
++                VStack(spacing: 10) { activeScanControls }
++            }
++        } else if model.isPaused {
++            VStack(spacing: 10) {
++                Button {
++                    model.resumePausedRoom()
++                } label: {
++                    Label("استكمال الغرفة \(model.activeRoomNumber)", systemImage: "camera.fill")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.borderedProminent)
++                .controlSize(.large)
++
++                Button {
++                    model.finishPausedRoom()
++                } label: {
++                    Label("اعتماد الأجزاء وإنهاء الغرفة", systemImage: "checkmark.seal")
++                        .frame(maxWidth: .infinity)
++                }
++                .buttonStyle(.bordered)
++                .controlSize(.large)
++
++                Text("لا تغلق التطبيق في هذه المرحلة؛ الاستكمال بعد إغلاق التطبيق سيُضاف في المرحلة التالية.")
++                    .font(.caption2)
++                    .foregroundStyle(.secondary)
++                    .multilineTextAlignment(.center)
+             }
+-            .buttonStyle(.borderedProminent)
+-            .controlSize(.large)
+         } else if model.isProcessing {
+             Button {} label: {
+                 Label("جارٍ المعالجة…", systemImage: "gearshape.2.fill")
+@@ -245,6 +286,27 @@
+     }
+ 
+     @ViewBuilder
++    private var activeScanControls: some View {
++        Button {
++            model.pauseCurrentRoom()
++        } label: {
++            Label("توقف مؤقت", systemImage: "pause.fill")
++                .frame(maxWidth: .infinity)
++        }
++        .buttonStyle(.bordered)
++        .controlSize(.large)
++
++        Button {
++            model.finishCurrentRoom()
++        } label: {
++            Label("إنهاء وتثبيت الغرفة \(model.activeRoomNumber)", systemImage: "stop.fill")
++                .frame(maxWidth: .infinity)
++        }
++        .buttonStyle(.borderedProminent)
++        .controlSize(.large)
++    }
++
++    @ViewBuilder
+     private var continuationControls: some View {
+         Button {
+             presentThicknessSetup(.nextRoom)
+@@ -284,9 +346,31 @@
+         .buttonStyle(.bordered)
+     }
+ 
++    private var pausedCameraOverlay: some View {
++        ZStack {
++            Color.black
++                .ignoresSafeArea(edges: .bottom)
++
++            VStack(spacing: 14) {
++                Image(systemName: "camera.slash.fill")
++                    .font(.system(size: 52))
++                    .foregroundStyle(.orange)
++                Text("الكاميرا متوقفة مؤقتًا")
++                    .font(.title3.bold())
++                Text("تم حفظ الجزء الحالي من الغرفة. عند الاستكمال، ابدأ من نفس الموضع ووجّه الهاتف إلى حائط أو باب سبق مسحه.")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
++                    .multilineTextAlignment(.center)
++                    .frame(maxWidth: 320)
++            }
++            .padding(.bottom, 40)
++        }
++    }
++
+     private var stateIcon: String {
+         if model.isProcessing { return "gearshape.2.fill" }
+         if model.isBuildingFinished { return "checkmark.seal.fill" }
++        if model.isPaused { return "pause.circle.fill" }
+         if model.isScanning { return "record.circle" }
+         if model.roomCount > 0 { return "square.grid.2x2.fill" }
+         return "building.2"
+@@ -294,6 +378,7 @@
+ 
+     private var stateColor: Color {
+         if model.isBuildingFinished { return .green }
++        if model.isPaused { return .orange }
+         if model.isScanning { return .red }
+         if model.roomCount > 0 { return .cyan }
+         return .cyan
+--- a/LiDARLab/Features/RoomScan/RoomWallMetadata.swift
++++ b/LiDARLab/Features/RoomScan/RoomWallMetadata.swift
+@@ -5,6 +5,7 @@
+     case buildingDefault
+     case roomDefault
+     case inheritedSharedWall
++    case continuedFragment
+     case userConfirmed
+ 
+     var arabicTitle: String {
+@@ -15,6 +16,8 @@
+             return "افتراضي الغرفة"
+         case .inheritedSharedWall:
+             return "موروث من حائط مشترك"
++        case .continuedFragment:
++            return "مستكمل من جزء سابق"
+         case .userConfirmed:
+             return "مؤكد يدويًا"
+         }
+@@ -50,6 +53,7 @@
+     let id: UUID
+     let roomIndex: Int
+     let roomIdentifier: UUID
++    let fragmentIndex: Int
+     let wallIdentifier: UUID
+     let wallNumber: Int
+     let buildingWallID: UUID
+--- a/project.yml
++++ b/project.yml
+@@ -9,8 +9,8 @@
+ settings:
+   base:
+     SWIFT_VERSION: "5.0"
+-    MARKETING_VERSION: "0.10.0"
+-    CURRENT_PROJECT_VERSION: "13"
++    MARKETING_VERSION: "0.11.0"
++    CURRENT_PROJECT_VERSION: "14"
+     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
+     PRODUCT_NAME: LiDARLab
+     DEVELOPMENT_LANGUAGE: ar
+--- a/README.md
++++ b/README.md
+@@ -11,29 +11,35 @@
+ - App Folder: `Apps/LiDARLab`
+ - Future App Group: `group.com.essam.3e`
+ 
+-## النسخة 0.10.0 — سماكات الحوائط المشتركة
++## النسخة 0.11.0 — التوقف المؤقت وأجزاء الغرفة
+ 
+-أصبح مسح المبنى يطلب سماكة افتراضية قبل البداية، ثم يؤكد سماكة الحوائط الجديدة قبل كل غرفة. يحتفظ التطبيق بنتيجة RoomPlan الأصلية كما هي، ويضيف ملف خصائص مستقل يربط وجهي الحائط المتجاورين بسجل حائط واحد عند نجاح المطابقة الهندسية.
++أصبح مسح الغرفة يدعم **توقفًا مؤقتًا حقيقيًا من جهة الكاميرا والتتبع**. عند الضغط على التوقف، يوقف التطبيق جلسة RoomPlan و`ARSession` ثم يعالج النتيجة الحالية ويحفظها كجزء مستقل. عند الاستكمال يبدأ جزء جديد لنفس رقم الغرفة باستخدام جلسة AR المشتركة نفسها داخل تشغيل التطبيق الحالي.
+ 
+-بعد تثبيت أي غرفة يمكن فتح **مراجعة سماكات حوائط الغرفة الأخيرة** لتعديل كل حائط. إذا كان الحائط مشتركًا، يتغير السجل نفسه في الغرفتين ولا تُنشأ سماكتان متعارضتان.
++يمكن تكرار التوقف والاستكمال عدة مرات، أو اعتماد الأجزاء المحفوظة وإنهاء الغرفة دون إعادة فتح الكاميرا. حوائط الأجزاء المتتابعة تُطابق داخل نموذج التطبيق حتى لا تتحول إعادة رؤية الحائط نفسه إلى حائط مشترك وهمي.
+ 
+-ملفات الجلسة الجديدة:
++ملفات الجلسة:
+ 
+ ```text
+ Rooms/MultiRoom-<timestamp>/
+ ├── manifest.json
++├── session-checkpoint.json
+ ├── wall-metadata.json
+ ├── FrozenRooms/
+ │   ├── Room-01/
+-│   │   ├── room.json
+-│   │   └── wall-properties.json
++│   │   ├── room.json                 # الجزء الرئيسي الممثل للغرفة
++│   │   ├── fragments.json
++│   │   ├── wall-properties.json
++│   │   └── Fragments/
++│   │       ├── Fragment-01/room.json
++│   │       └── Fragment-02/room.json
+ │   └── Room-02/
+-│       ├── room.json
+-│       └── wall-properties.json
++│       └── ...
+ └── structure.json
+ ```
+ 
+-`room.json` يظل ناتج RoomPlan غير المعدّل، بينما يحتوي ملف خصائص الحوائط على السماكات ومصدرها وعلاقات المشاركة ودرجة المطابقة.
++`room.json` لا يزال ناتج RoomPlan غير معدل، وجميع الأجزاء الأصلية تبقى محفوظة داخل `Fragments`. ملف `wall-metadata.json` يحتفظ أيضًا بسماكات الحوائط المشتركة من مرحلة 0.10.0.
++
++> الاستكمال في 0.11.0 يعمل ما دامت عملية التطبيق الحالية ما زالت مفتوحة. استعادة الجلسة بعد إغلاق التطبيق بالكامل ستكون المرحلة التالية باستخدام خريطة عالم محفوظة وإعادة تحديد الموقع.
+ 
+ ## النسخة 0.8.2 — توافق سجل تطبيقات 3E
+ 
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,21 @@
+ # Changelog
+ 
++## 0.11.0
++
++- إضافة زر **توقف مؤقت** أثناء مسح الغرفة.
++- إيقاف جلسة RoomPlan والكاميرا عبر `stop(pauseARSession: true)` مع معالجة النتيجة الحالية كجزء مستقل.
++- إضافة شاشة سوداء واضحة عند التوقف المؤقت مع زر استكمال الغرفة.
++- استكمال الغرفة بجلسة RoomPlan جديدة مرتبطة بنفس رقم الغرفة ونفس `ARSession` داخل تشغيل التطبيق الحالي.
++- دعم تكرار التوقف والاستكمال أكثر من مرة داخل الغرفة نفسها.
++- إضافة خيار اعتماد الأجزاء المحفوظة وإنهاء الغرفة دون إعادة فتح الكاميرا.
++- تجميع حوائط أجزاء الغرفة في نموذج التطبيق، ومنع اعتبار تكرار الحائط بين أجزاء الغرفة حائطًا مشتركًا بين غرفتين.
++- إضافة مطابقة مستقلة للحائط المستكمل بين الأجزاء المتتالية مع مصدر `continuedFragment`.
++- حفظ كل جزء في `FrozenRooms/Room-XX/Fragments/Fragment-YY/room.json`.
++- إضافة `fragments.json` لكل غرفة و`session-checkpoint.json` للمبنى.
++- استخدام جميع الأجزاء عند إنشاء نموذج `StructureBuilder` للمقارنة، مع بقاء ملفات الأجزاء الأصلية مصدر الحقيقة.
++- إضافة نسخة احتياطية لملفات مرحلة سماكات الحوائط داخل `_backup/RoomScan_phase2`.
++- تحديث الإصدار إلى `0.11.0` ورقم البناء إلى `14`.
++
+ ## 0.10.0
+ 
+ - إضافة شاشة تحديد سماكة الحوائط الافتراضية قبل بدء المبنى.
+--- a/TEST_3E.md
++++ b/TEST_3E.md
+@@ -122,3 +122,32 @@
+ 
+ 11. اختبر حائطين متوازيين لكن غير متداخلين؛ يجب ألا يعتبرهما التطبيق حائطًا مشتركًا.
+ 12. اختبر غرفتين بارتفاعي سقف مختلفين؛ يجب أن تستمر المطابقة إذا كان هناك تداخل رأسي كافٍ، دون تغيير ارتفاع أي غرفة.
++
++## 8. اختبار التوقف المؤقت والاستكمال — 0.11.0
++
++1. ابدأ غرفة جديدة وامسح حائطين على الأقل.
++2. اضغط **توقف مؤقت** وانتظر حتى تظهر شاشة **الكاميرا متوقفة مؤقتًا**.
++3. تأكد أن مؤشر الكاميرا في النظام لم يعد نشطًا بعد انتهاء المعالجة.
++4. افتح مجلد الغرفة وتأكد من وجود:
++
++```text
++FrozenRooms/Room-01/Fragments/Fragment-01/room.json
++FrozenRooms/Room-01/fragments.json
++session-checkpoint.json
++```
++
++5. دون تحريك الهاتف بعيدًا، اضغط **استكمال الغرفة** وابدأ من حائط سبق مسحه.
++6. امسح منطقة إضافية، ثم اضغط **توقف مؤقت** مرة ثانية.
++7. يجب أن يظهر `Fragment-02/room.json` وأن يظل رقم الغرفة نفسه.
++8. اضغط **استكمال الغرفة** ثم **إنهاء وتثبيت الغرفة**.
++9. يجب أن تحتوي الغرفة على ثلاثة أجزاء، وأن يكون `fragments.json` بحالة `isRoomFinalized: true`.
++10. افتح `wall-properties.json` وتحقق من وجود `fragmentIndex` داخل الإسنادات.
++11. تحقق أن الحائط الذي ظهر في جزأين يستخدم `buildingWallID` نفسه ومصدر `continuedFragment` في الجزء اللاحق.
++12. تحقق أن هذا الحائط لا يظهر كـ **مشترك** ما لم يكن مرتبطًا أيضًا بغرفة أخرى.
++13. اختبر **اعتماد الأجزاء وإنهاء الغرفة** أثناء التوقف، ويجب إنهاء الغرفة دون إعادة تشغيل الكاميرا.
++14. اختبر غرفة ثانية وحائطًا مشتركًا؛ يجب أن يظل منطق السماكة المشتركة من 0.10.0 يعمل.
++
++### اختبار حدود المرحلة
++
++- أغلق التطبيق بالكامل أثناء التوقف ثم افتحه. لا يُفترض أن يظهر زر استكمال في 0.11.0؛ الملفات المحفوظة يجب ألا تضيع.
++- تحريك الجهاز بعيدًا أثناء التوقف قد يسبب انحرافًا عند الاستكمال، لذلك اختبر أولًا والجهاز ثابت أو قريب من آخر موضع.
+--- a/VALIDATION.md
++++ b/VALIDATION.md
+@@ -1,37 +1,47 @@
+-# Validation Notes — 0.10.0
++# Validation Notes — 0.11.0
+ 
+-تم تنفيذ الفحوص التالية على مرحلة سماكات الحوائط المشتركة:
++تم تنفيذ الفحوص التالية على مرحلة التوقف المؤقت وأجزاء الغرفة:
+ 
+-- تحليل Syntax لجميع ملفات Swift وعددها 49 باستخدام Swift 6.2 parser.
++- تحليل Syntax لجميع ملفات Swift باستخدام Swift 6.2 parser.
+ - التحقق من صحة `project.yml` كملف YAML.
+ - التحقق من صحة `LiDARLab/Info.plist` كملف Property List.
+-- التحقق من الإصدار `0.10.0` ورقم البناء `13`.
++- التحقق من الإصدار `0.11.0` ورقم البناء `14`.
+ - التحقق من بقاء Display Name: `3ELiDAR`.
+ - التحقق من بقاء Bundle Identifier: `com.essam.3E.LiDARLab`.
+ - التحقق من بقاء URL Scheme: `lidar`.
+ - التحقق من عدم إضافة App Group entitlement أو تغيير مسارات التخزين الحالية.
+-- التحقق من أن التعديلات محصورة في وظيفة RoomScan والوثائق والإصدار فقط.
+-- التحقق من استمرار استخدام `ARSession` واحدة مشتركة بين جلسات الغرف.
+-- التحقق من عدم تعديل كائنات `CapturedRoom` أو ملفات `room.json` الأصلية.
+-- التحقق من إنشاء ملف مستقل `wall-metadata.json` للمبنى.
+-- التحقق من إنشاء `wall-properties.json` لكل غرفة مجمدة.
+-- التحقق من أن الحائط المشترك يستخدم `buildingWallID` واحدًا في الغرف المرتبطة.
+-- التحقق من أن تعديل سجل حائط مشترك يحدث ملفات الغرف المرتبطة.
+-- اختبار منطقي اصطناعي لخوارزمية المطابقة:
+-  - قبول حائطين متوازيين ومتداخلين بفاصل 25 سم.
+-  - رفض حائطين متعامدين.
+-  - رفض حائطين متوازيين بلا تداخل أفقي.
+-  - رفض حائطين يفصل بينهما أكثر من الحد المقبول.
++- التحقق من استمرار استخدام `ARSession` واحدة مشتركة طوال تشغيل مسح المبنى.
++- التحقق من أن التوقف المؤقت ينفذ `RoomCaptureSession.stop(pauseARSession: true)` لإيقاف جلسة RoomPlan والكاميرا و`ARSession` مع استمرار معالجة النتيجة الجزئية.
++- التحقق من أن الاستكمال يبدأ `RoomCaptureSession` جديدة لنفس رقم الغرفة داخل الجلسة الحالية.
++- التحقق من دعم أكثر من توقف واستكمال للغرفة نفسها.
++- التحقق من حفظ كل جزء في مسار مستقل وعدم استبدال الأجزاء السابقة.
++- التحقق من إنشاء `fragments.json` و`session-checkpoint.json`.
++- التحقق من أن حائطًا مكررًا داخل أجزاء الغرفة لا يُحسب حائطًا مشتركًا بين غرفتين.
++- التحقق من استمرار منطق سماكات الحوائط المشتركة بين أرقام غرف مختلفة.
++- اختبار منطقي اصطناعي لخوارزمية مطابقة أجزاء الحائط:
++  - قبول حائط متداخل على المستوى نفسه بفاصل 3 سم.
++  - قبول امتداد مجاور للحائط بفجوة صغيرة.
++  - رفض حائط موازٍ على مستوى يبعد مترين.
++  - رفض حائط متعامد.
++- التحقق من وجود نسخة احتياطية لملفات مرحلة 0.10.0 داخل `_backup/RoomScan_phase2`.
+ - فحص سلامة ملف ZIP النهائي بعد إنشائه.
+ 
+-## ما يتبقى
++## قيود التحقق
+ 
+-يتبقى تشغيل GitHub Actions على macOS للتأكد من Type-check والربط الكامل مع Xcode وRoomPlan، ثم الاختبار الفعلي على جهاز LiDAR بغرفتين أو أكثر.
++لا تتوفر Apple SDKs أو جهاز LiDAR داخل بيئة التنفيذ الحالية، لذلك يتبقى:
+ 
+-الاختبار الأهم على الجهاز:
+-
+-1. مسح الغرفة الأولى بسماكة 25 سم.
+-2. مسح الغرفة الثانية بسماكة افتراضية مختلفة مثل 15 سم.
+-3. التحقق من أن الحائط المشترك يرث 25 سم.
+-4. تغيير الحائط المشترك إلى 35 سم.
+-5. التحقق من تحديث نفس `buildingWallID` في ملفي الغرفتين.
++1. تشغيل GitHub Actions على macOS للتأكد من Type-check والربط الكامل مع RoomPlan وARKit.
++2. اختبار توقف مؤشر الكاميرا فعليًا على جهاز iPhone/iPad يدعم RoomPlan.
++3. اختبار استقرار الإحداثيات عند استكمال الغرفة بعد فترات توقف مختلفة.
++4. اختبار ما يحدث إذا تحرك الجهاز كثيرًا أثناء التوقف.
++5. اختبار `StructureBuilder` مع عدة أجزاء للغرفة الواحدة؛ الناتج يظل نموذج مقارنة وليس مصدر الحقيقة.
++
++## سيناريو الاختبار الأساسي على الجهاز
++
++1. امسح نصف غرفة.
++2. اضغط **توقف مؤقت** وانتظر اكتمال الحفظ وإغلاق الكاميرا.
++3. استكمل من نفس الحائط.
++4. توقف مرة ثانية ثم استكمل.
++5. أنهِ الغرفة.
++6. تحقق من وجود ثلاثة ملفات أجزاء، مع رقم غرفة واحد.
++7. تحقق من أن الحائط المعاد رؤيته يستخدم `buildingWallID` واحدًا ولا يظهر كمشترك إلا عند ربط غرفة ثانية به.
+--- a/UPDATE_UPLOAD.md
++++ b/UPDATE_UPLOAD.md
+@@ -1,28 +1,22 @@
+-# رفع تحديث 3ELiDAR 0.8.1
++# رفع تحديث 3ELiDAR 0.11.0
+ 
+ ## الطريقة الأسرع
+ 
+-1. فك ضغط `3ELiDAR-v0.8.1-update-only.zip`.
+-2. انسخ محتوياته إلى جذر مستودع `esshoo/LiDARLab`.
+-3. وافق على استبدال الملفات الموجودة.
+-4. ارفع التغييرات إلى GitHub.
+-5. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
++1. فك ضغط ملف المشروع الكامل.
++2. انسخ مجلد `3ELiDAR` إلى مستودع المشروع أو استبدل محتوى المستودع بمحتوياته.
++3. ارفع التغييرات إلى GitHub.
++4. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
++5. نزّل ملف IPA وثبّته بالطريقة التجريبية المعتادة.
+ 
+-## أهم الملفات المعدلة
++## أهم ملفات مرحلة التوقف المؤقت
+ 
+ - `project.yml`
+-- `LiDARLab/Info.plist`
+-- `LiDARLab/App/LiDARLabApp.swift`
+-- `LiDARLab/Core/Storage/LiDARLabStorage.swift`
+-- `LiDARLab/Core/Storage/ThreeEStorageConstants.swift`
+-- `LiDARLab/Core/Storage/ThreeEFolderPicker.swift`
+-- `LiDARLab/Core/Storage/ThreeERegistry.swift`
+-- `LiDARLab/Core/Storage/ThreeEURLRouter.swift`
+-- `LiDARLab/Features/Home/HomeView.swift`
+-- `LiDARLab/Features/Home/ThreeEStorageStatusView.swift`
+-- `LiDARLab/Features/DepthPhoto/DepthPhotoViewModel.swift`
++- `LiDARLab/Features/RoomScan/RoomScanView.swift`
+ - `LiDARLab/Features/RoomScan/RoomScanViewModel.swift`
+-- `LiDARLab/Features/Export/ExportCenterView.swift`
+-- `LiDARLab/Features/Export/ExportCenterViewModel.swift`
++- `LiDARLab/Features/RoomScan/RoomWallMetadata.swift`
++- `LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift`
++- `ROOMSCAN_PAUSE_RESUME_PHASE3.md`
+ 
+-لا تضف ملف entitlements ولا تفعّل App Groups في Signing & Capabilities عند استخدام التوقيع المجاني.
++يمكن استخدام `PAUSE_RESUME_PHASE3.patch` بدل استبدال المشروع الكامل عند العمل داخل Git.
++
++لا تضف ملف Entitlements ولا تفعّل App Groups في Signing & Capabilities عند استخدام التوقيع المجاني.
+--- /dev/null
++++ b/LiDARLab/Features/RoomScan/RoomScanFragmentModels.swift
+@@ -0,0 +1,55 @@
++import Foundation
++
++/// Why a RoomPlan capture fragment ended. RoomPlan doesn't expose a true pause API,
++/// so the app freezes the current partial result and starts another fragment later.
++enum RoomScanFragmentReason: String, Codable, Equatable {
++    case manualPause
++    case roomCompletion
++
++    var arabicTitle: String {
++        switch self {
++        case .manualPause:
++            return "توقف مؤقت"
++        case .roomCompletion:
++            return "إنهاء الغرفة"
++        }
++    }
++}
++
++/// Durable metadata for one partial RoomPlan result that belongs to a logical room.
++/// The actual CapturedRoom is stored in the JSON path recorded here.
++struct RoomScanFragmentMetadata: Codable, Identifiable, Equatable {
++    let id: UUID
++    let roomIndex: Int
++    let fragmentIndex: Int
++    let capturedRoomIdentifier: UUID
++    let reason: RoomScanFragmentReason
++    let createdAt: Date
++    let wallCount: Int
++    let doorCount: Int
++    let windowCount: Int
++    let openingCount: Int
++    let objectCount: Int
++    let relativeJSONPath: String
++}
++
++struct RoomFragmentsDocument: Codable, Equatable {
++    let schemaVersion: Int
++    let updatedAt: Date
++    let roomIndex: Int
++    let isRoomFinalized: Bool
++    let fragments: [RoomScanFragmentMetadata]
++}
++
++/// Phase 3 writes this checkpoint to prepare for Phase 4 persistence. In this phase,
++/// resuming is supported only while the same app process and shared ARSession remain alive.
++struct RoomScanSessionCheckpoint: Codable, Equatable {
++    let schemaVersion: Int
++    let updatedAt: Date
++    let completedRoomCount: Int
++    let totalFragmentCount: Int
++    let isPaused: Bool
++    let activeRoomNumber: Int
++    let activeRoomFragmentCount: Int
++    let resumeScope: String
++}
+--- /dev/null
++++ b/ROOMSCAN_PAUSE_RESUME_PHASE3.md
+@@ -0,0 +1,66 @@
++# RoomScan — Pause / Resume Phase 3
++
++## الهدف
++
++إضافة توقف مؤقت آمن لمسح الغرفة دون الادعاء بأن RoomPlan يملك API لاستكمال نفس الكائن الداخلي. التطبيق يحفظ النتيجة الجزئية أولًا، ثم يوقف الكاميرا والتتبع، وبعد العودة يبدأ جزء RoomPlan جديدًا مرتبطًا بالغرفة المنطقية نفسها.
++
++## سير الاستخدام
++
++1. ابدأ مسح غرفة بالطريقة المعتادة.
++2. اضغط **توقف مؤقت**.
++3. تتوقف الكاميرا و`ARSession`، ثم ينتظر التطبيق معالجة الجزء الحالي وحفظه.
++4. بعد اكتمال الحفظ تظهر شاشة التوقف السوداء.
++5. عند الاستكمال، ضع الهاتف في موضع قريب من آخر مكان، ووجّهه إلى سطح سبق مسحه.
++6. اضغط **استكمال الغرفة**.
++7. يمكن تكرار العملية، ثم إنهاء الغرفة بصورة طبيعية.
++8. أثناء التوقف يمكن الضغط على **اعتماد الأجزاء وإنهاء الغرفة** دون فتح الكاميرا مرة أخرى.
++
++## لماذا أجزاء؟
++
++`RoomCaptureSession` يوفر `run` و`stop` ولا يوفر عقدًا عامًا لاستعادة جلسة RoomPlan نفسها من منتصف المسح. لذلك تستخدم المرحلة النموذج التالي:
++
++```text
++Logical Room 1
++├── Fragment 1 — manualPause
++├── Fragment 2 — manualPause
++└── Fragment 3 — roomCompletion
++```
++
++كل جزء هو `CapturedRoom` أصلي غير معدل. التطبيق يربط الأجزاء تحت رقم غرفة واحد، ويحتفظ بها جميعًا بدل فقدان ما سبق التوقف.
++
++## مطابقة الحوائط داخل الغرفة
++
++قبل البحث عن حائط مشترك مع غرفة سابقة، يبحث التطبيق عن حائط مطابق داخل أجزاء الغرفة نفسها باستخدام:
++
++- اتجاه متقارب جدًا.
++- مستوى حائط متقارب.
++- تداخل أو امتداد أفقي قريب.
++- تداخل رأسي كافٍ.
++
++عند نجاح المطابقة يستخدم الجزآن `buildingWallID` نفسه، ويكون المصدر `continuedFragment`. ولا يُحسب هذا التكرار حائطًا مشتركًا إلا إذا استُخدم السجل نفسه في رقم غرفة مختلف.
++
++## الحفظ
++
++```text
++FrozenRooms/Room-01/
++├── room.json
++├── fragments.json
++├── wall-properties.json
++└── Fragments/
++    ├── Fragment-01/room.json
++    ├── Fragment-02/room.json
++    └── Fragment-03/room.json
++```
++
++- `Fragments/*/room.json`: جميع نتائج RoomPlan الأصلية.
++- `fragments.json`: سبب كل توقف، وقت الحفظ، العدادات، ومسار الملف.
++- `room.json`: أفضل جزء تمثيلي للغرفة حاليًا لاستخدام التصدير المتوافق مع النسخ السابقة.
++- `session-checkpoint.json`: حالة مختصرة تمهّد لمرحلة الاستعادة بعد إغلاق التطبيق.
++
++## حدود المرحلة
++
++- الاستكمال يعمل داخل عملية التطبيق الحالية فقط.
++- يجب عدم إغلاق التطبيق بالكامل أو مغادرة شاشة المسح أثناء التوقف.
++- تحريك الجهاز لمسافة كبيرة أثناء توقف AR قد يضعف اتساق الإحداثيات عند العودة.
++- لا يوجد في هذه المرحلة دمج أصلي يحول عدة `CapturedRoom` إلى `CapturedRoom` واحد؛ جميع الأجزاء تبقى مصدر الحقيقة، بينما `room.json` هو جزء تمثيلي.
++- استعادة المشروع بعد إغلاق التطبيق، وحفظ `ARWorldMap` وإعادة تحديد الموقع، هي المرحلة الرابعة.
