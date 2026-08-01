@@ -82,11 +82,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     @Published private(set) var hasSavedWorldMapCheckpoint = false
     @Published private(set) var worldMapSavedAt: Date?
 
-    /// Phase 5 review, native Apple previews, and non-destructive room rescans.
-    @Published private(set) var roomRevisionRecords: [RoomRevisionRecord] = []
-    @Published private(set) var pendingRoomRevision: PendingRoomRevision?
-    @Published private(set) var isRoomRescanActive = false
-
     private weak var captureView: RoomCaptureView?
     private var pendingStartRequest: PendingStartRequest?
     private var shouldAcceptNextProcessedRoom = false
@@ -101,8 +96,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     private var recoveredProjectRequiresRelocalization = false
     private var didCheckForRecoverableProject = false
     private var relocalizationNormalFrameCount = 0
-    private var roomRescanTargetIndex: Int?
-    private var buildingWasFinishedBeforeRescan = false
     private let imageContext = CIContext(options: nil)
 
     private let worldMapRelativePath = "Resume/world-map.arexperience"
@@ -188,7 +181,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     }
 
     var canPauseCurrentRoom: Bool {
-        isScanning && !isProcessing && !isRoomRescanActive
+        isScanning && !isProcessing
     }
 
     var canResumePausedRoom: Bool {
@@ -207,19 +200,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
 
     var canRetryRelocalization: Bool {
         recoveredProjectRequiresRelocalization && recoveredWorldMapURL != nil && !isRelocalizing
-    }
-
-    var roomReviewSummaries: [RoomReviewSummary] {
-        capturedRooms.enumerated().map { offset, room in
-            let roomIndex = offset + 1
-            return RoomReviewSummary(
-                roomIndex: roomIndex,
-                roomIdentifier: room.identifier,
-                metrics: RoomRevisionMetrics(room: room),
-                revisionCount: roomRevisionRecords.filter { $0.roomIndex == roomIndex }.count,
-                sharedWallCount: wallItems(for: roomIndex).filter(\.isShared).count
-            )
-        }
     }
 
     func attach(to view: RoomCaptureView) {
@@ -359,9 +339,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         isProcessing = true
         shouldAcceptNextProcessedRoom = true
         pendingStopAction = .finalizeRoom
-        statusMessage = isRoomRescanActive
-            ? "جارٍ معالجة إعادة مسح الغرفة رقم \(activeRoomNumber) للمقارنة…"
-            : "جارٍ حفظ نقطة الرجوع ثم تثبيت الغرفة رقم \(activeRoomNumber)…"
+        statusMessage = "جارٍ حفظ نقطة الرجوع ثم تثبيت الغرفة رقم \(activeRoomNumber)…"
         saveWorldMapCheckpoint(reason: "room-finalization") { [weak self] in
             guard let self else { return }
             self.captureView?.captureSession.stop(pauseARSession: false)
@@ -505,340 +483,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         }
     }
 
-
-    // MARK: - Phase 5 review and non-destructive room revisions
-
-    /// Creates a USDZ preview using RoomPlan's exporter. The UI presents it with
-    /// Apple's native Quick Look controller for orbit, zoom and AR preview.
-    func prepareReviewUSDZ(roomIndex: Int?) -> URL? {
-        guard !capturedRooms.isEmpty else {
-            errorMessage = "لا توجد غرف مثبتة للعرض."
-            return nil
-        }
-
-        do {
-            let root: URL
-            if let buildingFolderURL {
-                root = buildingFolderURL
-            } else {
-                root = try makeExportFolder(name: "Room-Review")
-            }
-            let previewFolder = root
-                .appendingPathComponent("Review", isDirectory: true)
-                .appendingPathComponent("Previews", isDirectory: true)
-            try FileManager.default.createDirectory(at: previewFolder, withIntermediateDirectories: true)
-
-            if let roomIndex {
-                guard roomIndex > 0, roomIndex <= capturedRooms.count else {
-                    errorMessage = "رقم الغرفة غير صالح."
-                    return nil
-                }
-                let url = previewFolder.appendingPathComponent(String(format: "Room-%02d.usdz", roomIndex))
-                try? FileManager.default.removeItem(at: url)
-                try capturedRooms[roomIndex - 1].export(to: url, exportOptions: .parametric)
-                return url
-            }
-
-            let url = previewFolder.appendingPathComponent("Building.usdz")
-            try? FileManager.default.removeItem(at: url)
-            if let capturedStructure {
-                try capturedStructure.export(to: url)
-                return url
-            }
-            if capturedRooms.count == 1, let room = capturedRooms.first {
-                try room.export(to: url, exportOptions: .parametric)
-                return url
-            }
-
-            errorMessage = "النموذج المجمّع غير جاهز بعد. أنهِ المبنى أو انتظر اكتمال إعادة الدمج."
-            return nil
-        } catch {
-            errorMessage = "تعذر إنشاء معاينة USDZ: \(error.localizedDescription)"
-            return nil
-        }
-    }
-
-    /// Starts a fresh RoomPlan capture for an existing room. The current room remains
-    /// untouched until the user accepts the candidate from the review center.
-    func beginRoomRescan(roomIndex: Int) {
-        guard RoomCaptureSession.isSupported else {
-            errorMessage = "RoomPlan غير مدعوم على هذا الجهاز."
-            return
-        }
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else {
-            errorMessage = "رقم الغرفة غير صالح."
-            return
-        }
-        guard isBuildingFinished else {
-            errorMessage = "أنهِ المبنى أولًا قبل إعادة مسح غرفة محفوظة."
-            return
-        }
-        guard !isScanning, !isPaused, !isProcessing, pendingRoomRevision == nil else {
-            errorMessage = pendingRoomRevision == nil
-                ? "أنهِ العملية الحالية أولًا."
-                : "راجع نتيجة إعادة المسح الحالية قبل بدء مراجعة جديدة."
-            return
-        }
-        guard let captureView else {
-            errorMessage = "عارض RoomPlan غير جاهز بعد."
-            return
-        }
-
-        if sharedARSession.currentFrame == nil, let recoveredWorldMapURL {
-            activeRoomNumber = 0
-            recoveredProjectRequiresRelocalization = true
-            beginRelocalization(using: recoveredWorldMapURL)
-            errorMessage = "طابق مكان المشروع المحفوظ أولًا، ثم افتح المراجعة وابدأ إعادة المسح مرة أخرى."
-            return
-        }
-        guard !recoveredProjectRequiresRelocalization else {
-            errorMessage = "أعد تحديد موقع المشروع قبل إعادة مسح غرفة."
-            return
-        }
-
-        buildingWasFinishedBeforeRescan = isBuildingFinished
-        isBuildingFinished = false
-        isRoomRescanActive = true
-        roomRescanTargetIndex = roomIndex
-        activeRoomNumber = roomIndex
-        activeRoomFragmentCount = 0
-        activeRoomDefaultThicknessMeters = roomWallConfigurations
-            .first(where: { $0.roomIndex == roomIndex })?.defaultThicknessMeters
-            ?? buildingDefaultWallThicknessMeters
-        shouldAcceptNextProcessedRoom = false
-        pendingStopAction = nil
-        latestExport = nil
-        statusMessage = "إعادة مسح الغرفة \(roomIndex): النسخة الحالية محفوظة ولن تتغير قبل اعتماد النتيجة الجديدة."
-
-        captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
-        isScanning = true
-        persistSessionCheckpoint()
-    }
-
-    func cancelRoomRescan() {
-        guard isRoomRescanActive else { return }
-        shouldAcceptNextProcessedRoom = false
-        pendingStopAction = nil
-        captureView?.captureSession.stop(pauseARSession: true)
-        sharedARSession.pause()
-        isScanning = false
-        isProcessing = false
-        isPaused = false
-        isRoomRescanActive = false
-        roomRescanTargetIndex = nil
-        activeRoomNumber = 0
-        activeRoomFragmentCount = 0
-        isBuildingFinished = buildingWasFinishedBeforeRescan
-        statusMessage = "تم إلغاء إعادة المسح، وبقيت الغرفة الحالية دون تغيير."
-        persistSessionCheckpoint()
-        writeManifest()
-    }
-
-    func acceptPendingRoomRevision() {
-        guard let pending = pendingRoomRevision else { return }
-        let roomIndex = pending.record.roomIndex
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
-
-        let defaultThickness = roomWallConfigurations
-            .first(where: { $0.roomIndex == roomIndex })?.defaultThicknessMeters
-            ?? buildingDefaultWallThicknessMeters
-
-        capturedRooms[roomIndex - 1] = pending.candidateRoom
-        capturedRoom = pending.candidateRoom
-
-        // Remove only the old face assignments for this room. Shared physical wall
-        // records used by other rooms remain, then the new faces match against them.
-        roomWallAssignments.removeAll { $0.roomIndex == roomIndex }
-        roomWallConfigurations.removeAll { $0.roomIndex == roomIndex }
-        removeOrphanedBuildingWallRecords()
-        registerWallMetadata(
-            for: pending.candidateRoom,
-            roomIndex: roomIndex,
-            fragmentIndex: 1,
-            defaultThicknessMeters: defaultThickness
-        )
-        removeOrphanedBuildingWallRecords()
-
-        persistFrozenRoom(pending.candidateRoom, index: roomIndex)
-        persistWallMetadata()
-        persistRoomWallMetadata(roomIndex: roomIndex)
-
-        updateRevisionDecision(id: pending.id, decision: .accepted)
-        pendingRoomRevision = nil
-        isBuildingFinished = true
-        statusMessage = "تم اعتماد إعادة مسح الغرفة \(roomIndex)، وحُفظت النسخة السابقة داخل سجل المراجعات."
-        persistRoomRevisionDocument()
-        persistSessionCheckpoint()
-        writeManifest()
-        rebuildStructureAfterRevision()
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-    }
-
-    func rejectPendingRoomRevision() {
-        guard let pending = pendingRoomRevision else { return }
-        updateRevisionDecision(id: pending.id, decision: .rejected)
-        pendingRoomRevision = nil
-        isBuildingFinished = true
-        statusMessage = "تم رفض إعادة مسح الغرفة \(pending.record.roomIndex)، ولم تتغير النسخة الحالية."
-        persistRoomRevisionDocument()
-        persistSessionCheckpoint()
-        writeManifest()
-    }
-
-    private func completeRoomRescan(with candidate: CapturedRoom) {
-        guard let roomIndex = roomRescanTargetIndex,
-              roomIndex > 0,
-              roomIndex <= capturedRooms.count else {
-            cancelRoomRescan()
-            return
-        }
-
-        let original = capturedRooms[roomIndex - 1]
-        let revisionNumber = (roomRevisionRecords
-            .filter { $0.roomIndex == roomIndex }
-            .map(\.revisionNumber)
-            .max() ?? 0) + 1
-        let root = String(format: "Revisions/Room-%02d/Revision-%03d", roomIndex, revisionNumber)
-        let record = RoomRevisionRecord(
-            id: UUID(),
-            roomIndex: roomIndex,
-            revisionNumber: revisionNumber,
-            createdAt: Date(),
-            decidedAt: nil,
-            decision: .pending,
-            originalRoomIdentifier: original.identifier,
-            candidateRoomIdentifier: candidate.identifier,
-            originalMetrics: RoomRevisionMetrics(room: original),
-            candidateMetrics: RoomRevisionMetrics(room: candidate),
-            originalRelativePath: root + "/original.json",
-            candidateRelativePath: root + "/candidate.json"
-        )
-
-        persistRoomRevisionFiles(record: record, original: original, candidate: candidate)
-        roomRevisionRecords.append(record)
-        pendingRoomRevision = PendingRoomRevision(
-            record: record,
-            originalRoom: original,
-            candidateRoom: candidate
-        )
-        persistRoomRevisionDocument()
-
-        sharedARSession.pause()
-        isScanning = false
-        isProcessing = false
-        isPaused = false
-        isRoomRescanActive = false
-        roomRescanTargetIndex = nil
-        activeRoomNumber = 0
-        activeRoomFragmentCount = 0
-        isBuildingFinished = true
-        statusMessage = "اكتملت إعادة مسح الغرفة \(roomIndex). افتح مركز المراجعة للمقارنة والاعتماد أو الرفض."
-        persistSessionCheckpoint()
-        writeManifest()
-        UINotificationFeedbackGenerator().notificationOccurred(.warning)
-    }
-
-    private func updateRevisionDecision(id: UUID, decision: RoomRevisionDecision) {
-        guard let index = roomRevisionRecords.firstIndex(where: { $0.id == id }) else { return }
-        roomRevisionRecords[index].decision = decision
-        roomRevisionRecords[index].decidedAt = Date()
-    }
-
-    private func removeOrphanedBuildingWallRecords() {
-        let referenced = Set(roomWallAssignments.map(\.buildingWallID))
-        buildingWallRecords.removeAll { !referenced.contains($0.id) }
-    }
-
-    private func rebuildStructureAfterRevision() {
-        guard capturedRooms.count > 1 else {
-            capturedStructure = nil
-            isProcessing = false
-            return
-        }
-
-        isProcessing = true
-        statusMessage = "جارٍ إعادة بناء نموذج المبنى بعد اعتماد المراجعة…"
-        let rooms = capturedRooms
-        Task {
-            do {
-                let builder = StructureBuilder(options: [])
-                let structure = try await builder.capturedStructure(from: rooms)
-                capturedStructure = structure
-                isProcessing = false
-                persistStructureJSON(structure)
-                statusMessage = "تم اعتماد المراجعة وإعادة بناء النموذج المجمّع."
-            } catch {
-                capturedStructure = nil
-                isProcessing = false
-                errorMessage = "اعتمدت الغرفة الجديدة، لكن تعذر إعادة دمج المبنى: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func persistRoomRevisionFiles(
-        record: RoomRevisionRecord,
-        original: CapturedRoom,
-        candidate: CapturedRoom
-    ) {
-        guard let buildingFolderURL else { return }
-        do {
-            let originalURL = buildingFolderURL.appendingPathComponent(record.originalRelativePath)
-            let candidateURL = buildingFolderURL.appendingPathComponent(record.candidateRelativePath)
-            try FileManager.default.createDirectory(
-                at: originalURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try configuredEncoder().encode(original).write(to: originalURL, options: .atomic)
-            try configuredEncoder().encode(candidate).write(to: candidateURL, options: .atomic)
-        } catch {
-            errorMessage = "تعذر حفظ ملفات مراجعة الغرفة: \(error.localizedDescription)"
-        }
-    }
-
-    private func persistRoomRevisionDocument() {
-        guard let buildingFolderURL else { return }
-        do {
-            let revisionsFolder = buildingFolderURL.appendingPathComponent("Revisions", isDirectory: true)
-            try FileManager.default.createDirectory(at: revisionsFolder, withIntermediateDirectories: true)
-            let document = RoomRevisionDocument(
-                schemaVersion: 1,
-                updatedAt: Date(),
-                revisions: roomRevisionRecords
-            )
-            try configuredEncoder().encode(document)
-                .write(to: revisionsFolder.appendingPathComponent("room-revisions.json"), options: .atomic)
-        } catch {
-            errorMessage = "تعذر تحديث سجل مراجعات الغرف: \(error.localizedDescription)"
-        }
-    }
-
-    private func loadRoomRevisionHistory(from folder: URL) {
-        let url = folder
-            .appendingPathComponent("Revisions", isDirectory: true)
-            .appendingPathComponent("room-revisions.json")
-        guard let data = try? Data(contentsOf: url),
-              let document = try? configuredDecoder().decode(RoomRevisionDocument.self, from: data) else {
-            return
-        }
-        roomRevisionRecords = document.revisions
-
-        guard let pendingRecord = document.revisions
-            .filter({ $0.decision == .pending })
-            .sorted(by: { $0.createdAt > $1.createdAt })
-            .first,
-              let originalData = try? Data(contentsOf: folder.appendingPathComponent(pendingRecord.originalRelativePath)),
-              let candidateData = try? Data(contentsOf: folder.appendingPathComponent(pendingRecord.candidateRelativePath)),
-              let original = try? configuredDecoder().decode(CapturedRoom.self, from: originalData),
-              let candidate = try? configuredDecoder().decode(CapturedRoom.self, from: candidateData) else {
-            return
-        }
-        pendingRoomRevision = PendingRoomRevision(
-            record: pendingRecord,
-            originalRoom: original,
-            candidateRoom: candidate
-        )
-    }
-
     func clearError() {
         errorMessage = nil
     }
@@ -894,47 +538,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         }
     }
 
-
-    /// Opens the most recently completed multi-room project for 2D/3D review.
-    /// A later rescan still requires ARWorldMap relocalization before RoomPlan starts.
-    func openLatestCompletedProjectForReview() {
-        guard !isScanning, !isProcessing, buildingFolderURL == nil else { return }
-
-        let storage = LiDARLabStorage.shared
-        let fileManager = FileManager.default
-        guard let folders = try? fileManager.contentsOfDirectory(
-            at: storage.roomsURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            errorMessage = "تعذر قراءة مجلد مشاريع الغرف."
-            return
-        }
-
-        let candidates = folders
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            .sorted { storage.modificationDate(at: $0) > storage.modificationDate(at: $1) }
-
-        for folder in candidates {
-            let checkpointURL = folder.appendingPathComponent("session-checkpoint.json")
-            guard let data = try? Data(contentsOf: checkpointURL),
-                  let checkpoint = try? configuredDecoder().decode(RoomScanSessionCheckpoint.self, from: data) else {
-                continue
-            }
-            let manifestURL = folder.appendingPathComponent("manifest.json")
-            let manifest = (try? Data(contentsOf: manifestURL))
-                .flatMap { try? configuredDecoder().decode(MultiRoomScanManifest.self, from: $0) }
-            let isFinished = checkpoint.isBuildingFinished ?? manifest?.isFinished ?? false
-            guard isFinished, checkpoint.completedRoomCount > 0 else { continue }
-
-            restoreProject(from: folder)
-            statusMessage = "تم فتح أحدث مشروع مكتمل للمراجعة."
-            return
-        }
-
-        errorMessage = "لم يتم العثور على مشروع مكتمل محفوظ."
-    }
-
     func dismissRecoverySuggestion() {
         recoverableProject = nil
     }
@@ -969,9 +572,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     }
 
     func handleAppBecameInactive() {
-        if isRoomRescanActive {
-            cancelRoomRescan()
-        } else if isScanning {
+        if isScanning {
             requestPauseCurrentRoom(reason: .appInterruption)
         } else if isRelocalizing {
             relocalizationTask?.cancel()
@@ -1079,13 +680,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
                 capturedRooms = (1...checkpoint.completedRoomCount).compactMap { primaryRoomsByIndex[$0] }
             }
             capturedRoom = capturedRooms.last
-
-            let structureURL = folder.appendingPathComponent("structure.json")
-            if let structureData = try? Data(contentsOf: structureURL),
-               let structure = try? configuredDecoder().decode(CapturedStructure.self, from: structureData) {
-                capturedStructure = structure
-            }
-            loadRoomRevisionHistory(from: folder)
 
             activeRoomNumber = checkpoint.activeRoomNumber
             activeRoomFragmentCount = fragmentMetadata.filter { $0.roomIndex == activeRoomNumber }.count
@@ -1441,24 +1035,12 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         isProcessing = false
 
         if let error {
-            let failedRoomNumber = activeRoomNumber
             sharedARSession.pause()
-            isPaused = activeRoomNumber > 0 && !isRoomRescanActive
-            if isRoomRescanActive {
-                isRoomRescanActive = false
-                roomRescanTargetIndex = nil
-                activeRoomNumber = 0
-                isBuildingFinished = buildingWasFinishedBeforeRescan
-            }
+            isPaused = activeRoomNumber > 0
             errorMessage = error.localizedDescription
-            statusMessage = "تعذر معالجة الجزء الحالي من الغرفة رقم \(failedRoomNumber). يمكنك المحاولة من جديد."
+            statusMessage = "تعذر معالجة الجزء الحالي من الغرفة رقم \(activeRoomNumber). يمكنك محاولة الاستكمال من نفس المكان."
             persistSessionCheckpoint()
             writeManifest()
-            return
-        }
-
-        if isRoomRescanActive, stopAction == .finalizeRoom {
-            completeRoomRescan(with: processedResult)
             return
         }
 
@@ -1926,11 +1508,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         hasSavedWorldMapCheckpoint = false
         worldMapSavedAt = nil
         latestWorldMappingStatus = "notAvailable"
-        roomRevisionRecords = []
-        pendingRoomRevision = nil
-        isRoomRescanActive = false
-        roomRescanTargetIndex = nil
-        buildingWasFinishedBeforeRescan = false
         shouldAcceptNextProcessedRoom = false
         pendingStopAction = nil
         activeRoomDefaultThicknessMeters = buildingDefaultWallThicknessMeters

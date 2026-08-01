@@ -7,7 +7,6 @@ struct RoomScanView: View {
     @State private var showingResetConfirmation = false
     @State private var showingThicknessSetup = false
     @State private var showingWallEditor = false
-    @State private var showingReviewCenter = false
     @State private var shareItems: [Any] = []
     @State private var setupThicknessCentimeters = 15.0
     @State private var setupMode: RoomThicknessSetupMode = .building
@@ -79,14 +78,6 @@ struct RoomScanView: View {
                     model: model,
                     roomIndex: model.roomCount
                 )
-            }
-        }
-        .sheet(isPresented: $showingReviewCenter) {
-            RoomScanProjectReviewView(model: model)
-        }
-        .onChange(of: model.pendingRoomRevision?.id) { _, revisionID in
-            if revisionID != nil {
-                showingReviewCenter = true
             }
         }
         .sheet(item: Binding(
@@ -215,20 +206,6 @@ struct RoomScanView: View {
     private var controls: some View {
         VStack(spacing: 10) {
             primaryControls
-
-            if model.roomCount > 0, !model.isScanning, !model.isPaused, !model.isRelocalizing, !model.requiresRelocalization {
-                Button {
-                    showingReviewCenter = true
-                } label: {
-                    Label(
-                        model.pendingRoomRevision == nil ? "فتح مركز المراجعة 2D و3D" : "مراجعة نتيجة إعادة المسح",
-                        systemImage: model.pendingRoomRevision == nil ? "square.3.layers.3d" : "exclamationmark.arrow.triangle.2.circlepath"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(model.pendingRoomRevision == nil ? .cyan : .orange)
-            }
 
             if model.capturedRoom != nil, !model.isScanning, !model.isPaused, !model.isProcessing {
                 Button {
@@ -398,14 +375,6 @@ struct RoomScanView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-
-            Button {
-                model.openLatestCompletedProjectForReview()
-            } label: {
-                Label("فتح أحدث مشروع مكتمل", systemImage: "folder.badge.gearshape")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
         } else if !model.isBuildingFinished {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) { continuationControls }
@@ -433,43 +402,23 @@ struct RoomScanView: View {
 
     @ViewBuilder
     private var activeScanControls: some View {
-        if model.isRoomRescanActive {
-            Button(role: .cancel) {
-                model.cancelRoomRescan()
-            } label: {
-                Label("إلغاء إعادة المسح", systemImage: "xmark.circle")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-
-            Button {
-                model.finishCurrentRoom()
-            } label: {
-                Label("إنهاء للمقارنة", systemImage: "arrow.triangle.2.circlepath.camera")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-        } else {
-            Button {
-                model.pauseCurrentRoom()
-            } label: {
-                Label("توقف مؤقت", systemImage: "pause.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-
-            Button {
-                model.finishCurrentRoom()
-            } label: {
-                Label("إنهاء وتثبيت الغرفة \(model.activeRoomNumber)", systemImage: "stop.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+        Button {
+            model.pauseCurrentRoom()
+        } label: {
+            Label("توقف مؤقت", systemImage: "pause.fill")
+                .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+
+        Button {
+            model.finishCurrentRoom()
+        } label: {
+            Label("إنهاء وتثبيت الغرفة \(model.activeRoomNumber)", systemImage: "stop.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
     }
 
     @ViewBuilder
@@ -735,7 +684,7 @@ private struct RoomThicknessSetupSheet: View {
     }
 }
 
-struct RoomWallThicknessEditor: View {
+private struct RoomWallThicknessEditor: View {
     @ObservedObject var model: RoomScanViewModel
     let roomIndex: Int
 
