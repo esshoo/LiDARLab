@@ -3329,18 +3329,24 @@ extension RoomScanViewModel {
             }) else { return nil }
             return (source, target)
         }
-        guard let pair = candidates.max(by: {
-            (($0.0.matchConfidence ?? 0) + ($0.1.matchConfidence ?? 0))
-                < (($1.0.matchConfidence ?? 0) + ($1.1.matchConfidence ?? 0))
-        }) else { return nil }
+        guard var pair = candidates.first else { return nil }
+        var bestScore = (pair.0.matchConfidence ?? 0) + (pair.1.matchConfidence ?? 0)
+        for candidate in candidates.dropFirst() {
+            let candidateScore = (candidate.0.matchConfidence ?? 0) + (candidate.1.matchConfidence ?? 0)
+            if candidateScore > bestScore {
+                pair = candidate
+                bestScore = candidateScore
+            }
+        }
 
         let source = pair.0
         let target = pair.1
         let sourceCurrent = effectiveWallGeometry(for: source)
         let targetCurrent = effectiveWallGeometry(for: target)
-        let sourceAngle = atan2(Double(sourceCurrent.tangentZ), Double(sourceCurrent.tangentX))
-        let targetAngle = atan2(Double(targetCurrent.tangentZ), Double(targetCurrent.tangentX))
-        var delta = Self.normalizedDegrees((targetAngle - sourceAngle) * 180 / .pi)
+        let sourceAngle: Double = atan2(Double(sourceCurrent.tangentZ), Double(sourceCurrent.tangentX))
+        let targetAngle: Double = atan2(Double(targetCurrent.tangentZ), Double(targetCurrent.tangentX))
+        let angleDeltaRadians: Double = targetAngle - sourceAngle
+        var delta = Self.normalizedDegrees(angleDeltaRadians * 180.0 / Double.pi)
         if delta > 90 { delta -= 180 }
         if delta < -90 { delta += 180 }
         let proposedRotation = Self.normalizedDegrees(currentTransform.rotationDegrees + delta)
@@ -3348,7 +3354,7 @@ extension RoomScanViewModel {
         var proposed = currentTransform
         proposed.rotationDegrees = proposedRotation
         let localSource = localEffectiveWallGeometry(for: source)
-        let rotatedCenter = proposed.applying(to: localSource.center2D)
+        let rotatedCenter = proposed.applying(toPoint: localSource.center2D)
         let targetCenter = targetCurrent.center2D
         let targetNormal = normalized2D(targetCurrent.normal2D)
         let currentVector = sourceCurrent.center2D - targetCenter

@@ -1,3 +1,10 @@
+## 0.19.1 (Build 25)
+
+- Fixed Swift overload collision by separating rigid-transform point and direction APIs.
+- Fixed main-actor isolation in project export point conversion.
+- Simplified shared-wall alignment candidate selection for reliable compiler type checking.
+- Made angle conversion explicitly use `Double.pi`.
+
 # 0.19.0 (Build 24) — Phase 7: Rigid Rooms & True Openings
 
 - Added app-owned rigid transforms for entire rooms: horizontal translation, rotation, lock, reset, and shared-wall alignment suggestion.

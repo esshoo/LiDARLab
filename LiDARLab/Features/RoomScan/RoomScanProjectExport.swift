@@ -262,8 +262,8 @@ enum RoomScanProjectExporter {
             let floorPolygons: [[ProjectExportPoint]]
             let roomTransform = transforms[roomIndex]
             func transformedPoint(_ point: SIMD2<Float>) -> ProjectExportPoint {
-                let value = roomTransform?.applying(to: point) ?? point
-                return exportPoint(SIMD2<Double>(Double(value.x), Double(value.y)))
+                let value = roomTransform?.applying(toPoint: point) ?? point
+                return ProjectExportPoint(x: Double(value.x), y: Double(value.y))
             }
             if room.floors.isEmpty {
                 floorPolygons = [fallbackFloorPolygon(seed: seed).map {
@@ -388,10 +388,10 @@ enum RoomScanProjectExporter {
                 for surface in surfaces {
                     let roomTransform = transforms[roomIndex]
                     let rawCenter = SIMD2<Float>(surface.transform.columns.3.x, surface.transform.columns.3.z)
-                    let transformedCenter = roomTransform?.applying(to: rawCenter) ?? rawCenter
+                    let transformedCenter = roomTransform?.applying(toPoint: rawCenter) ?? rawCenter
                     let center = SIMD2<Double>(Double(transformedCenter.x), Double(transformedCenter.y))
                     let rawTangent = SIMD2<Float>(surface.transform.columns.0.x, surface.transform.columns.0.z)
-                    let transformedTangent = roomTransform?.applying(to: rawTangent) ?? rawTangent
+                    let transformedTangent = roomTransform?.applying(toDirection: rawTangent) ?? rawTangent
                     let tangent = normalized(
                         SIMD2<Double>(Double(transformedTangent.x), Double(transformedTangent.y)),
                         fallback: SIMD2<Double>(1, 0)
@@ -434,12 +434,12 @@ enum RoomScanProjectExporter {
             let roomTransform = transforms[zone.roomIndex]
             let rawCorners = ceilingCorners(zone)
             let corners = rawCorners.map { point -> ProjectExportPoint in
-                let transformed = roomTransform?.applying(to: SIMD2<Float>(Float(point.x), Float(point.y)))
+                let transformed = roomTransform?.applying(toPoint: SIMD2<Float>(Float(point.x), Float(point.y)))
                     ?? SIMD2<Float>(Float(point.x), Float(point.y))
                 return exportPoint(SIMD2<Double>(Double(transformed.x), Double(transformed.y)))
             }
             let rawCenter = SIMD2<Float>(Float(zone.centerX), Float(zone.centerZ))
-            let transformedCenter = roomTransform?.applying(to: rawCenter) ?? rawCenter
+            let transformedCenter = roomTransform?.applying(toPoint: rawCenter) ?? rawCenter
             return ProjectExportCeilingZone(
                 identifier: zone.id,
                 roomIndex: zone.roomIndex,
@@ -554,10 +554,10 @@ enum RoomScanProjectExporter {
             for wall in correction.room.walls {
                 let roomTransform = model.roomRigidTransform(for: correction.roomIndex)
                 let rawCenter = SIMD2<Float>(wall.transform.columns.3.x, wall.transform.columns.3.z)
-                let transformedCenter = roomTransform?.applying(to: rawCenter) ?? rawCenter
+                let transformedCenter = roomTransform?.applying(toPoint: rawCenter) ?? rawCenter
                 let center = SIMD2<Double>(Double(transformedCenter.x), Double(transformedCenter.y))
                 let rawTangent = SIMD2<Float>(wall.transform.columns.0.x, wall.transform.columns.0.z)
-                let transformedTangent = roomTransform?.applying(to: rawTangent) ?? rawTangent
+                let transformedTangent = roomTransform?.applying(toDirection: rawTangent) ?? rawTangent
                 let tangent = normalized(
                     SIMD2<Double>(Double(transformedTangent.x), Double(transformedTangent.y)),
                     fallback: SIMD2<Double>(1, 0)

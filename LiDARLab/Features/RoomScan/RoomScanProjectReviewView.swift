@@ -1137,7 +1137,7 @@ private struct FloorPlanSnapshot {
         )
 
         func transformed(_ point: SIMD2<Float>, roomIndex: Int) -> SIMD2<Float> {
-            transformByRoom[roomIndex]?.applying(to: point) ?? point
+            transformByRoom[roomIndex]?.applying(toPoint: point) ?? point
         }
 
         func appendRoom(_ room: CapturedRoom, roomIndex: Int, source: SegmentSource, addLabel: Bool) {
@@ -1166,11 +1166,11 @@ private struct FloorPlanSnapshot {
                     } else {
                         let transform = surface.transform
                         let rawCenter = SIMD2<Float>(transform.columns.3.x, transform.columns.3.z)
-                        center = transformByRoom[roomIndex]?.applying(to: rawCenter) ?? rawCenter
+                        center = transformByRoom[roomIndex]?.applying(toPoint: rawCenter) ?? rawCenter
                         var rawTangent = SIMD2<Float>(transform.columns.0.x, transform.columns.0.z)
                         let tangentLength = simd_length(rawTangent)
                         rawTangent = tangentLength > 0.0001 ? rawTangent / tangentLength : SIMD2<Float>(1, 0)
-                        tangent = transformByRoom[roomIndex]?.applying(to: rawTangent) ?? rawTangent
+                        tangent = transformByRoom[roomIndex]?.applying(toDirection: rawTangent) ?? rawTangent
                         halfWidth = max(surface.dimensions.x, 0.05) / 2
                     }
                     let selection = assignment.map {

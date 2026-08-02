@@ -63,9 +63,9 @@ struct EffectiveWallGeometry: Equatable {
         let untransformedCenter = SIMD2<Float>(base.centerX, base.centerZ)
             + baseTangent * Float(adjustment?.centerOffsetAlongMeters ?? 0)
             + baseNormal * Float(adjustment?.centerOffsetNormalMeters ?? 0)
-        let center = roomTransform?.applying(to: untransformedCenter) ?? untransformedCenter
-        let finalTangent = roomTransform?.applying(to: rotatedTangent) ?? rotatedTangent
-        let finalNormal = roomTransform?.applying(to: rotatedNormal) ?? rotatedNormal
+        let center = roomTransform?.applying(toPoint: untransformedCenter) ?? untransformedCenter
+        let finalTangent = roomTransform?.applying(toDirection: rotatedTangent) ?? rotatedTangent
+        let finalNormal = roomTransform?.applying(toDirection: rotatedNormal) ?? rotatedNormal
 
         let effectiveHeight = max(Float(adjustment?.heightMeters ?? Double(base.heightMeters)), 0.05)
         let originalBottomY = base.centerY - base.heightMeters / 2

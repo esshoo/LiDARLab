@@ -22,7 +22,7 @@ struct RoomRigidTransformRecord: Codable, Identifiable, Equatable {
             && abs(rotationDegrees) < 0.000_001
     }
 
-    func applying(to point: SIMD2<Float>) -> SIMD2<Float> {
+    func applying(toPoint point: SIMD2<Float>) -> SIMD2<Float> {
         let pivot = SIMD2<Float>(Float(pivotX), Float(pivotZ))
         let local = point - pivot
         let radians = Float(rotationDegrees * .pi / 180)
@@ -37,7 +37,7 @@ struct RoomRigidTransformRecord: Codable, Identifiable, Equatable {
             + SIMD2<Float>(Float(translationXMeters), Float(translationZMeters))
     }
 
-    func applying(to direction: SIMD2<Float>) -> SIMD2<Float> {
+    func applying(toDirection direction: SIMD2<Float>) -> SIMD2<Float> {
         let radians = Float(rotationDegrees * .pi / 180)
         let cosine = cos(radians)
         let sine = sin(radians)
