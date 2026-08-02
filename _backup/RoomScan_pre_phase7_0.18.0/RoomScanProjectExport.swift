@@ -36,10 +36,6 @@ private struct ProjectExportRoom: Codable {
     let openingCount: Int
     let objectCount: Int
     let acceptedCorrectionCount: Int
-    let translationXMeters: Double
-    let translationZMeters: Double
-    let rotationDegrees: Double
-    let isPositionLocked: Bool
     let floorPolygons: [[ProjectExportPoint]]
 }
 
@@ -147,7 +143,6 @@ enum RoomScanProjectExporter {
     private struct PlanSegment {
         let id: String
         let kind: PlanElementKind
-        let buildingWallID: UUID?
         let start: SIMD2<Double>
         let end: SIMD2<Double>
         let thicknessMeters: Double
@@ -232,7 +227,7 @@ enum RoomScanProjectExporter {
             files: files.map(\.lastPathComponent),
             notes: [
                 "RoomPlan source files remain unchanged.",
-                "The exported plan includes app-owned wall thickness, geometry, true opening gaps, rigid room transforms, levels and ceiling zones.",
+                "The exported plan includes app-owned wall thickness, geometry, openings, levels and ceiling zones.",
                 "DXF uses meters and English layer names for broad CAD compatibility."
             ]
         )
@@ -254,24 +249,17 @@ enum RoomScanProjectExporter {
         generatedAt: Date
     ) -> EditableRoomScanProjectDocument {
         let profiles = Dictionary(uniqueKeysWithValues: model.roomLevelProfiles.map { ($0.roomIndex, $0) })
-        let transforms = Dictionary(uniqueKeysWithValues: model.roomRigidTransforms.map { ($0.roomIndex, $0) })
         let roomItems = model.capturedRooms.enumerated().map { offset, room -> ProjectExportRoom in
             let roomIndex = offset + 1
             let seed = RoomLevelGeometrySeed.make(room: room)
             let profile = profiles[roomIndex]
             let floorPolygons: [[ProjectExportPoint]]
-            let roomTransform = transforms[roomIndex]
-            func transformedPoint(_ point: SIMD2<Float>) -> ProjectExportPoint {
-                let value = roomTransform?.applying(to: point) ?? point
-                return exportPoint(SIMD2<Double>(Double(value.x), Double(value.y)))
-            }
             if room.floors.isEmpty {
-                floorPolygons = [fallbackFloorPolygon(seed: seed).map {
-                    transformedPoint(SIMD2<Float>(Float($0.x), Float($0.y)))
-                }]
+                floorPolygons = [fallbackFloorPolygon(seed: seed).map(exportPoint)]
             } else {
                 floorPolygons = room.floors.map {
-                    RoomLevelGeometrySeed.floorFootprint(surface: $0).map(transformedPoint)
+                    RoomLevelGeometrySeed.floorFootprint(surface: $0)
+                        .map { exportPoint(SIMD2<Double>(Double($0.x), Double($0.y))) }
                 }
             }
             return ProjectExportRoom(
@@ -287,10 +275,6 @@ enum RoomScanProjectExporter {
                 openingCount: room.openings.count,
                 objectCount: room.objects.count,
                 acceptedCorrectionCount: model.acceptedRoomCorrections.filter { $0.roomIndex == roomIndex }.count,
-                translationXMeters: roomTransform?.translationXMeters ?? 0,
-                translationZMeters: roomTransform?.translationZMeters ?? 0,
-                rotationDegrees: roomTransform?.rotationDegrees ?? 0,
-                isPositionLocked: roomTransform?.isLocked ?? false,
                 floorPolygons: floorPolygons
             )
         }
@@ -386,14 +370,9 @@ enum RoomScanProjectExporter {
             let roomIndex = offset + 1
             func appendDetected(_ surfaces: [CapturedRoom.Surface], kind: String) {
                 for surface in surfaces {
-                    let roomTransform = transforms[roomIndex]
-                    let rawCenter = SIMD2<Float>(surface.transform.columns.3.x, surface.transform.columns.3.z)
-                    let transformedCenter = roomTransform?.applying(to: rawCenter) ?? rawCenter
-                    let center = SIMD2<Double>(Double(transformedCenter.x), Double(transformedCenter.y))
-                    let rawTangent = SIMD2<Float>(surface.transform.columns.0.x, surface.transform.columns.0.z)
-                    let transformedTangent = roomTransform?.applying(to: rawTangent) ?? rawTangent
+                    let center = SIMD2<Double>(Double(surface.transform.columns.3.x), Double(surface.transform.columns.3.z))
                     let tangent = normalized(
-                        SIMD2<Double>(Double(transformedTangent.x), Double(transformedTangent.y)),
+                        SIMD2<Double>(Double(surface.transform.columns.0.x), Double(surface.transform.columns.0.z)),
                         fallback: SIMD2<Double>(1, 0)
                     )
                     let width = Double(max(surface.dimensions.x, 0.05))
@@ -414,11 +393,7 @@ enum RoomScanProjectExporter {
                             end: exportPoint(center + tangent * (width / 2)),
                             widthMeters: width,
                             heightMeters: Double(max(surface.dimensions.y, 0.05)),
-                            sillHeightMeters: max(
-                                Double(surface.transform.columns.3.y - surface.dimensions.y / 2)
-                                    - RoomLevelGeometrySeed.make(room: room).floorElevationMeters,
-                                0
-                            ),
+                            sillHeightMeters: 0,
                             isSuppressed: model.suppressedSurfaceIdentifiers.contains(surface.identifier)
                         )
                     )
@@ -431,24 +406,16 @@ enum RoomScanProjectExporter {
         openingItems.sort { ($0.roomIndex, $0.kind, $0.identifier.uuidString) < ($1.roomIndex, $1.kind, $1.identifier.uuidString) }
 
         let ceilingItems = model.ceilingZoneRecords.map { zone -> ProjectExportCeilingZone in
-            let roomTransform = transforms[zone.roomIndex]
-            let rawCorners = ceilingCorners(zone)
-            let corners = rawCorners.map { point -> ProjectExportPoint in
-                let transformed = roomTransform?.applying(to: SIMD2<Float>(Float(point.x), Float(point.y)))
-                    ?? SIMD2<Float>(Float(point.x), Float(point.y))
-                return exportPoint(SIMD2<Double>(Double(transformed.x), Double(transformed.y)))
-            }
-            let rawCenter = SIMD2<Float>(Float(zone.centerX), Float(zone.centerZ))
-            let transformedCenter = roomTransform?.applying(to: rawCenter) ?? rawCenter
+            let corners = ceilingCorners(zone).map(exportPoint)
             return ProjectExportCeilingZone(
                 identifier: zone.id,
                 roomIndex: zone.roomIndex,
                 name: zone.name,
                 kind: zone.kind.rawValue,
-                center: ProjectExportPoint(x: Double(transformedCenter.x), y: Double(transformedCenter.y)),
+                center: ProjectExportPoint(x: zone.centerX, y: zone.centerZ),
                 widthMeters: zone.widthMeters,
                 depthMeters: zone.depthMeters,
-                rotationDegrees: zone.rotationDegrees + (roomTransform?.rotationDegrees ?? 0),
+                rotationDegrees: zone.rotationDegrees,
                 heightAboveFloorMeters: zone.heightAboveFloorMeters,
                 corners: corners
             )
@@ -467,9 +434,9 @@ enum RoomScanProjectExporter {
         }
 
         return EditableRoomScanProjectDocument(
-            schemaVersion: 2,
+            schemaVersion: 1,
             generatedAt: generatedAt,
-            coordinateSystem: "RoomPlan shared AR world space plus app-owned rigid room transforms; X/Z exported as 2D X/Y",
+            coordinateSystem: "RoomPlan shared AR world space; X/Z exported as 2D X/Y",
             linearUnit: "meter",
             source: "RoomPlan plus non-destructive 3ELiDAR review layers",
             roomCount: model.roomCount,
@@ -505,30 +472,16 @@ enum RoomScanProjectExporter {
             )
         }
 
-        var segments: [PlanSegment] = []
-        let visibleOpeningsByWall = Dictionary(
-            grouping: document.openings.filter { !$0.isSuppressed && $0.buildingWallID != nil },
-            by: { $0.buildingWallID! }
-        )
-        for wall in document.walls {
-            let wallStart = SIMD2<Double>(wall.start.x, wall.start.y)
-            let wallEnd = SIMD2<Double>(wall.end.x, wall.end.y)
-            let openings = visibleOpeningsByWall[wall.buildingWallID] ?? []
-            let pieces = splitWall(start: wallStart, end: wallEnd, openings: openings)
-            for (index, piece) in pieces.enumerated() {
-                segments.append(
-                    PlanSegment(
-                        id: "\(wall.buildingWallID.uuidString)-\(index)",
-                        kind: .wall,
-                        buildingWallID: wall.buildingWallID,
-                        start: piece.start,
-                        end: piece.end,
-                        thicknessMeters: wall.thicknessMeters,
-                        label: index == 0 ? String(format: "%.2f m / %.0f cm", wall.lengthMeters, wall.thicknessMeters * 100) : nil,
-                        hasIssue: wall.hasReviewIssue
-                    )
-                )
-            }
+        var segments = document.walls.map { wall in
+            PlanSegment(
+                id: wall.buildingWallID.uuidString,
+                kind: .wall,
+                start: SIMD2<Double>(wall.start.x, wall.start.y),
+                end: SIMD2<Double>(wall.end.x, wall.end.y),
+                thicknessMeters: wall.thicknessMeters,
+                label: String(format: "%.2f m / %.0f cm", wall.lengthMeters, wall.thicknessMeters * 100),
+                hasIssue: wall.hasReviewIssue
+            )
         }
         for opening in document.openings where !opening.isSuppressed {
             let kind: PlanElementKind
@@ -541,7 +494,6 @@ enum RoomScanProjectExporter {
                 PlanSegment(
                     id: opening.identifier.uuidString,
                     kind: kind,
-                    buildingWallID: opening.buildingWallID,
                     start: SIMD2<Double>(opening.start.x, opening.start.y),
                     end: SIMD2<Double>(opening.end.x, opening.end.y),
                     thicknessMeters: 0,
@@ -552,14 +504,9 @@ enum RoomScanProjectExporter {
         }
         for correction in model.acceptedRoomCorrections {
             for wall in correction.room.walls {
-                let roomTransform = model.roomRigidTransform(for: correction.roomIndex)
-                let rawCenter = SIMD2<Float>(wall.transform.columns.3.x, wall.transform.columns.3.z)
-                let transformedCenter = roomTransform?.applying(to: rawCenter) ?? rawCenter
-                let center = SIMD2<Double>(Double(transformedCenter.x), Double(transformedCenter.y))
-                let rawTangent = SIMD2<Float>(wall.transform.columns.0.x, wall.transform.columns.0.z)
-                let transformedTangent = roomTransform?.applying(to: rawTangent) ?? rawTangent
+                let center = SIMD2<Double>(Double(wall.transform.columns.3.x), Double(wall.transform.columns.3.z))
                 let tangent = normalized(
-                    SIMD2<Double>(Double(transformedTangent.x), Double(transformedTangent.y)),
+                    SIMD2<Double>(Double(wall.transform.columns.0.x), Double(wall.transform.columns.0.z)),
                     fallback: SIMD2<Double>(1, 0)
                 )
                 let half = Double(max(wall.dimensions.x, 0.05)) / 2
@@ -567,7 +514,6 @@ enum RoomScanProjectExporter {
                     PlanSegment(
                         id: "correction-\(correction.id.uuidString)-\(wall.identifier.uuidString)",
                         kind: .correction,
-                        buildingWallID: nil,
                         start: center - tangent * half,
                         end: center + tangent * half,
                         thicknessMeters: 0,
@@ -615,48 +561,6 @@ enum RoomScanProjectExporter {
             maxX: maxX,
             maxY: maxY
         )
-    }
-
-    private static func splitWall(
-        start: SIMD2<Double>,
-        end: SIMD2<Double>,
-        openings: [ProjectExportOpening]
-    ) -> [(start: SIMD2<Double>, end: SIMD2<Double>)] {
-        let vector = end - start
-        let length = simd_length(vector)
-        guard length > 0.001 else { return [] }
-        let axis = vector / length
-        var voids: [(Double, Double)] = []
-        for opening in openings {
-            let openingStart = SIMD2<Double>(opening.start.x, opening.start.y)
-            let openingEnd = SIMD2<Double>(opening.end.x, opening.end.y)
-            let projectionA = simd_dot(openingStart - start, axis)
-            let projectionB = simd_dot(openingEnd - start, axis)
-            let lower = max(min(projectionA, projectionB), 0)
-            let upper = min(max(projectionA, projectionB), length)
-            if upper - lower > 0.01 { voids.append((lower, upper)) }
-        }
-        voids.sort { $0.0 < $1.0 }
-        var merged: [(Double, Double)] = []
-        for item in voids {
-            if let last = merged.last, item.0 <= last.1 + 0.01 {
-                merged[merged.count - 1] = (last.0, max(last.1, item.1))
-            } else {
-                merged.append(item)
-            }
-        }
-        var result: [(SIMD2<Double>, SIMD2<Double>)] = []
-        var cursor = 0.0
-        for gap in merged {
-            if gap.0 - cursor > 0.02 {
-                result.append((start + axis * cursor, start + axis * gap.0))
-            }
-            cursor = max(cursor, gap.1)
-        }
-        if length - cursor > 0.02 {
-            result.append((start + axis * cursor, end))
-        }
-        return result.isEmpty && merged.isEmpty ? [(start, end)] : result
     }
 
     private static func renderPNG(
@@ -1013,15 +917,12 @@ enum RoomScanProjectExporter {
     private static func makeRoomsCSV(_ rooms: [ProjectExportRoom]) -> String {
         var rows = [[
             "room_index", "identifier", "story", "floor_elevation_m", "structural_ceiling_m",
-            "finished_ceiling_m", "translate_x_m", "translate_z_m", "rotation_deg", "position_locked",
-            "walls", "doors", "windows", "openings", "objects", "accepted_corrections"
+            "finished_ceiling_m", "walls", "doors", "windows", "openings", "objects", "accepted_corrections"
         ]]
         rows += rooms.map {
             [
                 String($0.roomIndex), $0.identifier.uuidString, String($0.story), csvNumber($0.floorElevationMeters),
                 csvNumber($0.structuralCeilingHeightMeters), csvNumber($0.finishedCeilingHeightMeters),
-                csvNumber($0.translationXMeters), csvNumber($0.translationZMeters), csvNumber($0.rotationDegrees),
-                $0.isPositionLocked ? "true" : "false",
                 String($0.wallCount), String($0.doorCount), String($0.windowCount), String($0.openingCount),
                 String($0.objectCount), String($0.acceptedCorrectionCount)
             ]

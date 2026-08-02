@@ -1,3 +1,22 @@
+# رفع نسخة 3ELiDAR 0.19.0 — الغرف الثابتة والفتحات الحقيقية
+
+1. فك ضغط ملف المشروع الكامل.
+2. استبدل محتوى مستودع 3ELiDAR بالمجلد الجديد.
+3. ارفع الملفات إلى GitHub.
+4. شغّل Workflow: **Build LiDAR Lab Unsigned IPA**.
+5. بعد نجاح البناء اختبر تحريك غرفة ككتلة واحدة، محاذاتها بالحائط المشترك، ثم إضافة باب وتصدير PDF/DXF.
+
+أهم الملفات الجديدة:
+
+- `LiDARLab/Features/RoomScan/RoomRigidTransformModels.swift`
+- `LiDARLab/Features/RoomScan/RoomRigidTransformEditorView.swift`
+- `LiDARLab/Features/RoomScan/RoomScanProject3DView.swift`
+- `LiDARLab/Features/RoomScan/RoomScanProjectExport.swift`
+
+لا تضف Entitlements ولا تفعّل App Groups عند استخدام التوقيع المجاني.
+
+---
+
 # رفع نسخة 3ELiDAR 0.17.0 المدمجة
 
 هذه النسخة تحتوي على جميع مراحل RoomScan حتى 0.16.1، بالإضافة إلى وظيفة القياس المتعدد المرسلة في تحديث 0.9.0.

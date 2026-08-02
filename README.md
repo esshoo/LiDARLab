@@ -236,3 +236,7 @@ lidar://open?path=Apps/LiDARLab/Projects/FileName
 ## RoomScan final export (0.18.0)
 
 The RoomScan review center can generate a final reviewed project package in PDF, PNG, JSON, CSV and DXF. The export is built from the app-owned corrected model while preserving the original RoomPlan results.
+
+## Phase 7 — Rigid room alignment and true openings
+
+The review center can now move and rotate an entire room as one rigid block, lock its position, or suggest alignment through the strongest shared wall. The transform is stored separately from RoomPlan and is applied consistently to the 2D/3D viewers and exports. SceneKit walls are split around doors, windows, and openings so the model contains visible voids. PDF, PNG, and DXF plans also leave gaps in wall geometry at visible openings.

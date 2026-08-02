@@ -106,10 +106,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
     @Published private(set) var roomLevelProfiles: [RoomLevelProfileRecord] = []
     @Published private(set) var ceilingZoneRecords: [CeilingZoneRecord] = []
 
-    /// Phase 7: rigid room-block alignment. CapturedRoom remains immutable while all
-    /// app-owned review/render/export layers consume this transform.
-    @Published private(set) var roomRigidTransforms: [RoomRigidTransformRecord] = []
-
     /// Phase 6: final export package generated from the reviewed, non-destructive building model.
     @Published private(set) var isCreatingProjectExport = false
     @Published private(set) var latestProjectExportPackage: RoomScanProjectExportPackage?
@@ -698,7 +694,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         persistRoomWallMetadata(roomIndex: roomIndex)
         persistWallGeometryOverrideDocument()
         refreshRoomLevelProfileAfterRoomReplacement(roomIndex: roomIndex)
-        refreshRoomRigidTransformAfterRoomReplacement(roomIndex: roomIndex)
         refreshProjectReviewIssues()
 
         updateRevisionDecision(id: pending.id, decision: .accepted)
@@ -1553,9 +1548,7 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             loadManualOpeningDocument(from: folder)
             loadWallGeometryOverrideDocument(from: folder)
             loadRoomLevelDocument(from: folder)
-            loadRoomRigidTransformDocument(from: folder)
             ensureAllRoomLevelProfiles()
-            ensureAllRoomRigidTransforms()
             refreshProjectReviewIssues()
 
             activeRoomNumber = checkpoint.activeRoomNumber
@@ -2443,7 +2436,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
         projectReviewIssues = []
         roomLevelProfiles = []
         ceilingZoneRecords = []
-        roomRigidTransforms = []
         buildingWasFinishedBeforeRescan = false
         shouldAcceptNextProcessedRoom = false
         pendingStopAction = nil
@@ -2467,7 +2459,6 @@ final class RoomScanViewModel: NSObject, ObservableObject, @preconcurrency RoomC
             persistManualOpeningDocument()
             persistWallGeometryOverrideDocument()
             persistRoomLevelDocument()
-            persistRoomRigidTransformDocument()
             refreshProjectReviewIssues()
             persistSessionCheckpoint()
             writeManifest()
@@ -2772,20 +2763,11 @@ extension RoomScanViewModel {
     func effectiveWallGeometry(for selection: RoomWallSelection) -> EffectiveWallGeometry {
         EffectiveWallGeometry(
             base: selection.geometry,
-            adjustment: geometryOverride(for: selection.assignmentID),
-            roomTransform: roomRigidTransform(for: selection.roomIndex)
+            adjustment: geometryOverride(for: selection.assignmentID)
         )
     }
 
     func effectiveWallGeometry(for assignment: RoomWallAssignment) -> EffectiveWallGeometry {
-        EffectiveWallGeometry(
-            base: assignment.geometry,
-            adjustment: geometryOverride(for: assignment.id),
-            roomTransform: roomRigidTransform(for: assignment.roomIndex)
-        )
-    }
-
-    func localEffectiveWallGeometry(for assignment: RoomWallAssignment) -> EffectiveWallGeometry {
         EffectiveWallGeometry(
             base: assignment.geometry,
             adjustment: geometryOverride(for: assignment.id)
@@ -2934,7 +2916,6 @@ extension RoomScanViewModel {
             wallRecords: buildingWallRecords,
             assignments: roomWallAssignments,
             geometryOverrides: wallGeometryOverrides,
-            roomTransforms: roomRigidTransforms,
             manualOpenings: manualOpeningRecords,
             suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers,
             levelProfiles: roomLevelProfiles,
@@ -3242,197 +3223,6 @@ extension RoomScanViewModel {
     }
 }
 
-
-// MARK: - Phase 7 rigid room-block alignment
-
-extension RoomScanViewModel {
-    func roomRigidTransform(for roomIndex: Int) -> RoomRigidTransformRecord? {
-        roomRigidTransforms.first { $0.roomIndex == roomIndex }
-    }
-
-    func ensureRoomRigidTransform(for roomIndex: Int) {
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
-        guard roomRigidTransform(for: roomIndex) == nil else { return }
-        let room = capturedRooms[roomIndex - 1]
-        let seed = RoomLevelGeometrySeed.make(room: room)
-        let now = Date()
-        roomRigidTransforms.append(
-            RoomRigidTransformRecord(
-                id: UUID(),
-                roomIndex: roomIndex,
-                roomIdentifier: room.identifier,
-                pivotX: seed.centerX,
-                pivotZ: seed.centerZ,
-                translationXMeters: 0,
-                translationZMeters: 0,
-                rotationDegrees: 0,
-                isLocked: roomIndex == 1,
-                createdAt: now,
-                updatedAt: now
-            )
-        )
-        roomRigidTransforms.sort { $0.roomIndex < $1.roomIndex }
-        persistRoomRigidTransformDocument()
-    }
-
-    func ensureAllRoomRigidTransforms() {
-        guard !capturedRooms.isEmpty else { return }
-        for roomIndex in 1...capturedRooms.count {
-            ensureRoomRigidTransform(for: roomIndex)
-        }
-    }
-
-    func saveRoomRigidTransform(
-        roomIndex: Int,
-        translationXCentimeters: Double,
-        translationZCentimeters: Double,
-        rotationDegrees: Double,
-        isLocked: Bool
-    ) {
-        ensureRoomRigidTransform(for: roomIndex)
-        guard let index = roomRigidTransforms.firstIndex(where: { $0.roomIndex == roomIndex }) else { return }
-        roomRigidTransforms[index].translationXMeters = min(max(translationXCentimeters / 100, -100), 100)
-        roomRigidTransforms[index].translationZMeters = min(max(translationZCentimeters / 100, -100), 100)
-        roomRigidTransforms[index].rotationDegrees = Self.normalizedDegrees(rotationDegrees)
-        roomRigidTransforms[index].isLocked = isLocked
-        roomRigidTransforms[index].updatedAt = Date()
-        persistRoomRigidTransformDocument()
-        refreshProjectReviewIssues()
-        statusMessage = "تم حفظ موضع الغرفة \(roomIndex) ككتلة واحدة دون تشويه حوائطها."
-    }
-
-    func resetRoomRigidTransform(roomIndex: Int, keepLocked: Bool = false) {
-        ensureRoomRigidTransform(for: roomIndex)
-        guard let index = roomRigidTransforms.firstIndex(where: { $0.roomIndex == roomIndex }) else { return }
-        roomRigidTransforms[index].translationXMeters = 0
-        roomRigidTransforms[index].translationZMeters = 0
-        roomRigidTransforms[index].rotationDegrees = 0
-        if !keepLocked { roomRigidTransforms[index].isLocked = roomIndex == 1 }
-        roomRigidTransforms[index].updatedAt = Date()
-        persistRoomRigidTransformDocument()
-        refreshProjectReviewIssues()
-        statusMessage = "تمت استعادة موضع RoomPlan الأصلي للغرفة \(roomIndex)."
-    }
-
-    func suggestedRoomAlignment(roomIndex: Int) -> RoomAlignmentSuggestion? {
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return nil }
-        ensureRoomRigidTransform(for: roomIndex)
-        guard let currentTransform = roomRigidTransform(for: roomIndex), !currentTransform.isLocked else { return nil }
-
-        let candidates = roomWallAssignments.compactMap { source -> (RoomWallAssignment, RoomWallAssignment)? in
-            guard source.roomIndex == roomIndex else { return nil }
-            let others = roomWallAssignments.filter {
-                $0.buildingWallID == source.buildingWallID && $0.roomIndex != roomIndex
-            }
-            guard let target = others.max(by: {
-                ($0.matchConfidence ?? 0) < ($1.matchConfidence ?? 0)
-            }) else { return nil }
-            return (source, target)
-        }
-        guard let pair = candidates.max(by: {
-            (($0.0.matchConfidence ?? 0) + ($0.1.matchConfidence ?? 0))
-                < (($1.0.matchConfidence ?? 0) + ($1.1.matchConfidence ?? 0))
-        }) else { return nil }
-
-        let source = pair.0
-        let target = pair.1
-        let sourceCurrent = effectiveWallGeometry(for: source)
-        let targetCurrent = effectiveWallGeometry(for: target)
-        let sourceAngle = atan2(Double(sourceCurrent.tangentZ), Double(sourceCurrent.tangentX))
-        let targetAngle = atan2(Double(targetCurrent.tangentZ), Double(targetCurrent.tangentX))
-        var delta = Self.normalizedDegrees((targetAngle - sourceAngle) * 180 / .pi)
-        if delta > 90 { delta -= 180 }
-        if delta < -90 { delta += 180 }
-        let proposedRotation = Self.normalizedDegrees(currentTransform.rotationDegrees + delta)
-
-        var proposed = currentTransform
-        proposed.rotationDegrees = proposedRotation
-        let localSource = localEffectiveWallGeometry(for: source)
-        let rotatedCenter = proposed.applying(to: localSource.center2D)
-        let targetCenter = targetCurrent.center2D
-        let targetNormal = normalized2D(targetCurrent.normal2D)
-        let currentVector = sourceCurrent.center2D - targetCenter
-        let separationSign: Float = simd_dot(currentVector, targetNormal) >= 0 ? 1 : -1
-        let thickness = Float(
-            buildingWallRecords.first(where: { $0.id == source.buildingWallID })?.thicknessMeters
-                ?? buildingDefaultWallThicknessMeters
-        )
-        let desiredCenter = targetCenter + targetNormal * separationSign * max(thickness, 0.03)
-        let extraTranslation = desiredCenter - rotatedCenter
-
-        return RoomAlignmentSuggestion(
-            sourceRoomIndex: roomIndex,
-            targetRoomIndex: target.roomIndex,
-            buildingWallID: source.buildingWallID,
-            translationXCentimeters: (currentTransform.translationXMeters + Double(extraTranslation.x)) * 100,
-            translationZCentimeters: (currentTransform.translationZMeters + Double(extraTranslation.y)) * 100,
-            rotationDegrees: proposedRotation,
-            confidence: [source.matchConfidence, target.matchConfidence].compactMap { $0 }.min()
-        )
-    }
-
-    private func refreshRoomRigidTransformAfterRoomReplacement(roomIndex: Int) {
-        guard roomIndex > 0, roomIndex <= capturedRooms.count else { return }
-        let room = capturedRooms[roomIndex - 1]
-        let seed = RoomLevelGeometrySeed.make(room: room)
-        if let index = roomRigidTransforms.firstIndex(where: { $0.roomIndex == roomIndex }) {
-            let old = roomRigidTransforms[index]
-            roomRigidTransforms[index] = RoomRigidTransformRecord(
-                id: old.id,
-                roomIndex: roomIndex,
-                roomIdentifier: room.identifier,
-                pivotX: seed.centerX,
-                pivotZ: seed.centerZ,
-                translationXMeters: old.translationXMeters,
-                translationZMeters: old.translationZMeters,
-                rotationDegrees: old.rotationDegrees,
-                isLocked: old.isLocked,
-                createdAt: old.createdAt,
-                updatedAt: Date()
-            )
-        } else {
-            ensureRoomRigidTransform(for: roomIndex)
-            return
-        }
-        persistRoomRigidTransformDocument()
-    }
-
-    private func persistRoomRigidTransformDocument() {
-        guard let buildingFolderURL else { return }
-        do {
-            let reviewFolder = buildingFolderURL.appendingPathComponent("Review", isDirectory: true)
-            try FileManager.default.createDirectory(at: reviewFolder, withIntermediateDirectories: true)
-            let document = RoomRigidTransformDocument(
-                schemaVersion: 1,
-                updatedAt: Date(),
-                transforms: roomRigidTransforms.sorted { $0.roomIndex < $1.roomIndex }
-            )
-            try configuredEncoder().encode(document)
-                .write(to: reviewFolder.appendingPathComponent("room-transforms.json"), options: .atomic)
-        } catch {
-            errorMessage = "تعذر حفظ مواضع الغرف: \(error.localizedDescription)"
-        }
-    }
-
-    private func loadRoomRigidTransformDocument(from folder: URL) {
-        let url = folder
-            .appendingPathComponent("Review", isDirectory: true)
-            .appendingPathComponent("room-transforms.json")
-        guard let data = try? Data(contentsOf: url),
-              let document = try? configuredDecoder().decode(RoomRigidTransformDocument.self, from: data) else {
-            roomRigidTransforms = []
-            return
-        }
-        let validRoomIndices = Set(1...max(capturedRooms.count, 1))
-        var latest: [Int: RoomRigidTransformRecord] = [:]
-        for record in document.transforms where validRoomIndices.contains(record.roomIndex) {
-            if let existing = latest[record.roomIndex], existing.updatedAt > record.updatedAt { continue }
-            latest[record.roomIndex] = record
-        }
-        roomRigidTransforms = latest.values.sorted { $0.roomIndex < $1.roomIndex }
-    }
-}
-
 // MARK: - Phase 6 final reviewed-project export
 
 extension RoomScanViewModel {
@@ -3446,7 +3236,6 @@ extension RoomScanViewModel {
         isCreatingProjectExport = true
         errorMessage = nil
         ensureAllRoomLevelProfiles()
-        ensureAllRoomRigidTransforms()
         refreshProjectReviewIssues()
 
         do {

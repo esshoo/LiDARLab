@@ -1,3 +1,14 @@
+# 0.19.0 (Build 24) — Phase 7: Rigid Rooms & True Openings
+
+- Added app-owned rigid transforms for entire rooms: horizontal translation, rotation, lock, reset, and shared-wall alignment suggestion.
+- Room transforms now affect 2D review, SceneKit 3D, manual openings, correction layers, floors, ceiling zones, JSON/CSV/PDF/PNG/DXF export, and geometric review checks.
+- Added `Review/room-transforms.json` while preserving all original RoomPlan files unchanged.
+- SceneKit walls are decomposed around doors, windows, and openings to create real empty voids instead of drawing solid markers over a wall.
+- 2D review and final PDF/PNG/DXF split wall geometry at visible openings.
+- Added room-transform columns to `rooms.csv` and schema version 2 to `project-model.json`.
+- Improved shared-wall thickness checks to use the effective post-edit room positions.
+- Fixed remaining SwiftUI Canvas text drawing paths by resolving text before drawing.
+
 # Changelog
 
 ## 0.18.0 (Build 23) - Final Reviewed Project Export

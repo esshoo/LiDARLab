@@ -7,7 +7,6 @@ struct RoomScanProjectReviewEngine {
     let wallRecords: [BuildingWallRecord]
     let assignments: [RoomWallAssignment]
     let geometryOverrides: [WallGeometryOverrideRecord]
-    let roomTransforms: [RoomRigidTransformRecord]
     let manualOpenings: [ManualOpeningRecord]
     let suppressedSurfaceIdentifiers: Set<UUID>
     let levelProfiles: [RoomLevelProfileRecord]
@@ -18,7 +17,6 @@ struct RoomScanProjectReviewEngine {
         var keys = Set<String>()
         let recordByID = Dictionary(uniqueKeysWithValues: wallRecords.map { ($0.id, $0) })
         let overrideByAssignment = Dictionary(uniqueKeysWithValues: geometryOverrides.map { ($0.assignmentID, $0) })
-        let transformByRoom = Dictionary(uniqueKeysWithValues: roomTransforms.map { ($0.roomIndex, $0) })
         let assignmentsByWall = Dictionary(grouping: assignments, by: \.buildingWallID)
 
         func append(
@@ -49,26 +47,10 @@ struct RoomScanProjectReviewEngine {
             )
         }
 
-        for transform in roomTransforms where !transform.isIdentity {
-            let translation = hypot(transform.translationXMeters, transform.translationZMeters)
-            if translation > 2 || abs(transform.rotationDegrees) > 20 {
-                append(
-                    key: "extreme-room-transform-\(transform.roomIndex)",
-                    kind: .extremeRoomTransform,
-                    severity: translation > 5 || abs(transform.rotationDegrees) > 45 ? .critical : .warning,
-                    title: "تحريك كبير للغرفة ككتلة واحدة",
-                    details: "الغرفة \(transform.roomIndex) منقولة \(Int((translation * 100).rounded())) سم ومدورة \(Int(transform.rotationDegrees.rounded()))° عن موضع RoomPlan.",
-                    action: "راجع محاذاة الغرفة بالحائط أو الباب المشترك قبل التصدير.",
-                    roomIndex: transform.roomIndex
-                )
-            }
-        }
-
         for assignment in assignments {
             let geometry = EffectiveWallGeometry(
                 base: assignment.geometry,
-                adjustment: overrideByAssignment[assignment.id],
-                roomTransform: transformByRoom[assignment.roomIndex]
+                adjustment: overrideByAssignment[assignment.id]
             )
             if !geometry.centerX.isFinite || !geometry.centerZ.isFinite || !geometry.widthMeters.isFinite || !geometry.heightMeters.isFinite {
                 append(
@@ -151,33 +133,7 @@ struct RoomScanProjectReviewEngine {
                     )
                 }
 
-                var effectiveSeparations: [Double] = []
-                for firstIndex in group.indices {
-                    for secondIndex in group.indices where secondIndex > firstIndex {
-                        let first = group[firstIndex]
-                        let second = group[secondIndex]
-                        guard first.roomIndex != second.roomIndex else { continue }
-                        let firstGeometry = EffectiveWallGeometry(
-                            base: first.geometry,
-                            adjustment: overrideByAssignment[first.id],
-                            roomTransform: transformByRoom[first.roomIndex]
-                        )
-                        let secondGeometry = EffectiveWallGeometry(
-                            base: second.geometry,
-                            adjustment: overrideByAssignment[second.id],
-                            roomTransform: transformByRoom[second.roomIndex]
-                        )
-                        guard Self.areNearParallel(firstGeometry.tangent2D, secondGeometry.tangent2D) else { continue }
-                        let separation = abs(simd_dot(
-                            secondGeometry.center2D - firstGeometry.center2D,
-                            firstGeometry.normal2D
-                        ))
-                        effectiveSeparations.append(Double(separation))
-                    }
-                }
-                let separations = effectiveSeparations.isEmpty
-                    ? group.compactMap(\.faceSeparationMeters)
-                    : effectiveSeparations
+                let separations = group.compactMap(\.faceSeparationMeters)
                 if let record = recordByID[buildingWallID], let measured = Self.median(separations) {
                     let difference = abs(measured - record.thicknessMeters)
                     if difference > 0.08 {
@@ -203,16 +159,8 @@ struct RoomScanProjectReviewEngine {
                     let first = roomAssignments[firstIndex]
                     let second = roomAssignments[secondIndex]
                     guard first.buildingWallID != second.buildingWallID else { continue }
-                    let firstGeometry = EffectiveWallGeometry(
-                        base: first.geometry,
-                        adjustment: overrideByAssignment[first.id],
-                        roomTransform: transformByRoom[first.roomIndex]
-                    )
-                    let secondGeometry = EffectiveWallGeometry(
-                        base: second.geometry,
-                        adjustment: overrideByAssignment[second.id],
-                        roomTransform: transformByRoom[second.roomIndex]
-                    )
+                    let firstGeometry = EffectiveWallGeometry(base: first.geometry, adjustment: overrideByAssignment[first.id])
+                    let secondGeometry = EffectiveWallGeometry(base: second.geometry, adjustment: overrideByAssignment[second.id])
                     guard Self.areNearParallel(firstGeometry.tangent2D, secondGeometry.tangent2D) else { continue }
                     let normalDistance = abs(simd_dot(secondGeometry.center2D - firstGeometry.center2D, firstGeometry.normal2D))
                     guard normalDistance < 0.12 else { continue }
@@ -251,11 +199,7 @@ struct RoomScanProjectReviewEngine {
                 )
                 continue
             }
-            let geometry = EffectiveWallGeometry(
-                base: assignment.geometry,
-                adjustment: overrideByAssignment[assignment.id],
-                roomTransform: transformByRoom[assignment.roomIndex]
-            )
+            let geometry = EffectiveWallGeometry(base: assignment.geometry, adjustment: overrideByAssignment[assignment.id])
             let centerOffset = (opening.positionRatio - 0.5) * Double(geometry.widthMeters)
             let left = centerOffset - opening.widthMeters / 2
             let right = centerOffset + opening.widthMeters / 2

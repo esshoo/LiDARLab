@@ -13,7 +13,6 @@ struct RoomScanProjectReviewView: View {
     @State private var showingOpeningsManager = false
     @State private var showingGeometryEditor = false
     @State private var showingLevelsEditor = false
-    @State private var showingRoomTransformEditor = false
     @State private var previewURL: URL?
     @State private var exportSharePayload: ProjectExportSharePayload?
     @State private var rescanConfirmationRoom: Int?
@@ -104,13 +103,6 @@ struct RoomScanProjectReviewView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingRoomTransformEditor) {
-                if let selectedRoomIndex {
-                    NavigationStack {
-                        RoomRigidTransformEditorView(model: model, roomIndex: selectedRoomIndex)
-                    }
-                }
-            }
             .sheet(
                 item: Binding(
                     get: { previewURL.map(PreviewItem.init) },
@@ -163,7 +155,6 @@ struct RoomScanProjectReviewView: View {
             }
             .onAppear {
                 model.ensureAllRoomLevelProfiles()
-                model.ensureAllRoomRigidTransforms()
                 model.refreshProjectReviewIssues()
                 if selectedRoomIndex == nil {
                     selectedRoomIndex = model.roomReviewSummaries.first?.roomIndex
@@ -186,7 +177,6 @@ struct RoomScanProjectReviewView: View {
                 manualOpenings: model.manualOpeningOverlays,
                 suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
                 geometryOverrides: model.wallGeometryOverrides,
-                roomTransforms: model.roomRigidTransforms,
                 levelProfiles: model.roomLevelProfiles,
                 ceilingZones: model.ceilingZoneRecords,
                 issueWallIdentifiers: model.issueWallIdentifiers,
@@ -229,10 +219,9 @@ struct RoomScanProjectReviewView: View {
                     corrections: model.acceptedRoomCorrections,
                     wallAssignments: model.roomWallAssignments,
                     wallRecords: model.buildingWallRecords,
-                    manualOpenings: model.manualOpeningRecords,
+                    manualOpenings: model.resolvedManualOpeningRecords,
                     suppressedSurfaceIdentifiers: model.suppressedSurfaceIdentifiers,
                     geometryOverrides: model.wallGeometryOverrides,
-                    roomTransforms: model.roomRigidTransforms,
                     levelProfiles: model.roomLevelProfiles,
                     ceilingZones: model.ceilingZoneRecords,
                     issueWallIdentifiers: model.issueWallIdentifiers
@@ -640,18 +629,6 @@ struct RoomScanProjectReviewView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             }
-            if let transform = model.roomRigidTransform(for: summary.roomIndex), !transform.isIdentity {
-                HStack(spacing: 10) {
-                    Label("X \(Int((transform.translationXMeters * 100).rounded())) سم", systemImage: "arrow.left.and.right")
-                    Label("Z \(Int((transform.translationZMeters * 100).rounded())) سم", systemImage: "arrow.up.and.down")
-                    Label("\(Int(transform.rotationDegrees.rounded()))°", systemImage: "rotate.right")
-                    if transform.isLocked {
-                        Image(systemName: "lock.fill")
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.purple)
-            }
 
             HStack(spacing: 8) {
                 Button {
@@ -684,15 +661,6 @@ struct RoomScanProjectReviewView: View {
             .font(.caption)
 
             HStack(spacing: 8) {
-                Button {
-                    showingRoomTransformEditor = true
-                } label: {
-                    Label("الموضع", systemImage: "move.3d")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.purple)
-
                 Button {
                     showingLevelsEditor = true
                 } label: {
@@ -818,7 +786,6 @@ private struct RoomPlan2DCanvas: View {
     let manualOpenings: [ProjectOpeningOverlay]
     let suppressedSurfaceIdentifiers: Set<UUID>
     let geometryOverrides: [WallGeometryOverrideRecord]
-    let roomTransforms: [RoomRigidTransformRecord]
     let levelProfiles: [RoomLevelProfileRecord]
     let ceilingZones: [CeilingZoneRecord]
     let issueWallIdentifiers: Set<UUID>
@@ -838,7 +805,6 @@ private struct RoomPlan2DCanvas: View {
             manualOpenings: manualOpenings,
             suppressedSurfaceIdentifiers: suppressedSurfaceIdentifiers,
             geometryOverrides: geometryOverrides,
-            roomTransforms: roomTransforms,
             levelProfiles: levelProfiles,
             ceilingZones: ceilingZones
         )
@@ -926,9 +892,10 @@ private struct RoomPlan2DCanvas: View {
 
     private func drawPlan(context: inout GraphicsContext, size: CGSize) {
         guard !snapshot.segments.isEmpty else {
-            var resolvedEmpty = context.resolve(Text("لا توجد غرف مثبتة لعرضها").font(.headline))
-            resolvedEmpty.shading = .color(Color.secondary)
-            context.draw(resolvedEmpty, at: CGPoint(x: size.width / 2, y: size.height / 2))
+            context.draw(
+                Text("لا توجد غرف مثبتة لعرضها").font(.headline).foregroundStyle(.secondary),
+                at: CGPoint(x: size.width / 2, y: size.height / 2)
+            )
             return
         }
 
@@ -961,9 +928,10 @@ private struct RoomPlan2DCanvas: View {
                 with: .color(Color.indigo.opacity(0.75)),
                 style: StrokeStyle(lineWidth: 2, dash: [6, 4])
             )
-            var resolvedZone = context.resolve(Text(zone.title).font(.caption2.bold()))
-            resolvedZone.shading = .color(Color.indigo)
-            context.draw(resolvedZone, at: screenPoint(for: zone.center, size: size))
+            context.draw(
+                Text(zone.title).font(.caption2.bold()).foregroundStyle(Color.indigo),
+                at: screenPoint(for: zone.center, size: size)
+            )
         }
 
         for segment in snapshot.segments {
@@ -1071,7 +1039,6 @@ private struct FloorPlanSnapshot {
         let start: SIMD2<Float>
         let end: SIMD2<Float>
         let wallIdentifier: UUID?
-        let buildingWallID: UUID?
         let selection: RoomWallSelection?
     }
 
@@ -1115,7 +1082,6 @@ private struct FloorPlanSnapshot {
         manualOpenings: [ProjectOpeningOverlay],
         suppressedSurfaceIdentifiers: Set<UUID>,
         geometryOverrides: [WallGeometryOverrideRecord],
-        roomTransforms: [RoomRigidTransformRecord],
         levelProfiles: [RoomLevelProfileRecord],
         ceilingZones: [CeilingZoneRecord]
     ) {
@@ -1124,7 +1090,6 @@ private struct FloorPlanSnapshot {
         var newFloorPolygons: [FloorPolygon] = []
         var newCeilingZoneShapes: [CeilingZoneShape] = []
         let profileByRoom = Dictionary(uniqueKeysWithValues: levelProfiles.map { ($0.roomIndex, $0) })
-        let transformByRoom = Dictionary(uniqueKeysWithValues: roomTransforms.map { ($0.roomIndex, $0) })
         var assignmentByKey: [WallKey: RoomWallAssignment] = [:]
         for assignment in wallAssignments {
             let key = WallKey(roomIndex: assignment.roomIndex, wallIdentifier: assignment.wallIdentifier)
@@ -1136,18 +1101,11 @@ private struct FloorPlanSnapshot {
             uniqueKeysWithValues: geometryOverrides.map { ($0.assignmentID, $0) }
         )
 
-        func transformed(_ point: SIMD2<Float>, roomIndex: Int) -> SIMD2<Float> {
-            transformByRoom[roomIndex]?.applying(to: point) ?? point
-        }
-
         func appendRoom(_ room: CapturedRoom, roomIndex: Int, source: SegmentSource, addLabel: Bool) {
             var wallCenters: [SIMD2<Float>] = []
 
             func append(_ surfaces: [CapturedRoom.Surface], kind: SegmentKind) {
                 for surface in surfaces where !suppressedSurfaceIdentifiers.contains(surface.identifier) {
-                    let parentAssignment = surface.parentIdentifier.flatMap {
-                        assignmentByKey[WallKey(roomIndex: roomIndex, wallIdentifier: $0)]
-                    }
                     let assignment = kind == .wall
                         ? assignmentByKey[WallKey(roomIndex: roomIndex, wallIdentifier: surface.identifier)]
                         : nil
@@ -1157,20 +1115,18 @@ private struct FloorPlanSnapshot {
                     if let assignment {
                         let geometry = EffectiveWallGeometry(
                             base: assignment.geometry,
-                            adjustment: overrideByAssignment[assignment.id],
-                            roomTransform: transformByRoom[roomIndex]
+                            adjustment: overrideByAssignment[assignment.id]
                         )
                         center = geometry.center2D
                         tangent = geometry.tangent2D
                         halfWidth = geometry.widthMeters / 2
                     } else {
                         let transform = surface.transform
-                        let rawCenter = SIMD2<Float>(transform.columns.3.x, transform.columns.3.z)
-                        center = transformByRoom[roomIndex]?.applying(to: rawCenter) ?? rawCenter
+                        center = SIMD2<Float>(transform.columns.3.x, transform.columns.3.z)
                         var rawTangent = SIMD2<Float>(transform.columns.0.x, transform.columns.0.z)
                         let tangentLength = simd_length(rawTangent)
                         rawTangent = tangentLength > 0.0001 ? rawTangent / tangentLength : SIMD2<Float>(1, 0)
-                        tangent = transformByRoom[roomIndex]?.applying(to: rawTangent) ?? rawTangent
+                        tangent = rawTangent
                         halfWidth = max(surface.dimensions.x, 0.05) / 2
                     }
                     let selection = assignment.map {
@@ -1192,7 +1148,6 @@ private struct FloorPlanSnapshot {
                             start: center - tangent * halfWidth,
                             end: center + tangent * halfWidth,
                             wallIdentifier: kind == .wall ? surface.identifier : nil,
-                            buildingWallID: assignment?.buildingWallID ?? parentAssignment?.buildingWallID,
                             selection: selection
                         )
                     )
@@ -1240,7 +1195,7 @@ private struct FloorPlanSnapshot {
                             center + axis * halfWidth - normal * halfDepth,
                             center + axis * halfWidth + normal * halfDepth,
                             center - axis * halfWidth + normal * halfDepth
-                        ].map { transformed($0, roomIndex: roomIndex) }
+                        ]
                     )
                 )
             } else {
@@ -1250,7 +1205,6 @@ private struct FloorPlanSnapshot {
                             id: floor.identifier.uuidString,
                             roomIndex: roomIndex,
                             points: RoomLevelGeometrySeed.floorFootprint(surface: floor)
-                                .map { transformed($0, roomIndex: roomIndex) }
                         )
                     )
                 }
@@ -1275,7 +1229,6 @@ private struct FloorPlanSnapshot {
                     start: opening.start,
                     end: opening.end,
                     wallIdentifier: nil,
-                    buildingWallID: opening.buildingWallID,
                     selection: nil
                 )
             )
@@ -1293,18 +1246,17 @@ private struct FloorPlanSnapshot {
                     id: zone.id,
                     roomIndex: zone.roomIndex,
                     title: "\(zone.name.isEmpty ? zone.kind.arabicTitle : zone.name) • \(Int((zone.heightAboveFloorMeters * 100).rounded())) سم",
-                    center: transformed(center, roomIndex: zone.roomIndex),
+                    center: center,
                     corners: [
                         center - axis * halfWidth - normal * halfDepth,
                         center + axis * halfWidth - normal * halfDepth,
                         center + axis * halfWidth + normal * halfDepth,
                         center - axis * halfWidth + normal * halfDepth
-                    ].map { transformed($0, roomIndex: zone.roomIndex) }
+                    ]
                 )
             )
         }
 
-        newSegments = Self.splitWallsAroundOpenings(newSegments)
         segments = newSegments
         labels = newLabels
         floorPolygons = newFloorPolygons
@@ -1328,82 +1280,6 @@ private struct FloorPlanSnapshot {
         } else {
             bounds = Bounds(minX: -1, minY: -1, maxX: 1, maxY: 1)
         }
-    }
-
-    private static func splitWallsAroundOpenings(_ segments: [Segment]) -> [Segment] {
-        let openingSegments = segments.filter {
-            $0.kind != .wall && $0.buildingWallID != nil
-        }
-        let openingsByWall = Dictionary(grouping: openingSegments, by: { $0.buildingWallID! })
-        var result = segments.filter { $0.kind != .wall }
-
-        for wall in segments where wall.kind == .wall {
-            guard wall.source == .roomPlan,
-                  let buildingWallID = wall.buildingWallID,
-                  let openings = openingsByWall[buildingWallID],
-                  !openings.isEmpty else {
-                result.append(wall)
-                continue
-            }
-            let vector = wall.end - wall.start
-            let length = simd_length(vector)
-            guard length > 0.001 else { continue }
-            let axis = vector / length
-            var gaps: [(Float, Float)] = []
-            for opening in openings {
-                let a = simd_dot(opening.start - wall.start, axis)
-                let b = simd_dot(opening.end - wall.start, axis)
-                let lower = max(min(a, b), 0)
-                let upper = min(max(a, b), length)
-                if upper - lower > 0.01 { gaps.append((lower, upper)) }
-            }
-            gaps.sort { $0.0 < $1.0 }
-            var merged: [(Float, Float)] = []
-            for gap in gaps {
-                if let last = merged.last, gap.0 <= last.1 + 0.01 {
-                    merged[merged.count - 1] = (last.0, max(last.1, gap.1))
-                } else {
-                    merged.append(gap)
-                }
-            }
-            var cursor: Float = 0
-            var pieceIndex = 0
-            for gap in merged {
-                if gap.0 - cursor > 0.02 {
-                    result.append(
-                        Segment(
-                            id: "\(wall.id)-piece-\(pieceIndex)",
-                            roomIndex: wall.roomIndex,
-                            kind: wall.kind,
-                            source: wall.source,
-                            start: wall.start + axis * cursor,
-                            end: wall.start + axis * gap.0,
-                            wallIdentifier: wall.wallIdentifier,
-                            buildingWallID: wall.buildingWallID,
-                            selection: wall.selection
-                        )
-                    )
-                    pieceIndex += 1
-                }
-                cursor = max(cursor, gap.1)
-            }
-            if length - cursor > 0.02 {
-                result.append(
-                    Segment(
-                        id: "\(wall.id)-piece-\(pieceIndex)",
-                        roomIndex: wall.roomIndex,
-                        kind: wall.kind,
-                        source: wall.source,
-                        start: wall.start + axis * cursor,
-                        end: wall.end,
-                        wallIdentifier: wall.wallIdentifier,
-                        buildingWallID: wall.buildingWallID,
-                        selection: wall.selection
-                    )
-                )
-            }
-        }
-        return result
     }
 
     private struct WallKey: Hashable {

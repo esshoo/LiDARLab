@@ -5,8 +5,8 @@ import UIKit
 import simd
 
 /// Interactive Apple SceneKit view of the app-owned building model.
-/// Unlike Quick Look, this layer can display supplemental scans, manual openings,
-/// wall thickness metadata, and hidden RoomPlan surfaces.
+/// Rooms are moved as rigid parent nodes and wall openings are rendered as
+/// real voids by decomposing each wall around its door/window rectangles.
 struct RoomScanProject3DView: UIViewRepresentable {
     let rooms: [CapturedRoom]
     let corrections: [AcceptedRoomCorrectionLayer]
@@ -15,6 +15,7 @@ struct RoomScanProject3DView: UIViewRepresentable {
     let manualOpenings: [ManualOpeningRecord]
     let suppressedSurfaceIdentifiers: Set<UUID>
     let geometryOverrides: [WallGeometryOverrideRecord]
+    let roomTransforms: [RoomRigidTransformRecord]
     let levelProfiles: [RoomLevelProfileRecord]
     let ceilingZones: [CeilingZoneRecord]
     let issueWallIdentifiers: Set<UUID>
@@ -41,75 +42,68 @@ struct RoomScanProject3DView: UIViewRepresentable {
 
         let thicknessByWallID = Dictionary(uniqueKeysWithValues: wallRecords.map { ($0.id, $0.thicknessMeters) })
         let profileByRoom = Dictionary(uniqueKeysWithValues: levelProfiles.map { ($0.roomIndex, $0) })
+        let transformByRoom = Dictionary(uniqueKeysWithValues: roomTransforms.map { ($0.roomIndex, $0) })
+        let overrideByAssignment = Dictionary(uniqueKeysWithValues: geometryOverrides.map { ($0.assignmentID, $0) })
         var assignmentByFace: [FaceKey: RoomWallAssignment] = [:]
-        let overrideByAssignment = Dictionary(
-            uniqueKeysWithValues: geometryOverrides.map { ($0.assignmentID, $0) }
-        )
         for assignment in wallAssignments {
             let key = FaceKey(roomIndex: assignment.roomIndex, wallIdentifier: assignment.wallIdentifier)
-            if assignmentByFace[key] == nil {
-                assignmentByFace[key] = assignment
-            }
+            if assignmentByFace[key] == nil { assignmentByFace[key] = assignment }
         }
 
+        var roomRoots: [Int: SCNNode] = [:]
         for (offset, room) in rooms.enumerated() {
             let roomIndex = offset + 1
+            let roomRoot = SCNNode()
+            roomRoot.name = "RigidRoom-\(roomIndex)"
+            roomRoot.simdTransform = transformByRoom[roomIndex]?.sceneTransform ?? matrix_identity_float4x4
+            modelRoot.addChildNode(roomRoot)
+            roomRoots[roomIndex] = roomRoot
+
             let profile = profileByRoom[roomIndex]
             let seed = RoomLevelGeometrySeed.make(room: room)
-            let verticalOffset = Float((profile?.floorElevationMeters ?? seed.floorElevationMeters) - seed.floorElevationMeters)
+            let targetFloorY = Float(profile?.floorElevationMeters ?? seed.floorElevationMeters)
+            let verticalOffset = targetFloorY - Float(seed.floorElevationMeters)
             addRoom(
                 room,
                 roomIndex: roomIndex,
                 isCorrection: false,
                 verticalOffset: verticalOffset,
-                targetFloorY: Float(profile?.floorElevationMeters ?? seed.floorElevationMeters),
+                targetFloorY: targetFloorY,
                 targetStructuralHeight: profile.map { Float($0.structuralCeilingHeightMeters) },
-                to: modelRoot,
+                to: roomRoot,
                 assignmentByFace: assignmentByFace,
                 thicknessByWallID: thicknessByWallID,
                 overrideByAssignment: overrideByAssignment
             )
-            addFloors(
-                room,
-                roomIndex: roomIndex,
-                profile: profile,
-                seed: seed,
-                to: modelRoot
-            )
+            addFloors(room, roomIndex: roomIndex, profile: profile, seed: seed, to: roomRoot)
         }
 
         for layer in corrections {
+            let roomRoot = roomRoots[layer.roomIndex] ?? modelRoot
             let profile = profileByRoom[layer.roomIndex]
             let seed = rooms.indices.contains(layer.roomIndex - 1)
                 ? RoomLevelGeometrySeed.make(room: rooms[layer.roomIndex - 1])
                 : RoomLevelGeometrySeed.make(room: layer.room)
-            let verticalOffset = Float((profile?.floorElevationMeters ?? seed.floorElevationMeters) - seed.floorElevationMeters)
+            let targetFloorY = Float(profile?.floorElevationMeters ?? seed.floorElevationMeters)
+            let verticalOffset = targetFloorY - Float(seed.floorElevationMeters)
             addRoom(
                 layer.room,
                 roomIndex: layer.roomIndex,
                 isCorrection: true,
                 verticalOffset: verticalOffset,
-                targetFloorY: Float(profile?.floorElevationMeters ?? seed.floorElevationMeters),
+                targetFloorY: targetFloorY,
                 targetStructuralHeight: profile.map { Float($0.structuralCeilingHeightMeters) },
-                to: modelRoot,
+                to: roomRoot,
                 assignmentByFace: assignmentByFace,
                 thicknessByWallID: thicknessByWallID,
                 overrideByAssignment: overrideByAssignment
             )
         }
 
-        for opening in manualOpenings {
-            let profile = profileByRoom[opening.sourceRoomIndex]
-            let seed = rooms.indices.contains(opening.sourceRoomIndex - 1)
-                ? RoomLevelGeometrySeed.make(room: rooms[opening.sourceRoomIndex - 1])
-                : nil
-            let verticalOffset = Float((profile?.floorElevationMeters ?? seed?.floorElevationMeters ?? 0) - (seed?.floorElevationMeters ?? 0))
-            modelRoot.addChildNode(manualOpeningNode(opening, verticalOffset: verticalOffset))
-        }
-
         for zone in ceilingZones {
             guard let profile = profileByRoom[zone.roomIndex] else { continue }
-            modelRoot.addChildNode(ceilingZoneNode(zone, floorElevation: profile.floorElevationMeters))
+            let roomRoot = roomRoots[zone.roomIndex] ?? modelRoot
+            roomRoot.addChildNode(ceilingZoneNode(zone, floorElevation: profile.floorElevationMeters))
         }
 
         addReferenceFloor(to: scene.rootNode, modelRoot: modelRoot)
@@ -138,128 +132,277 @@ struct RoomScanProject3DView: UIViewRepresentable {
                 color: hasIssue ? .systemRed : (isCorrection ? .systemPurple : .systemGray),
                 opacity: hasIssue ? 0.88 : (isCorrection ? 0.35 : 0.72)
             )
+
+            let geometry: EffectiveWallGeometry
+            let hasManualHeight: Bool
             if let assignment {
-                let geometry = EffectiveWallGeometry(
+                geometry = EffectiveWallGeometry(
                     base: assignment.geometry,
                     adjustment: overrideByAssignment[assignment.id]
                 )
-                let hasManualHeight = overrideByAssignment[assignment.id] != nil
-                let displayHeight = hasManualHeight
-                    ? geometry.heightMeters
-                    : max(targetStructuralHeight ?? geometry.heightMeters, 0.05)
-                let node = wallNode(
-                    geometry: geometry,
-                    displayHeight: displayHeight,
-                    centerY: targetFloorY + displayHeight / 2,
-                    depth: max(thickness, 0.03),
-                    material: wallMaterial
-                )
-                root.addChildNode(node)
+                hasManualHeight = overrideByAssignment[assignment.id] != nil
             } else {
-                let displayHeight = max(targetStructuralHeight ?? wall.dimensions.y, 0.05)
-                let node = surfaceNode(
-                    wall,
-                    depth: max(thickness, 0.03),
-                    material: wallMaterial,
-                    displayHeight: displayHeight,
-                    centerY: targetFloorY + displayHeight / 2
-                )
-                root.addChildNode(node)
+                geometry = EffectiveWallGeometry(base: snapshot(for: wall), adjustment: nil)
+                hasManualHeight = false
             }
-        }
-
-        addDetectedSurfaces(room.doors, color: .systemOrange, isCorrection: isCorrection, verticalOffset: verticalOffset, to: root)
-        addDetectedSurfaces(room.windows, color: .systemBlue, isCorrection: isCorrection, verticalOffset: verticalOffset, to: root)
-        addDetectedSurfaces(room.openings, color: .systemGreen, isCorrection: isCorrection, verticalOffset: verticalOffset, to: root)
-    }
-
-    private func addDetectedSurfaces(
-        _ surfaces: [CapturedRoom.Surface],
-        color: UIColor,
-        isCorrection: Bool,
-        verticalOffset: Float,
-        to root: SCNNode
-    ) {
-        for surface in surfaces where !suppressedSurfaceIdentifiers.contains(surface.identifier) {
-            let node = surfaceNode(
-                surface,
-                depth: isCorrection ? 0.025 : 0.04,
-                material: material(color: color, opacity: isCorrection ? 0.40 : 0.90)
+            let displayHeight = hasManualHeight
+                ? geometry.heightMeters
+                : max(targetStructuralHeight ?? geometry.heightMeters, 0.05)
+            let centerY = targetFloorY + displayHeight / 2
+            let cuts = openingCuts(
+                room: room,
+                wall: wall,
+                assignment: assignment,
+                geometry: geometry,
+                displayHeight: displayHeight,
+                targetFloorY: targetFloorY,
+                verticalOffset: verticalOffset
             )
-            node.simdPosition.y += verticalOffset
+            let node = cutWallNode(
+                geometry: geometry,
+                displayHeight: displayHeight,
+                centerY: centerY,
+                depth: max(thickness, 0.03),
+                material: wallMaterial,
+                cuts: cuts
+            )
             root.addChildNode(node)
         }
     }
 
-    private func wallNode(
+    private func openingCuts(
+        room: CapturedRoom,
+        wall: CapturedRoom.Surface,
+        assignment: RoomWallAssignment?,
+        geometry: EffectiveWallGeometry,
+        displayHeight: Float,
+        targetFloorY: Float,
+        verticalOffset: Float
+    ) -> [WallOpeningCut] {
+        var cuts: [WallOpeningCut] = []
+
+        if let assignment {
+            for opening in manualOpenings where opening.buildingWallID == assignment.buildingWallID {
+                var ratio = Float(min(max(opening.positionRatio, 0), 1))
+                if let sourceAssignment = wallAssignments.first(where: {
+                    $0.roomIndex == opening.sourceRoomIndex
+                        && ($0.wallIdentifier == opening.sourceWallIdentifier || $0.buildingWallID == opening.buildingWallID)
+                }) {
+                    let sourceGeometry = EffectiveWallGeometry(
+                        base: sourceAssignment.geometry,
+                        adjustment: geometryOverrides.first { $0.assignmentID == sourceAssignment.id }
+                    )
+                    if simd_dot(sourceGeometry.tangent2D, geometry.tangent2D) < 0 {
+                        ratio = 1 - ratio
+                    }
+                }
+                cuts.append(
+                    WallOpeningCut(
+                        id: opening.id,
+                        kind: opening.kind,
+                        centerOffsetMeters: (ratio - 0.5) * geometry.widthMeters,
+                        bottomMeters: Float(max(opening.sillHeightMeters, 0)),
+                        widthMeters: Float(max(opening.widthMeters, 0.05)),
+                        heightMeters: Float(max(opening.heightMeters, 0.05))
+                    )
+                )
+            }
+        }
+
+        func appendDetected(_ surfaces: [CapturedRoom.Surface], kind: ManualOpeningKind) {
+            for surface in surfaces where !suppressedSurfaceIdentifiers.contains(surface.identifier) {
+                guard surface.parentIdentifier == wall.identifier else { continue }
+                let center2D = SIMD2<Float>(surface.transform.columns.3.x, surface.transform.columns.3.z)
+                let baseWall = snapshot(for: wall)
+                let baseTangent = SIMD2<Float>(baseWall.tangentX, baseWall.tangentZ)
+                let baseCenter = SIMD2<Float>(baseWall.centerX, baseWall.centerZ)
+                let baseOffset = simd_dot(center2D - baseCenter, baseTangent)
+                let ratio = baseWall.widthMeters > 0.001 ? baseOffset / baseWall.widthMeters : 0
+                let offset = ratio * geometry.widthMeters
+                let bottom = surface.transform.columns.3.y + verticalOffset
+                    - surface.dimensions.y / 2 - targetFloorY
+                cuts.append(
+                    WallOpeningCut(
+                        id: surface.identifier,
+                        kind: kind,
+                        centerOffsetMeters: offset,
+                        bottomMeters: max(bottom, 0),
+                        widthMeters: max(surface.dimensions.x, 0.05),
+                        heightMeters: max(surface.dimensions.y, 0.05)
+                    )
+                )
+            }
+        }
+        appendDetected(room.doors, kind: .door)
+        appendDetected(room.openings, kind: .opening)
+        appendDetected(room.windows, kind: .window)
+
+        return cuts.compactMap { cut in
+            let minX = max(cut.minX, -geometry.widthMeters / 2)
+            let maxX = min(cut.maxX, geometry.widthMeters / 2)
+            let minY = max(cut.minY, 0)
+            let maxY = min(cut.maxY, displayHeight)
+            guard maxX - minX > 0.02, maxY - minY > 0.02 else { return nil }
+            return WallOpeningCut(
+                id: cut.id,
+                kind: cut.kind,
+                centerOffsetMeters: (minX + maxX) / 2,
+                bottomMeters: minY,
+                widthMeters: maxX - minX,
+                heightMeters: maxY - minY
+            )
+        }
+    }
+
+    private func cutWallNode(
         geometry: EffectiveWallGeometry,
         displayHeight: Float,
         centerY: Float,
         depth: Double,
+        material: SCNMaterial,
+        cuts: [WallOpeningCut]
+    ) -> SCNNode {
+        let group = SCNNode()
+        var transform = geometry.transform
+        transform.columns.3.y = centerY
+        group.simdTransform = transform
+
+        if cuts.isEmpty {
+            group.addChildNode(boxNode(
+                width: geometry.widthMeters,
+                height: displayHeight,
+                depth: Float(depth),
+                centerX: 0,
+                centerY: 0,
+                material: material
+            ))
+            return group
+        }
+
+        var xBreaks: [Float] = [-geometry.widthMeters / 2, geometry.widthMeters / 2]
+        var yBreaks: [Float] = [0, displayHeight]
+        for cut in cuts {
+            xBreaks += [cut.minX, cut.maxX]
+            yBreaks += [cut.minY, cut.maxY]
+        }
+        xBreaks = uniqueSorted(xBreaks)
+        yBreaks = uniqueSorted(yBreaks)
+
+        for xIndex in 0..<(xBreaks.count - 1) {
+            for yIndex in 0..<(yBreaks.count - 1) {
+                let x0 = xBreaks[xIndex]
+                let x1 = xBreaks[xIndex + 1]
+                let y0 = yBreaks[yIndex]
+                let y1 = yBreaks[yIndex + 1]
+                guard x1 - x0 > 0.005, y1 - y0 > 0.005 else { continue }
+                let midpoint = SIMD2<Float>((x0 + x1) / 2, (y0 + y1) / 2)
+                let isVoid = cuts.contains {
+                    midpoint.x > $0.minX + 0.001 && midpoint.x < $0.maxX - 0.001
+                        && midpoint.y > $0.minY + 0.001 && midpoint.y < $0.maxY - 0.001
+                }
+                guard !isVoid else { continue }
+                group.addChildNode(boxNode(
+                    width: x1 - x0,
+                    height: y1 - y0,
+                    depth: Float(depth),
+                    centerX: (x0 + x1) / 2,
+                    centerY: (y0 + y1) / 2 - displayHeight / 2,
+                    material: material
+                ))
+            }
+        }
+
+        for cut in cuts {
+            group.addChildNode(openingOutlineNode(
+                cut: cut,
+                wallHeight: displayHeight,
+                depth: Float(depth)
+            ))
+        }
+        return group
+    }
+
+    private func boxNode(
+        width: Float,
+        height: Float,
+        depth: Float,
+        centerX: Float,
+        centerY: Float,
         material: SCNMaterial
     ) -> SCNNode {
         let box = SCNBox(
-            width: CGFloat(max(geometry.widthMeters, 0.03)),
-            height: CGFloat(max(displayHeight, 0.03)),
-            length: CGFloat(max(depth, 0.01)),
-            chamferRadius: 0.005
+            width: CGFloat(max(width, 0.005)),
+            height: CGFloat(max(height, 0.005)),
+            length: CGFloat(max(depth, 0.005)),
+            chamferRadius: 0.003
         )
         box.materials = [material]
         let node = SCNNode(geometry: box)
-        var transform = geometry.transform
-        transform.columns.3.y = centerY
-        node.simdTransform = transform
+        node.position = SCNVector3(centerX, centerY, 0)
         return node
     }
 
-    private func surfaceNode(
-        _ surface: CapturedRoom.Surface,
-        depth: Double,
-        material: SCNMaterial,
-        displayHeight: Float? = nil,
-        centerY: Float? = nil
-    ) -> SCNNode {
-        let geometry = SCNBox(
-            width: CGFloat(max(surface.dimensions.x, 0.03)),
-            height: CGFloat(max(displayHeight ?? surface.dimensions.y, 0.03)),
-            length: CGFloat(max(depth, 0.01)),
-            chamferRadius: 0.005
-        )
-        geometry.materials = [material]
-        let node = SCNNode(geometry: geometry)
-        var transform = surface.transform
-        if let centerY { transform.columns.3.y = centerY }
-        node.simdTransform = transform
-        return node
-    }
-
-    private func manualOpeningNode(_ record: ManualOpeningRecord, verticalOffset: Float) -> SCNNode {
-        let geometry = SCNBox(
-            width: CGFloat(max(record.widthMeters, 0.05)),
-            height: CGFloat(max(record.heightMeters, 0.05)),
-            length: 0.06,
-            chamferRadius: 0.01
-        )
+    private func openingOutlineNode(cut: WallOpeningCut, wallHeight: Float, depth: Float) -> SCNNode {
+        let root = SCNNode()
         let color: UIColor
-        switch record.kind {
-        case .door: color = .systemRed
-        case .opening: color = .systemTeal
-        case .window: color = .systemCyan
+        switch cut.kind {
+        case .door: color = .systemOrange
+        case .opening: color = .systemGreen
+        case .window: color = .systemBlue
         }
-        geometry.materials = [material(color: color, opacity: 0.92)]
+        let outlineMaterial = material(color: color, opacity: 0.88)
+        let strip: Float = min(max(min(cut.widthMeters, cut.heightMeters) * 0.025, 0.012), 0.035)
+        let localCenterY = cut.bottomMeters + cut.heightMeters / 2 - wallHeight / 2
+        let frontZ = depth / 2 + 0.008
 
-        let tangent = simd_normalize(SIMD3<Float>(record.tangentX, 0, record.tangentZ))
-        let normal = simd_normalize(SIMD3<Float>(record.normalX, 0, record.normalZ))
-        var transform = matrix_identity_float4x4
-        transform.columns.0 = SIMD4<Float>(tangent.x, tangent.y, tangent.z, 0)
-        transform.columns.1 = SIMD4<Float>(0, 1, 0, 0)
-        transform.columns.2 = SIMD4<Float>(normal.x, normal.y, normal.z, 0)
-        transform.columns.3 = SIMD4<Float>(record.centerX, record.centerY + verticalOffset, record.centerZ, 1)
+        func add(width: Float, height: Float, x: Float, y: Float) {
+            let node = boxNode(
+                width: width,
+                height: height,
+                depth: 0.012,
+                centerX: x,
+                centerY: y,
+                material: outlineMaterial
+            )
+            node.position.z = frontZ
+            root.addChildNode(node)
+        }
+        add(width: cut.widthMeters, height: strip, x: cut.centerOffsetMeters, y: localCenterY + cut.heightMeters / 2)
+        add(width: strip, height: cut.heightMeters, x: cut.centerOffsetMeters - cut.widthMeters / 2, y: localCenterY)
+        add(width: strip, height: cut.heightMeters, x: cut.centerOffsetMeters + cut.widthMeters / 2, y: localCenterY)
+        if cut.kind == .window {
+            add(width: cut.widthMeters, height: strip, x: cut.centerOffsetMeters, y: localCenterY - cut.heightMeters / 2)
+        }
+        return root
+    }
 
-        let node = SCNNode(geometry: geometry)
-        node.simdTransform = transform
-        node.name = "Manual-\(record.kind.rawValue)-\(record.id.uuidString)"
-        return node
+    private func uniqueSorted(_ values: [Float]) -> [Float] {
+        let sorted = values.sorted()
+        var result: [Float] = []
+        for value in sorted where result.last.map({ abs($0 - value) > 0.001 }) ?? true {
+            result.append(value)
+        }
+        return result
+    }
+
+    private func snapshot(for surface: CapturedRoom.Surface) -> RoomWallGeometrySnapshot {
+        var tangent = SIMD2<Float>(surface.transform.columns.0.x, surface.transform.columns.0.z)
+        let tangentLength = simd_length(tangent)
+        tangent = tangentLength > 0.0001 ? tangent / tangentLength : SIMD2<Float>(1, 0)
+        var normal = SIMD2<Float>(surface.transform.columns.2.x, surface.transform.columns.2.z)
+        let normalLength = simd_length(normal)
+        normal = normalLength > 0.0001 ? normal / normalLength : SIMD2<Float>(-tangent.y, tangent.x)
+        return RoomWallGeometrySnapshot(
+            centerX: surface.transform.columns.3.x,
+            centerY: surface.transform.columns.3.y,
+            centerZ: surface.transform.columns.3.z,
+            tangentX: tangent.x,
+            tangentZ: tangent.y,
+            normalX: normal.x,
+            normalZ: normal.y,
+            widthMeters: max(surface.dimensions.x, 0.05),
+            heightMeters: max(surface.dimensions.y, 0.05)
+        )
     }
 
     private func addFloors(
@@ -280,11 +423,7 @@ struct RoomScanProject3DView: UIViewRepresentable {
             box.materials = [material(color: .systemBrown, opacity: 0.24)]
             let node = SCNNode(geometry: box)
             node.eulerAngles.y = Float(-seed.rotationDegrees * .pi / 180)
-            node.position = SCNVector3(
-                Float(seed.centerX),
-                targetY - 0.015,
-                Float(seed.centerZ)
-            )
+            node.position = SCNVector3(Float(seed.centerX), targetY - 0.015, Float(seed.centerZ))
             node.name = "FallbackFloor-Room-\(roomIndex)"
             root.addChildNode(node)
             return
@@ -384,10 +523,7 @@ struct RoomScanProject3DView: UIViewRepresentable {
             (bounds.min.y + bounds.max.y) / 2,
             (bounds.min.z + bounds.max.z) / 2
         )
-        let horizontalExtent = max(
-            bounds.max.x - bounds.min.x,
-            bounds.max.z - bounds.min.z
-        )
+        let horizontalExtent = max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z)
         let extent = max(max(horizontalExtent, bounds.max.y - bounds.min.y), 2)
 
         let cameraNode = SCNNode()

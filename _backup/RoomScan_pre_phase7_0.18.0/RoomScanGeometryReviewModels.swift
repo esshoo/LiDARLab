@@ -36,11 +36,7 @@ struct EffectiveWallGeometry: Equatable {
     let widthMeters: Float
     let heightMeters: Float
 
-    init(
-        base: RoomWallGeometrySnapshot,
-        adjustment: WallGeometryOverrideRecord?,
-        roomTransform: RoomRigidTransformRecord? = nil
-    ) {
+    init(base: RoomWallGeometrySnapshot, adjustment: WallGeometryOverrideRecord?) {
         let baseTangent = Self.normalized(SIMD2<Float>(base.tangentX, base.tangentZ), fallback: SIMD2<Float>(1, 0))
         let baseNormal = Self.normalized(SIMD2<Float>(base.normalX, base.normalZ), fallback: SIMD2<Float>(-baseTangent.y, baseTangent.x))
         let rotation = Float((adjustment?.rotationDegrees ?? 0) * .pi / 180.0)
@@ -60,22 +56,19 @@ struct EffectiveWallGeometry: Equatable {
             ),
             fallback: SIMD2<Float>(-rotatedTangent.y, rotatedTangent.x)
         )
-        let untransformedCenter = SIMD2<Float>(base.centerX, base.centerZ)
+        let center = SIMD2<Float>(base.centerX, base.centerZ)
             + baseTangent * Float(adjustment?.centerOffsetAlongMeters ?? 0)
             + baseNormal * Float(adjustment?.centerOffsetNormalMeters ?? 0)
-        let center = roomTransform?.applying(to: untransformedCenter) ?? untransformedCenter
-        let finalTangent = roomTransform?.applying(to: rotatedTangent) ?? rotatedTangent
-        let finalNormal = roomTransform?.applying(to: rotatedNormal) ?? rotatedNormal
 
         let effectiveHeight = max(Float(adjustment?.heightMeters ?? Double(base.heightMeters)), 0.05)
         let originalBottomY = base.centerY - base.heightMeters / 2
         centerX = center.x
         centerY = originalBottomY + effectiveHeight / 2
         centerZ = center.y
-        tangentX = finalTangent.x
-        tangentZ = finalTangent.y
-        normalX = finalNormal.x
-        normalZ = finalNormal.y
+        tangentX = rotatedTangent.x
+        tangentZ = rotatedTangent.y
+        normalX = rotatedNormal.x
+        normalZ = rotatedNormal.y
         widthMeters = max(Float(adjustment?.widthMeters ?? Double(base.widthMeters)), 0.05)
         heightMeters = effectiveHeight
     }
@@ -142,7 +135,6 @@ enum ProjectReviewIssueKind: String, Codable {
     case floorLevelMismatch
     case ceilingHeightConflict
     case ceilingZoneOutsideRoom
-    case extremeRoomTransform
 }
 
 struct ProjectReviewIssue: Codable, Identifiable, Equatable {
