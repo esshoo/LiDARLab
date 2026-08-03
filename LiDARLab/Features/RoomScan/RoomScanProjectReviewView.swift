@@ -117,8 +117,10 @@ struct RoomScanProjectReviewView: View {
                     set: { if $0 == nil { previewURL = nil } }
                 )
             ) { item in
-                QuickLookPreview(url: item.url)
-                    .ignoresSafeArea()
+                ReviewQuickLookContainer(url: item.url) {
+                    previewURL = nil
+                }
+                .presentationDragIndicator(.visible)
             }
             .sheet(item: $exportSharePayload) { payload in
                 ActivityView(items: payload.items)
@@ -226,6 +228,7 @@ struct RoomScanProjectReviewView: View {
 
                 RoomScanProject3DView(
                     rooms: model.capturedRooms,
+                    mergedRooms: model.capturedStructure?.rooms ?? [],
                     corrections: model.acceptedRoomCorrections,
                     wallAssignments: model.roomWallAssignments,
                     wallRecords: model.buildingWallRecords,
@@ -798,6 +801,35 @@ struct RoomScanProjectReviewView: View {
         }
         .font(.caption2)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ReviewQuickLookContainer: View {
+    let url: URL
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("تم", action: onDone)
+                    .fontWeight(.semibold)
+                Spacer()
+                Text("نموذج RoomPlan الأصلي")
+                    .font(.headline)
+                Spacer()
+                // Balances the leading Done button so the title stays centered.
+                Text("تم")
+                    .fontWeight(.semibold)
+                    .hidden()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .background(.ultraThinMaterial)
+
+            QuickLookPreview(url: url)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(.black)
     }
 }
 

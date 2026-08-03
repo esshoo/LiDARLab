@@ -8,7 +8,11 @@ import simd
 /// Rooms are moved as rigid parent nodes and wall openings are rendered as
 /// real voids by decomposing each wall around its door/window rectangles.
 struct RoomScanProject3DView: UIViewRepresentable {
+    /// Frozen logical rooms as captured by each RoomPlan session.
     let rooms: [CapturedRoom]
+    /// Rooms returned by StructureBuilder. These provide Apple's canonical
+    /// placement of every scan inside the combined building coordinate space.
+    let mergedRooms: [CapturedRoom]
     let corrections: [AcceptedRoomCorrectionLayer]
     let wallAssignments: [RoomWallAssignment]
     let wallRecords: [BuildingWallRecord]
@@ -50,17 +54,34 @@ struct RoomScanProject3DView: UIViewRepresentable {
             if assignmentByFace[key] == nil { assignmentByFace[key] = assignment }
         }
 
+        let mergedRoomByIndex = matchedMergedRoomsByLogicalIndex()
+
         var roomRoots: [Int: SCNNode] = [:]
         for (offset, room) in rooms.enumerated() {
             let roomIndex = offset + 1
+            let seed = RoomLevelGeometrySeed.make(room: room)
+            let roomPlanAlignment = roomAlignmentTransform(
+                from: room,
+                to: mergedRoomByIndex[roomIndex]
+            )
+            let alignedPivot = transformedPoint(
+                SIMD2<Float>(Float(seed.centerX), Float(seed.centerZ)),
+                by: roomPlanAlignment
+            )
+            let userCorrection = transformByRoom[roomIndex]?.sceneTransform(
+                pivotX: Double(alignedPivot.x),
+                pivotZ: Double(alignedPivot.y)
+            ) ?? matrix_identity_float4x4
+
             let roomRoot = SCNNode()
             roomRoot.name = "RigidRoom-\(roomIndex)"
-            roomRoot.simdTransform = transformByRoom[roomIndex]?.sceneTransform ?? matrix_identity_float4x4
+            // First place the original room in Apple's merged structure space,
+            // then apply only the app-owned user correction in that final space.
+            roomRoot.simdTransform = simd_mul(userCorrection, roomPlanAlignment)
             modelRoot.addChildNode(roomRoot)
             roomRoots[roomIndex] = roomRoot
 
             let profile = profileByRoom[roomIndex]
-            let seed = RoomLevelGeometrySeed.make(room: room)
             let targetFloorY = Float(profile?.floorElevationMeters ?? seed.floorElevationMeters)
             let verticalOffset = targetFloorY - Float(seed.floorElevationMeters)
             addRoom(
@@ -109,6 +130,107 @@ struct RoomScanProject3DView: UIViewRepresentable {
         addReferenceFloor(to: scene.rootNode, modelRoot: modelRoot)
         addCamera(to: scene.rootNode, modelRoot: modelRoot)
         return scene
+    }
+
+    /// Matches StructureBuilder rooms back to the app's logical room order.
+    /// RoomPlan normally preserves identifiers; index matching is a guarded
+    /// fallback for older saved structures.
+    private func matchedMergedRoomsByLogicalIndex() -> [Int: CapturedRoom] {
+        guard !rooms.isEmpty, !mergedRooms.isEmpty else { return [:] }
+        let mergedByIdentifier = Dictionary(
+            mergedRooms.map { ($0.identifier, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var result: [Int: CapturedRoom] = [:]
+        for (offset, room) in rooms.enumerated() {
+            let logicalIndex = offset + 1
+            if let exact = mergedByIdentifier[room.identifier] {
+                result[logicalIndex] = exact
+            } else if mergedRooms.count == rooms.count {
+                result[logicalIndex] = mergedRooms[offset]
+            }
+        }
+        return result
+    }
+
+    /// Derives a horizontal rigid transform from the frozen room into the
+    /// corresponding StructureBuilder room. This is the missing transform that
+    /// Apple's USDZ export already applies and the custom SceneKit renderer must
+    /// also apply exactly once.
+    private func roomAlignmentTransform(
+        from sourceRoom: CapturedRoom,
+        to mergedRoom: CapturedRoom?
+    ) -> simd_float4x4 {
+        guard let mergedRoom else { return matrix_identity_float4x4 }
+
+        let mergedWallsByIdentifier = Dictionary(
+            mergedRoom.walls.map { ($0.identifier, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var pairs: [(source: CapturedRoom.Surface, target: CapturedRoom.Surface)] = sourceRoom.walls.compactMap { wall in
+            mergedWallsByIdentifier[wall.identifier].map { (source: wall, target: $0) }
+        }
+
+        if pairs.isEmpty, sourceRoom.walls.count == mergedRoom.walls.count {
+            pairs = Array(zip(sourceRoom.walls, mergedRoom.walls)).map { (source: $0.0, target: $0.1) }
+        }
+        guard !pairs.isEmpty else { return matrix_identity_float4x4 }
+
+        let sourceCenters = pairs.map { SIMD2<Float>($0.source.transform.columns.3.x, $0.source.transform.columns.3.z) }
+        let targetCenters = pairs.map { SIMD2<Float>($0.target.transform.columns.3.x, $0.target.transform.columns.3.z) }
+        let sourceCenter = sourceCenters.reduce(SIMD2<Float>.zero, +) / Float(sourceCenters.count)
+        let targetCenter = targetCenters.reduce(SIMD2<Float>.zero, +) / Float(targetCenters.count)
+
+        var dotSum: Float = 0
+        var crossSum: Float = 0
+        for index in sourceCenters.indices {
+            let source = sourceCenters[index] - sourceCenter
+            let target = targetCenters[index] - targetCenter
+            dotSum += simd_dot(source, target)
+            crossSum += source.x * target.y - source.y * target.x
+        }
+
+        var angle = atan2(crossSum, dotSum)
+        if abs(dotSum) + abs(crossSum) < 0.0001,
+           let firstPair = pairs.first {
+            let sourceTangent = normalized2D(
+                SIMD2<Float>(firstPair.source.transform.columns.0.x, firstPair.source.transform.columns.0.z)
+            )
+            let targetTangent = normalized2D(
+                SIMD2<Float>(firstPair.target.transform.columns.0.x, firstPair.target.transform.columns.0.z)
+            )
+            angle = atan2(
+                sourceTangent.x * targetTangent.y - sourceTangent.y * targetTangent.x,
+                simd_dot(sourceTangent, targetTangent)
+            )
+        }
+
+        let cosine = cos(angle)
+        let sine = sin(angle)
+        let rotatedSourceCenter = SIMD2<Float>(
+            sourceCenter.x * cosine - sourceCenter.y * sine,
+            sourceCenter.x * sine + sourceCenter.y * cosine
+        )
+        let translation = targetCenter - rotatedSourceCenter
+
+        var transform = matrix_identity_float4x4
+        transform.columns.0 = SIMD4<Float>(cosine, 0, sine, 0)
+        transform.columns.2 = SIMD4<Float>(-sine, 0, cosine, 0)
+        transform.columns.3 = SIMD4<Float>(translation.x, 0, translation.y, 1)
+        return transform
+    }
+
+    private func transformedPoint(
+        _ point: SIMD2<Float>,
+        by transform: simd_float4x4
+    ) -> SIMD2<Float> {
+        let transformed = simd_mul(transform, SIMD4<Float>(point.x, 0, point.y, 1))
+        return SIMD2<Float>(transformed.x, transformed.z)
+    }
+
+    private func normalized2D(_ value: SIMD2<Float>) -> SIMD2<Float> {
+        let length = simd_length(value)
+        return length > 0.0001 ? value / length : SIMD2<Float>(1, 0)
     }
 
     private func addRoom(

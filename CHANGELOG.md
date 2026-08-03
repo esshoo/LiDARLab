@@ -1,3 +1,13 @@
+## 0.19.2 (Build 26) — Capture & Structure Alignment Hotfix
+
+- Replaced the crowded in-scan dashboard with a minimal full-screen RoomPlan capture HUD.
+- Hidden project metrics, exports, review actions, and the 3D preview while a room is actively being scanned.
+- Added a compact room/status header and kept only pause/cancel/finalize controls during capture.
+- Used `CapturedStructure.rooms` as Apple's canonical placement reference for the custom SceneKit building view.
+- Added a rigid 2D best-fit alignment from each frozen room to its StructureBuilder counterpart and applied it exactly once before user corrections.
+- Added a persistent top bar with a visible **تم** button to close the original RoomPlan Quick Look preview.
+- Preserved original RoomPlan files and all app-owned corrections without destructive rewrites.
+
 ## 0.19.1 (Build 25)
 
 - Fixed Swift overload collision by separating rigid-transform point and direction APIs.

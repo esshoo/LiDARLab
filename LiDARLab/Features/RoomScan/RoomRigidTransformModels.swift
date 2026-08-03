@@ -50,8 +50,15 @@ struct RoomRigidTransformRecord: Codable, Identifiable, Equatable {
     }
 
     /// Matrix suitable for a parent SceneKit node whose children remain in the
-    /// original RoomPlan world coordinates.
+    /// original RoomPlan coordinate space.
     var sceneTransform: simd_float4x4 {
+        sceneTransform(pivotX: pivotX, pivotZ: pivotZ)
+    }
+
+    /// Rebuilds the user correction around a pivot that already lives in the
+    /// merged structure space. This prevents the RoomPlan merge transform from
+    /// being applied a second time when the room is displayed in the project.
+    func sceneTransform(pivotX: Double, pivotZ: Double) -> simd_float4x4 {
         let radians = Float(rotationDegrees * .pi / 180)
         let cosine = cos(radians)
         let sine = sin(radians)

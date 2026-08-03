@@ -15,7 +15,7 @@ struct RoomScanView: View {
     var body: some View {
         ZStack {
             RoomCaptureViewContainer(model: model)
-                .ignoresSafeArea(edges: .bottom)
+                .ignoresSafeArea()
 
             if model.isPaused && !model.isRelocalizing && !model.requiresRelocalization {
                 pausedCameraOverlay
@@ -25,18 +25,23 @@ struct RoomScanView: View {
                 relocalizationOverlay
             }
 
-            VStack(spacing: 12) {
-                statusPanel
-                Spacer(minLength: 10)
-                controls
+            if model.isScanning {
+                activeCaptureHUD
+            } else {
+                VStack(spacing: 12) {
+                    statusPanel
+                    Spacer(minLength: 10)
+                    controls
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
             }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 14)
         }
         .background(.black)
         .navigationTitle("مسح متعدد الغرف")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(model.isScanning || model.isProcessing || model.isRelocalizing)
+        .toolbar(model.isScanning ? .hidden : .visible, for: .navigationBar)
         .onAppear { model.handleAppBecameActive() }
         .onDisappear { model.suspendForNavigation() }
         .onChange(of: scenePhase) { _, phase in
@@ -119,6 +124,85 @@ struct RoomScanView: View {
         } message: {
             Text(model.errorMessage ?? "خطأ غير معروف")
         }
+    }
+
+    /// Minimal full-screen capture interface. Project summaries, exports and
+    /// review controls stay hidden until the active RoomPlan session finishes.
+    private var activeCaptureHUD: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: model.isRoomRescanActive
+                      ? "arrow.triangle.2.circlepath.camera"
+                      : (model.isRoomCorrectionScanActive ? "plus.viewfinder" : "viewfinder"))
+                    .foregroundStyle(.cyan)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(activeCaptureTitle)
+                        .font(.subheadline.bold())
+                    Text(model.statusMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 8, height: 8)
+                    Text("مسح")
+                        .font(.caption.bold())
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: 9) {
+                Text(activeCaptureInstruction)
+                    .font(.caption.bold())
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.55), in: Capsule())
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { activeScanControls }
+                    VStack(spacing: 10) { activeScanControls }
+                }
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 14)
+    }
+
+    private var activeCaptureTitle: String {
+        if model.isRoomRescanActive {
+            return "إعادة مسح الغرفة \(model.activeRoomNumber)"
+        }
+        if model.isRoomCorrectionScanActive {
+            return "استكمال الغرفة \(model.activeRoomNumber)"
+        }
+        return "مسح الغرفة \(model.activeRoomNumber)"
+    }
+
+    private var activeCaptureInstruction: String {
+        if model.isRoomRescanActive {
+            return "امسح الغرفة كاملة، ثم أنهِ المسح للمقارنة مع النسخة الأصلية."
+        }
+        if model.isRoomCorrectionScanActive {
+            return "ركّز على الجزء الناقص فقط وحافظ على ظهور جزء سبق مسحه."
+        }
+        return "تحرّك ببطء حول الغرفة، ولا تعبر الباب قبل تثبيت هذه الغرفة."
     }
 
     private var statusPanel: some View {
