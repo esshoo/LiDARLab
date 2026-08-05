@@ -52,6 +52,9 @@ final class ComputerBridgeViewModel: ObservableObject {
     @Published var targetFPS: Int {
         didSet { UserDefaults.standard.set(targetFPS, forKey: Self.targetFPSKey) }
     }
+    @Published var scanFPS: Int {
+        didSet { UserDefaults.standard.set(scanFPS, forKey: Self.scanFPSKey) }
+    }
     @Published var streamMode: StreamMode {
         didSet { UserDefaults.standard.set(streamMode.rawValue, forKey: Self.streamModeKey) }
     }
@@ -82,6 +85,7 @@ final class ComputerBridgeViewModel: ObservableObject {
     private static let serverIPKey = "computerBridge.serverIP"
     private static let serverPortKey = "computerBridge.serverPort"
     private static let targetFPSKey = "computerBridge.targetFPS"
+    private static let scanFPSKey = "computerBridge.scanFPS"
     private static let streamModeKey = "computerBridge.streamMode"
     private static let samplingStrideKey = "computerBridge.samplingStride"
     private static let sendConfidenceKey = "computerBridge.sendConfidence"
@@ -90,7 +94,8 @@ final class ComputerBridgeViewModel: ObservableObject {
     private let client = ComputerBridgeWebSocketClient()
     private var sessionID = UInt64.random(in: 1...UInt64.max)
     private var frameID: UInt64 = 0
-    private var lastSentFrameTimestamp: TimeInterval = -.greatestFiniteMagnitude
+    private var lastPoseSentTimestamp: TimeInterval = -.greatestFiniteMagnitude
+    private var lastScanSentTimestamp: TimeInterval = -.greatestFiniteMagnitude
     private var sendInProgress = false
     private var receiveTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
@@ -100,7 +105,10 @@ final class ComputerBridgeViewModel: ObservableObject {
         serverPort = UserDefaults.standard.string(forKey: Self.serverPortKey) ?? "8766"
 
         let savedFPS = UserDefaults.standard.integer(forKey: Self.targetFPSKey)
-        targetFPS = [1, 2, 5, 10, 15, 30].contains(savedFPS) ? savedFPS : 10
+        targetFPS = [1, 2, 5, 10, 15, 30].contains(savedFPS) ? savedFPS : 30
+
+        let savedScanFPS = UserDefaults.standard.integer(forKey: Self.scanFPSKey)
+        scanFPS = [1, 2, 5, 10, 15, 30].contains(savedScanFPS) ? savedScanFPS : 10
 
         let savedMode = UserDefaults.standard.string(forKey: Self.streamModeKey)
         streamMode = StreamMode(rawValue: savedMode ?? "") ?? .scan2D
@@ -162,10 +170,14 @@ final class ComputerBridgeViewModel: ObservableObject {
         let gridHeight = (sourceHeight + samplingStride - 1) / samplingStride
         let sampleCount = gridWidth * gridHeight
         let bytesPerSample = sendConfidence ? 3 : 2
-        let bytesPerFrame = 72 + 68 + sampleCount * bytesPerSample
-        let mbps = Double(bytesPerFrame * targetFPS * 8) / 1_000_000
+        let poseBytesPerSecond = 72 * targetFPS
+        let scanBytesPerFrame = 68 + sampleCount * bytesPerSample
+        let totalBytesPerSecond = poseBytesPerSecond + scanBytesPerFrame * scanFPS
+        let mbps = Double(totalBytesPerSecond * 8) / 1_000_000
         return String(
-            format: "تقدير تقريبي: %d عينة/Frame — %.3f Mbps",
+            format: "Pose %d FPS + Scan %d FPS — %d عينة/Scan — %.3f Mbps",
+            targetFPS,
+            scanFPS,
             sampleCount,
             mbps
         )
@@ -243,10 +255,11 @@ final class ComputerBridgeViewModel: ObservableObject {
             isStreaming = false
             lastServerMessage = "تم إيقاف الإرسال مؤقتًا."
         } else if isConnected {
-            lastSentFrameTimestamp = -.greatestFiniteMagnitude
+            lastPoseSentTimestamp = -.greatestFiniteMagnitude
+            lastScanSentTimestamp = -.greatestFiniteMagnitude
             isStreaming = true
             lastServerMessage = streamMode == .scan2D
-                ? "بدأ الإرسال بالإعدادات المختارة: \(targetFPS) FPS، خطوة \(samplingStride)."
+                ? "بدأ الإرسال: موقع \(targetFPS) FPS، مسح \(scanFPS) FPS، خطوة \(samplingStride)."
                 : "بدأ إرسال موقع الجهاز فقط بمعدل \(targetFPS) FPS."
         }
     }
@@ -255,9 +268,11 @@ final class ComputerBridgeViewModel: ObservableObject {
         updateStatus(from: frame)
         guard isConnected, isStreaming else { return }
 
-        let minimumInterval = 1.0 / Double(max(targetFPS, 1))
-        guard frame.timestamp - lastSentFrameTimestamp >= minimumInterval else { return }
-        lastSentFrameTimestamp = frame.timestamp
+        let poseInterval = 1.0 / Double(max(targetFPS, 1))
+        let scanInterval = 1.0 / Double(max(scanFPS, 1))
+        let poseDue = frame.timestamp - lastPoseSentTimestamp >= poseInterval
+        let scanDue = streamMode == .scan2D && frame.timestamp - lastScanSentTimestamp >= scanInterval
+        guard poseDue || scanDue else { return }
 
         let currentThermalState = ProcessInfo.processInfo.thermalState
         if currentThermalState == .critical, thermalPolicy == .stopAllAtCritical {
@@ -269,8 +284,12 @@ final class ComputerBridgeViewModel: ObservableObject {
 
         guard !sendInProgress else {
             framesSkipped += 1
+            if scanDue { scanFramesSkipped += 1 }
             return
         }
+
+        if poseDue { lastPoseSentTimestamp = frame.timestamp }
+        if scanDue { lastScanSentTimestamp = frame.timestamp }
 
         frameID &+= 1
         let currentFrameID = frameID
@@ -293,7 +312,7 @@ final class ComputerBridgeViewModel: ObservableObject {
         )
 
         var scanPacket: Data?
-        if streamMode == .scan2D {
+        if scanDue {
             if currentThermalState == .critical, thermalPolicy == .stopDepthAtCritical {
                 depthStatusText = "Depth متوقف حسب سياسة الحرارة المختارة"
                 scanFramesSkipped += 1
@@ -320,7 +339,7 @@ final class ComputerBridgeViewModel: ObservableObject {
                 depthStatusText = "لا توجد sceneDepth"
                 scanFramesSkipped += 1
             }
-        } else {
+        } else if streamMode == .poseOnly {
             depthStatusText = "غير مستخدم"
         }
 

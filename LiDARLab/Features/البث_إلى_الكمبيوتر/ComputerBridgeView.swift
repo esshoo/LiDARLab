@@ -116,9 +116,9 @@ struct ComputerBridgeView: View {
                 DisclosureGroup("إعدادات نقل البيانات", isExpanded: $showTransferSettings) {
                     VStack(spacing: 10) {
                         HStack {
-                            Text("معدل الإرسال")
+                            Text("معدل إرسال الموقع")
                             Spacer()
-                            Picker("معدل الإرسال", selection: $model.targetFPS) {
+                            Picker("معدل إرسال الموقع", selection: $model.targetFPS) {
                                 ForEach([1, 2, 5, 10, 15, 30], id: \.self) { fps in
                                     Text("\(fps) FPS").tag(fps)
                                 }
@@ -127,6 +127,22 @@ struct ComputerBridgeView: View {
                         }
 
                         if model.streamMode == .scan2D {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("معدل إرسال المسح 2D")
+                                    Text("يمكن إبقاء الموقع سريعًا وتقليل المسح الثقيل")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Picker("معدل المسح", selection: $model.scanFPS) {
+                                    ForEach([1, 2, 5, 10, 15, 30], id: \.self) { fps in
+                                        Text("\(fps) FPS").tag(fps)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("خطوة أخذ عينات Depth")
