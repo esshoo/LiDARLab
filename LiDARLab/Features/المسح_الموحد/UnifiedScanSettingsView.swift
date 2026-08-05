@@ -410,6 +410,7 @@ private struct UnifiedScanSettingsDraft {
     var showCurrentRays: Bool
     var showDevice: Bool
 
+    @MainActor
     init(
         model: UnifiedScanViewModel,
         showGrid: Bool,

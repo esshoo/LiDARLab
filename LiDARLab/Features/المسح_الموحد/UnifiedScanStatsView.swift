@@ -89,6 +89,7 @@ private struct UnifiedScanStatsSnapshot {
     let depth: String
     let lastError: String?
 
+    @MainActor
     init(model: UnifiedScanViewModel) {
         sessionState = model.sessionState.title
         role = model.role.title
