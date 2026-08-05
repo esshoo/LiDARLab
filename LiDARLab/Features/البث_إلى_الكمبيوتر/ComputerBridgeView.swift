@@ -24,7 +24,7 @@ struct ComputerBridgeView: View {
 
             VStack(spacing: 12) {
                 statusPanel
-                Spacer(minLength: 90)
+                Spacer(minLength: 72)
                 connectionPanel
             }
             .padding(.horizontal, 12)
@@ -32,7 +32,7 @@ struct ComputerBridgeView: View {
             .padding(.bottom, 14)
         }
         .background(.black)
-        .navigationTitle("البث إلى الكمبيوتر")
+        .navigationTitle("البث والمسح 2D")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -61,11 +61,13 @@ struct ComputerBridgeView: View {
                     .minimumScaleFactor(0.65)
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 8)], spacing: 8) {
-                MetricChip(title: "Frames", value: "\(model.framesSent)", systemImage: "square.stack.3d.up")
-                MetricChip(title: "المتخطاة", value: "\(model.framesSkipped)", systemImage: "forward.frame")
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8)], spacing: 8) {
+                MetricChip(title: "Pose", value: "\(model.framesSent)", systemImage: "location")
+                MetricChip(title: "مسح 2D", value: "\(model.scanFramesSent)", systemImage: "map")
+                MetricChip(title: "المتخطاة", value: "\(model.framesSkipped + model.scanFramesSkipped)", systemImage: "forward.frame")
                 MetricChip(title: "البيانات", value: model.totalSentText, systemImage: "arrow.up.circle")
-                MetricChip(title: "التتبع", value: model.trackingText, systemImage: "location")
+                MetricChip(title: "LiDAR", value: model.depthStatusText, systemImage: "sensor")
+                MetricChip(title: "التتبع", value: model.trackingText, systemImage: "viewfinder")
                 MetricChip(title: "الحرارة", value: model.thermalText, systemImage: "thermometer.medium")
             }
         }
@@ -78,10 +80,10 @@ struct ComputerBridgeView: View {
             VStack(spacing: 12) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("IP الكمبيوتر")
+                        Text("IP المستقبل")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        TextField("192.168.1.50", text: $model.serverIP)
+                        TextField("192.168.0.2", text: $model.serverIP)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.numbersAndPunctuation)
@@ -102,6 +104,14 @@ struct ComputerBridgeView: View {
                 }
                 .disabled(model.isConnected)
 
+                Picker("نوع الإرسال", selection: $model.streamMode) {
+                    ForEach(ComputerBridgeViewModel.StreamMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(model.isStreaming)
+
                 Picker("معدل الإرسال", selection: $model.targetFPS) {
                     Text("5 FPS").tag(5)
                     Text("10 FPS").tag(10)
@@ -109,6 +119,16 @@ struct ComputerBridgeView: View {
                     Text("30 FPS").tag(30)
                 }
                 .pickerStyle(.segmented)
+
+                if model.streamMode == .scan2D {
+                    Label(
+                        "يُرسل الهاتف شبكة عمق مخففة فقط. بناء النقاط وخريطة X/Z يتم على المستقبل.",
+                        systemImage: "square.grid.3x3"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 HStack(spacing: 10) {
                     Button {
@@ -128,7 +148,7 @@ struct ComputerBridgeView: View {
                     } label: {
                         Label(
                             model.isStreaming ? "إيقاف الإرسال" : "بدء الإرسال",
-                            systemImage: model.isStreaming ? "stop.fill" : "location.fill"
+                            systemImage: model.isStreaming ? "stop.fill" : "dot.radiowaves.left.and.right"
                         )
                         .frame(maxWidth: .infinity)
                     }
@@ -137,7 +157,7 @@ struct ComputerBridgeView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("آخر رد من الكمبيوتر")
+                    Text("آخر رد من المستقبل")
                         .font(.caption.weight(.semibold))
                     Text(model.lastServerMessage)
                         .font(.caption.monospaced())
@@ -156,7 +176,7 @@ struct ComputerBridgeView: View {
             .padding(13)
         }
         .scrollIndicators(.hidden)
-        .frame(maxHeight: 355)
+        .frame(maxHeight: 410)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 

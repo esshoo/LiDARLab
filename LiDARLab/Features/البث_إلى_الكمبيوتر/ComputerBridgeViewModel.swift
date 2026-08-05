@@ -13,6 +13,20 @@ final class ComputerBridgeViewModel: ObservableObject {
         case failed(String)
     }
 
+    enum StreamMode: String, CaseIterable, Identifiable {
+        case poseOnly
+        case scan2D
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .poseOnly: "الموقع فقط"
+            case .scan2D: "مسح 2D"
+            }
+        }
+    }
+
     @Published var serverIP: String {
         didSet { UserDefaults.standard.set(serverIP, forKey: Self.serverIPKey) }
     }
@@ -22,14 +36,20 @@ final class ComputerBridgeViewModel: ObservableObject {
     @Published var targetFPS: Int {
         didSet { UserDefaults.standard.set(targetFPS, forKey: Self.targetFPSKey) }
     }
+    @Published var streamMode: StreamMode {
+        didSet { UserDefaults.standard.set(streamMode.rawValue, forKey: Self.streamModeKey) }
+    }
 
     @Published private(set) var connectionState: ConnectionState = .disconnected
     @Published private(set) var isStreaming = false
     @Published private(set) var framesSent: UInt64 = 0
     @Published private(set) var framesSkipped: UInt64 = 0
+    @Published private(set) var scanFramesSent: UInt64 = 0
+    @Published private(set) var scanFramesSkipped: UInt64 = 0
     @Published private(set) var bytesSent: UInt64 = 0
     @Published private(set) var trackingText = "غير متاح"
     @Published private(set) var thermalText = "طبيعي"
+    @Published private(set) var depthStatusText = "بانتظار LiDAR"
     @Published private(set) var lastPosition = SIMD3<Float>(repeating: 0)
     @Published private(set) var lastServerMessage = "لا توجد رسالة من الكمبيوتر بعد."
     @Published private(set) var lastError: String?
@@ -37,6 +57,7 @@ final class ComputerBridgeViewModel: ObservableObject {
     private static let serverIPKey = "computerBridge.serverIP"
     private static let serverPortKey = "computerBridge.serverPort"
     private static let targetFPSKey = "computerBridge.targetFPS"
+    private static let streamModeKey = "computerBridge.streamMode"
 
     private let client = ComputerBridgeWebSocketClient()
     private var sessionID = UInt64.random(in: 1...UInt64.max)
@@ -47,11 +68,14 @@ final class ComputerBridgeViewModel: ObservableObject {
     private var pingTask: Task<Void, Never>?
 
     init() {
-        serverIP = UserDefaults.standard.string(forKey: Self.serverIPKey) ?? "192.168.1.50"
+        serverIP = UserDefaults.standard.string(forKey: Self.serverIPKey) ?? "192.168.0.2"
         serverPort = UserDefaults.standard.string(forKey: Self.serverPortKey) ?? "8766"
 
         let savedFPS = UserDefaults.standard.integer(forKey: Self.targetFPSKey)
-        targetFPS = [5, 10, 15, 30].contains(savedFPS) ? savedFPS : 15
+        targetFPS = [5, 10, 15, 30].contains(savedFPS) ? savedFPS : 10
+
+        let savedMode = UserDefaults.standard.string(forKey: Self.streamModeKey)
+        streamMode = StreamMode(rawValue: savedMode ?? "") ?? .scan2D
     }
 
     var connectionTitle: String {
@@ -86,7 +110,7 @@ final class ComputerBridgeViewModel: ObservableObject {
         guard connectionState != .connecting else { return }
         guard let url = websocketURL else {
             connectionState = .failed("عنوان IP أو المنفذ غير صالح.")
-            lastError = "اكتب عنوان الكمبيوتر مثل 192.168.1.50 والمنفذ 8766."
+            lastError = "اكتب عنوان الكمبيوتر مثل 192.168.0.2 والمنفذ 8766."
             return
         }
 
@@ -116,7 +140,7 @@ final class ComputerBridgeViewModel: ObservableObject {
                 try await client.send(hello)
                 bytesSent += UInt64(hello.count)
                 connectionState = .connected
-                lastServerMessage = "تم إرسال تعريف الجهاز إلى الكمبيوتر."
+                lastServerMessage = "تم تعريف الجهاز. اختر بدء الإرسال."
                 startReceiveLoop()
                 startPingLoop()
             } catch {
@@ -141,6 +165,8 @@ final class ComputerBridgeViewModel: ObservableObject {
         if resetStatistics {
             framesSent = 0
             framesSkipped = 0
+            scanFramesSent = 0
+            scanFramesSkipped = 0
             bytesSent = 0
             frameID = 0
             lastServerMessage = "لا توجد رسالة من الكمبيوتر بعد."
@@ -150,11 +176,13 @@ final class ComputerBridgeViewModel: ObservableObject {
     func toggleStreaming() {
         if isStreaming {
             isStreaming = false
-            lastServerMessage = "تم إيقاف إرسال الموقع مؤقتًا."
+            lastServerMessage = "تم إيقاف الإرسال مؤقتًا."
         } else if isConnected {
             lastSentFrameTimestamp = -.greatestFiniteMagnitude
             isStreaming = true
-            lastServerMessage = "بدأ إرسال موقع الهاتف."
+            lastServerMessage = streamMode == .scan2D
+                ? "بدأ إرسال الموقع وشبكة العمق للمسح الثنائي."
+                : "بدأ إرسال موقع الجهاز فقط."
         }
     }
 
@@ -181,7 +209,7 @@ final class ComputerBridgeViewModel: ObservableObject {
         )
         let quaternion = simd_quatf(transform)
         let timestampNanoseconds = UInt64(max(frame.timestamp, 0) * 1_000_000_000)
-        let packet = StreamingProtocolV01.posePacket(
+        let posePacket = StreamingProtocolV01.posePacket(
             sessionID: sessionID,
             frameID: currentFrameID,
             timestampNanoseconds: timestampNanoseconds,
@@ -191,15 +219,51 @@ final class ComputerBridgeViewModel: ObservableObject {
             thermalState: thermalCode(ProcessInfo.processInfo.thermalState)
         )
 
+        var scanPacket: Data?
+        if streamMode == .scan2D {
+            let thermalState = ProcessInfo.processInfo.thermalState
+            if thermalState == .critical {
+                depthStatusText = "متوقف لحماية الجهاز"
+                scanFramesSkipped += 1
+            } else if let depthData = frame.sceneDepth {
+                let stride = thermalState == .serious ? 6 : 4
+                scanPacket = StreamingProtocolV01.scan2DPacket(
+                    sessionID: sessionID,
+                    frameID: currentFrameID,
+                    timestampNanoseconds: timestampNanoseconds,
+                    depthMap: depthData.depthMap,
+                    confidenceMap: depthData.confidenceMap,
+                    cameraIntrinsics: frame.camera.intrinsics,
+                    cameraImageResolution: frame.camera.imageResolution,
+                    samplingStride: stride
+                )
+                depthStatusText = scanPacket == nil ? "تعذر قراءة العمق" : "متاح — خطوة \(stride)"
+                if scanPacket == nil {
+                    scanFramesSkipped += 1
+                }
+            } else {
+                depthStatusText = "لا توجد sceneDepth"
+                scanFramesSkipped += 1
+            }
+        } else {
+            depthStatusText = "غير مستخدم"
+        }
+
         lastPosition = position
         sendInProgress = true
 
         Task {
             defer { sendInProgress = false }
             do {
-                try await client.send(packet)
+                try await client.send(posePacket)
                 framesSent += 1
-                bytesSent += UInt64(packet.count)
+                bytesSent += UInt64(posePacket.count)
+
+                if let scanPacket {
+                    try await client.send(scanPacket)
+                    scanFramesSent += 1
+                    bytesSent += UInt64(scanPacket.count)
+                }
             } catch {
                 isStreaming = false
                 connectionState = .failed(error.localizedDescription)
@@ -233,9 +297,9 @@ final class ComputerBridgeViewModel: ObservableObject {
                     case .string(let text):
                         lastServerMessage = summarizedServerMessage(text)
                     case .data(let data):
-                        lastServerMessage = "استلم الهاتف \(data.count) بايت من الكمبيوتر."
+                        lastServerMessage = "استلم الجهاز \(data.count) بايت من المستقبل."
                     @unknown default:
-                        lastServerMessage = "استلم الهاتف رسالة غير معروفة."
+                        lastServerMessage = "استلم الجهاز رسالة غير معروفة."
                     }
                 } catch {
                     guard !Task.isCancelled else { return }
@@ -276,7 +340,7 @@ final class ComputerBridgeViewModel: ObservableObject {
            type == "localization_result" {
             let frame = (json["frame_id"] as? NSNumber)?.uint64Value ?? 0
             let status = json["status"] as? String ?? "—"
-            return "رد الكمبيوتر للإطار \(frame): \(status)"
+            return "رد المستقبل للإطار \(frame): \(status)"
         }
 
         if let message = json["message"] as? String {
@@ -296,6 +360,9 @@ final class ComputerBridgeViewModel: ObservableObject {
         }
 
         thermalText = thermalStateText(ProcessInfo.processInfo.thermalState)
+        if streamMode == .scan2D, frame.sceneDepth != nil, !isStreaming {
+            depthStatusText = "LiDAR جاهز"
+        }
     }
 
     private func trackingCode(_ state: ARCamera.TrackingState) -> UInt8 {

@@ -18,6 +18,13 @@ struct ComputerBridgeARViewContainer: UIViewRepresentable {
         configuration.worldAlignment = .gravity
         configuration.environmentTexturing = .none
         configuration.planeDetection = []
+
+        // Read sceneDepth only. We deliberately do not enable scene reconstruction,
+        // meshes, point-cloud rendering, or architectural analysis on the phone.
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics.insert(.sceneDepth)
+        }
+
         arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         return arView
     }
@@ -43,7 +50,7 @@ struct ComputerBridgeARViewContainer: UIViewRepresentable {
         }
 
         func session(_ session: ARSession, didFailWithError error: Error) {
-            // ARKit will normally attempt to recover. The live status remains visible in the UI.
+            // ARKit normally attempts recovery. Tracking state remains visible.
         }
     }
 }
