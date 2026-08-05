@@ -100,6 +100,12 @@ final class UnifiedScanViewModel: ObservableObject {
     @Published var recorderSynchronizeOnFlush: Bool {
         didSet { defaults.set(recorderSynchronizeOnFlush, forKey: Keys.recorderSynchronizeOnFlush) }
     }
+    @Published var keepScreenAwake: Bool {
+        didSet {
+            defaults.set(keepScreenAwake, forKey: Keys.keepScreenAwake)
+            updateIdleTimerPolicy()
+        }
+    }
 
     // MARK: - Live state
 
@@ -149,6 +155,14 @@ final class UnifiedScanViewModel: ObservableObject {
     private var incomingPacketQueue: [Data] = []
     private var processingIncomingQueue = false
     private var coverageCellStore: Set<UnifiedPreviewCell> = []
+    private var pathStore: [UnifiedPreviewPoint] = []
+    private var currentPositionStore = SIMD3<Float>(repeating: 0)
+    private var currentQuaternionStore = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    private var currentSweepStore: UnifiedPreviewSweep?
+    private var interfaceOverlayPresented = false
+    private var scanViewVisible = false
+    private var applicationIsActive = true
+    private var lastStatusTimestamp: TimeInterval = -.greatestFiniteMagnitude
 
     private enum Keys {
         static let role = "unified.role"
@@ -175,6 +189,7 @@ final class UnifiedScanViewModel: ObservableObject {
         static let previewMinimumConfidence = "unified.previewMinimumConfidence"
         static let recorderFlushPackets = "unified.recorderFlushPackets"
         static let recorderSynchronizeOnFlush = "unified.recorderSynchronizeOnFlush"
+        static let keepScreenAwake = "unified.keepScreenAwake"
     }
 
     init() {
@@ -218,6 +233,10 @@ final class UnifiedScanViewModel: ObservableObject {
         let savedFlush = defaults.integer(forKey: Keys.recorderFlushPackets)
         recorderFlushPackets = savedFlush > 0 ? savedFlush : 30
         recorderSynchronizeOnFlush = defaults.bool(forKey: Keys.recorderSynchronizeOnFlush)
+        keepScreenAwake = defaults.object(forKey: Keys.keepScreenAwake) == nil
+            ? true
+            : defaults.bool(forKey: Keys.keepScreenAwake)
+        updateIdleTimerPolicy()
     }
 
     static let fpsChoices = [1, 2, 5, 10, 15, 30]
@@ -257,6 +276,34 @@ final class UnifiedScanViewModel: ObservableObject {
         let bytesPerSample = sendConfidence ? 3 : 2
         let scanBytes = (68 + samples * bytesPerSample) * scanFPS
         return String(format: "Pose %d + Scan %d FPS — نحو %.3f Mbps", poseFPS, scanFPS, Double((poseBytes + scanBytes) * 8) / 1_000_000)
+    }
+
+    // MARK: - Screen and interface lifecycle
+
+    func setScanViewVisible(_ visible: Bool) {
+        scanViewVisible = visible
+        updateIdleTimerPolicy()
+    }
+
+    func setApplicationActive(_ active: Bool) {
+        applicationIsActive = active
+        updateIdleTimerPolicy()
+    }
+
+    func setInterfaceOverlayPresented(_ presented: Bool) {
+        guard interfaceOverlayPresented != presented else { return }
+        interfaceOverlayPresented = presented
+        if !presented {
+            path = pathStore
+            coverageCells = Array(coverageCellStore)
+            currentPosition = currentPositionStore
+            currentQuaternion = currentQuaternionStore
+            currentSweep = currentSweepStore
+        }
+    }
+
+    private func updateIdleTimerPolicy() {
+        UIApplication.shared.isIdleTimerDisabled = keepScreenAwake && scanViewVisible && applicationIsActive
     }
 
     // MARK: - Role and connection lifecycle
@@ -417,7 +464,7 @@ final class UnifiedScanViewModel: ObservableObject {
         sessionState = .recording
         statusMessage = scanMode.implementedInCurrentCaptureCore
             ? "يتم الآن جمع البيانات وحفظها. المعالجة مؤجلة حتى نهاية الجلسة."
-            : "بدأت الجلسة مع تسجيل Pose فقط؛ حمولة هذا الوضع ما زالت تحت التطوير."
+            : "بدأت الجلسة مع تسجيل Pose وDepth المتاحة؛ بناء 3D الكامل والألوان ما زال تحت التطوير."
 
         Task {
             do {
@@ -501,19 +548,26 @@ final class UnifiedScanViewModel: ObservableObject {
     }
 
     func resetLivePreview() {
+        pathStore.removeAll(keepingCapacity: false)
         path.removeAll(keepingCapacity: false)
         coverageCellStore.removeAll(keepingCapacity: false)
         coverageCells.removeAll(keepingCapacity: false)
+        currentSweepStore = nil
         currentSweep = nil
         receiverPoses.removeAll(keepingCapacity: false)
+        currentPositionStore = .zero
+        currentQuaternionStore = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
         currentPosition = .zero
-        currentQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+        currentQuaternion = currentQuaternionStore
     }
 
     // MARK: - AR capture
 
     func handle(frame: ARFrame) {
-        updateARStatus(frame)
+        if !interfaceOverlayPresented, frame.timestamp - lastStatusTimestamp >= 0.5 {
+            lastStatusTimestamp = frame.timestamp
+            updateARStatus(frame)
+        }
         guard role != .receiver, sessionState == .recording else { return }
 
         framesCaptured &+= 1
@@ -521,8 +575,8 @@ final class UnifiedScanViewModel: ObservableObject {
         let scanInterval = 1.0 / Double(max(1, scanFPS))
         let previewInterval = 1.0 / Double(max(1, previewFPS))
         let poseDue = frame.timestamp - lastPoseTimestamp >= poseInterval
-        let scanDue = scanMode == .scan2D && frame.timestamp - lastScanTimestamp >= scanInterval
-        let previewDue = frame.timestamp - lastPreviewTimestamp >= previewInterval
+        let scanDue = scanMode.requiresDepth && frame.timestamp - lastScanTimestamp >= scanInterval
+        let previewDue = !interfaceOverlayPresented && frame.timestamp - lastPreviewTimestamp >= previewInterval
         guard poseDue || scanDue || previewDue else { return }
 
         let thermal = ProcessInfo.processInfo.thermalState
@@ -535,10 +589,11 @@ final class UnifiedScanViewModel: ObservableObject {
         let transform = frame.camera.transform
         let position = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         let quaternion = simd_quatf(transform)
-        currentPosition = position
-        currentQuaternion = quaternion
-
         if previewDue {
+            currentPositionStore = position
+            currentQuaternionStore = quaternion
+            currentPosition = position
+            currentQuaternion = quaternion
             lastPreviewTimestamp = frame.timestamp
             appendPath(position)
         }
@@ -657,12 +712,18 @@ final class UnifiedScanViewModel: ObservableObject {
                 let pose = try StreamingProtocolV01.decodePose(payload)
                 receiverPoses[header.frameID] = pose
                 trimReceiverPoses()
-                currentPosition = pose.position
-                currentQuaternion = pose.quaternion
+                currentPositionStore = pose.position
+                currentQuaternionStore = pose.quaternion
+                if !interfaceOverlayPresented {
+                    currentPosition = pose.position
+                    currentQuaternion = pose.quaternion
+                }
                 appendPath(pose.position)
                 posePackets &+= 1
-                trackingText = pose.trackingState == 2 ? "طبيعي" : pose.trackingState == 1 ? "محدود" : "غير متاح"
-                thermalText = thermalTextForCode(pose.thermalState)
+                if !interfaceOverlayPresented {
+                    trackingText = pose.trackingState == 2 ? "طبيعي" : pose.trackingState == 1 ? "محدود" : "غير متاح"
+                    thermalText = thermalTextForCode(pose.thermalState)
+                }
             case .scan2D:
                 let preview = try StreamingProtocolV01.decodeScanPreview(
                     payload,
@@ -788,11 +849,14 @@ final class UnifiedScanViewModel: ObservableObject {
 
     private func appendPath(_ position: SIMD3<Float>) {
         let point = UnifiedPreviewPoint(x: position.x, z: position.z)
-        if let last = path.last {
+        if let last = pathStore.last {
             let distance = simd_length(SIMD2<Float>(point.x - last.x, point.z - last.z))
             if distance < 0.01 { return }
         }
-        path.append(point)
+        pathStore.append(point)
+        if !interfaceOverlayPresented {
+            path.append(point)
+        }
     }
 
     private func appendCoverage(scan: UnifiedDecodedScanPreview, pose: UnifiedDecodedPose) {
@@ -894,9 +958,14 @@ final class UnifiedScanViewModel: ObservableObject {
 
     private func updateCoverage(origin: UnifiedPreviewPoint, endpoints: [UnifiedPreviewPoint]) {
         guard endpoints.count >= 2 else { return }
-        currentSweep = UnifiedPreviewSweep(points: [origin] + endpoints)
+        let sweep = UnifiedPreviewSweep(points: [origin] + endpoints)
+        currentSweepStore = sweep
+        if !interfaceOverlayPresented {
+            currentSweep = sweep
+        }
 
         let cellSize = max(0.05, previewCellSize)
+        var newlyAdded: [UnifiedPreviewCell] = []
         for endpoint in endpoints {
             let dx = endpoint.x - origin.x
             let dz = endpoint.z - origin.z
@@ -911,9 +980,12 @@ final class UnifiedScanViewModel: ObservableObject {
                     zIndex: Int(floor(z / cellSize))
                 )
                 if coverageCellStore.insert(cell).inserted {
-                    coverageCells.append(cell)
+                    newlyAdded.append(cell)
                 }
             }
+        }
+        if !interfaceOverlayPresented, !newlyAdded.isEmpty {
+            coverageCells.append(contentsOf: newlyAdded)
         }
     }
 
@@ -945,15 +1017,18 @@ final class UnifiedScanViewModel: ObservableObject {
         }
         if !scanMode.implementedInCurrentCaptureCore {
             return UnifiedCapabilityWarning(
-                title: "الوضع مجهز ولم يكتمل بعد",
-                message: "يمكن بدء الجلسة، لكن الإصدار الحالي يسجل Pose فقط لهذا الوضع. لن يدعي التطبيق أنه سجّل 3D قبل إضافة حمولتها الفعلية.",
-                continueTitle: "بدء تجربة Pose"
+                title: "الوضع ثلاثي الأبعاد تحت التطوير",
+                message: scanMode == .color3D
+                    ? "سيتم تسجيل Pose وDepth المتاحة الآن، لكن صور RGB وربط الألوان بالنموذج لم تكتمل بعد. البيانات المحفوظة لن تُحذف ويمكنك بدء التجربة."
+                    : "سيتم تسجيل Pose وDepth المتاحة الآن، لكن بناء النموذج ثلاثي الأبعاد النهائي لم يكتمل بعد. البيانات المحفوظة لن تُحذف ويمكنك بدء التجربة.",
+                continueTitle: "بدء التجربة"
             )
         }
         return nil
     }
 
     func shutdown() {
+        setScanViewVisible(false)
         if sessionState == .recording || sessionState == .paused {
             finishSession()
         }
@@ -1106,7 +1181,8 @@ final class UnifiedScanViewModel: ObservableObject {
             "preview_maximum_depth_m": previewMaximumDepth,
             "preview_minimum_confidence": previewMinimumConfidence,
             "recorder_flush_packets": recorderFlushPackets,
-            "recorder_synchronize_on_flush": recorderSynchronizeOnFlush
+            "recorder_synchronize_on_flush": recorderSynchronizeOnFlush,
+            "keep_screen_awake": keepScreenAwake
         ]
     }
 

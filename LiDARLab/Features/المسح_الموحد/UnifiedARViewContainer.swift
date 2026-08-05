@@ -1,4 +1,5 @@
 import ARKit
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -32,6 +33,7 @@ struct UnifiedARViewContainer: UIViewRepresentable {
         var model: UnifiedScanViewModel
         private let session = ARSession()
         private var configuredMode: UnifiedScanMode?
+        nonisolated private let frameGate = UnifiedARFrameGate()
 
         init(model: UnifiedScanViewModel) {
             self.model = model
@@ -57,7 +59,9 @@ struct UnifiedARViewContainer: UIViewRepresentable {
         }
 
         nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
-            Task { @MainActor [weak self] in
+            guard frameGate.tryEnter() else { return }
+            Task { @MainActor [weak self, frameGate] in
+                defer { frameGate.leave() }
                 self?.model.handle(frame: frame)
             }
         }
@@ -80,5 +84,24 @@ struct UnifiedARViewContainer: UIViewRepresentable {
             // No scene reconstruction, mesh, or live architectural processing.
             return configuration
         }
+    }
+}
+
+private final class UnifiedARFrameGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var occupied = false
+
+    func tryEnter() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !occupied else { return false }
+        occupied = true
+        return true
+    }
+
+    func leave() {
+        lock.lock()
+        occupied = false
+        lock.unlock()
     }
 }

@@ -11,6 +11,7 @@ struct UnifiedScanView: View {
     @State private var showCoverage = true
     @State private var showCurrentRays = true
     @State private var showDevice = true
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -66,41 +67,56 @@ struct UnifiedScanView: View {
         .fullScreenCover(isPresented: $showStats) {
             UnifiedScanStatsView(model: model)
         }
-        .sheet(isPresented: $showRolePicker) {
+        .fullScreenCover(isPresented: $showRolePicker) {
             UnifiedRolePickerSheet(selectedRole: model.role) { selected in
                 model.role = selected
                 showRolePicker = false
             } onCancel: {
                 showRolePicker = false
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showModePicker) {
+        .fullScreenCover(isPresented: $showModePicker) {
             UnifiedModePickerSheet(selectedMode: model.scanMode) { selected in
                 model.scanMode = selected
                 showModePicker = false
             } onCancel: {
                 showModePicker = false
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
-        .alert(item: $model.capabilityWarning) { warning in
-            Alert(
-                title: Text(warning.title),
-                message: Text(warning.message),
-                primaryButton: .default(Text(warning.continueTitle)) {
-                    model.continueAfterCapabilityWarning()
-                },
-                secondaryButton: .cancel(Text("إلغاء")) {
-                    model.cancelCapabilityWarning()
-                }
+        .fullScreenCover(item: $model.capabilityWarning) { warning in
+            UnifiedCapabilityWarningScreen(
+                warning: warning,
+                onContinue: { model.continueAfterCapabilityWarning() },
+                onCancel: { model.cancelCapabilityWarning() }
             )
+            .interactiveDismissDisabled(true)
         }
-        .onAppear { model.applyRoleChange() }
+        .onAppear {
+            model.setScanViewVisible(true)
+            model.setApplicationActive(scenePhase == .active)
+            model.applyRoleChange()
+            updateOverlayState()
+        }
         .onChange(of: model.role) { _, _ in model.applyRoleChange() }
-        .onDisappear { model.shutdown() }
+        .onChange(of: scenePhase) { _, phase in
+            model.setApplicationActive(phase == .active)
+        }
+        .onChange(of: showSettings) { _, _ in updateOverlayState() }
+        .onChange(of: showStats) { _, _ in updateOverlayState() }
+        .onChange(of: showRolePicker) { _, _ in updateOverlayState() }
+        .onChange(of: showModePicker) { _, _ in updateOverlayState() }
+        .onChange(of: model.capabilityWarning?.id) { _, _ in updateOverlayState() }
+        .onDisappear {
+            model.setScanViewVisible(false)
+            model.setInterfaceOverlayPresented(false)
+            model.shutdown()
+        }
+    }
+
+    private func updateOverlayState() {
+        model.setInterfaceOverlayPresented(
+            showSettings || showStats || showRolePicker || showModePicker || model.capabilityWarning != nil
+        )
     }
 
     private var compactToolbar: some View {
@@ -236,6 +252,52 @@ struct UnifiedScanView: View {
     }
 }
 
+private struct UnifiedCapabilityWarningScreen: View {
+    let warning: UnifiedCapabilityWarning
+    let onContinue: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 22) {
+                Spacer()
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 54))
+                    .foregroundStyle(.orange)
+                Text(warning.title)
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                Text(warning.message)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(5)
+                    .padding(.horizontal, 24)
+                Spacer()
+                VStack(spacing: 12) {
+                    Button(action: onContinue) {
+                        Text(warning.continueTitle)
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button(action: onCancel) {
+                        Text("إلغاء")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+            }
+            .navigationTitle("تأكيد التشغيل")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
 private struct CompactMenuLabel: View {
     let title: String
     let image: String
@@ -317,7 +379,7 @@ private struct UnifiedModePickerSheet: View {
                                 Text(mode.title)
                                     .font(.body.weight(.semibold))
                                 if !mode.implementedInCurrentCaptureCore {
-                                    Text("قابل للتجربة — حمولة المسح ما زالت تحت التطوير")
+                                    Text("قابل للتجربة — يسجل Pose وDepth، وبناء 3D النهائي تحت التطوير")
                                         .font(.caption)
                                         .foregroundStyle(.orange)
                                 }

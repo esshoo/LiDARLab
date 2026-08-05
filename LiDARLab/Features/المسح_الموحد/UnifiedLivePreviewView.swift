@@ -197,10 +197,16 @@ struct UnifiedLivePreviewView: View {
     private func drawDevice(context: inout GraphicsContext, mapper: PreviewMapper) {
         let position = UnifiedPreviewPoint(x: currentPosition.x, z: currentPosition.z)
         let center = mapper.point(position)
-        let worldForward3 = currentQuaternion.act(SIMD3<Float>(0, 0, -1))
+        let worldForward3 = simd_normalize(currentQuaternion.act(SIMD3<Float>(0, 0, -1)))
+        let horizontalMagnitude = simd_length(SIMD2<Float>(worldForward3.x, worldForward3.z))
         var forward = SIMD2<Float>(worldForward3.x, worldForward3.z)
+        if horizontalMagnitude < 0.05 {
+            let worldUp3 = currentQuaternion.act(SIMD3<Float>(0, 1, 0))
+            forward = SIMD2<Float>(worldUp3.x, worldUp3.z)
+        }
         if simd_length_squared(forward) < 0.0001 { forward = SIMD2<Float>(0, -1) }
         forward = simd_normalize(forward)
+        let pitchDegrees = asin(max(-1, min(1, worldForward3.y))) * 180 / Float.pi
 
         if deviceStyle == .arrow {
             let endWorld = SIMD2<Float>(position.x, position.z) + forward * 0.55
@@ -214,7 +220,13 @@ struct UnifiedLivePreviewView: View {
         }
 
         if deviceStyle == .phoneAndFrustum {
-            drawFrustum(context: &context, mapper: mapper, position: position, forward: forward)
+            drawFrustum(
+                context: &context,
+                mapper: mapper,
+                position: position,
+                forward: forward,
+                horizontalMagnitude: horizontalMagnitude
+            )
         }
 
         let directionPoint = mapper.point(
@@ -230,16 +242,42 @@ struct UnifiedLivePreviewView: View {
 
         let lens = CGPoint(x: 0, y: -9).applying(transform)
         context.fill(Path(ellipseIn: CGRect(x: lens.x - 1.6, y: lens.y - 1.6, width: 3.2, height: 3.2)), with: .color(.black.opacity(0.85)))
+        drawPitchBadge(context: &context, center: center, pitchDegrees: pitchDegrees)
+    }
+
+    private func drawPitchBadge(
+        context: inout GraphicsContext,
+        center: CGPoint,
+        pitchDegrees: Float
+    ) {
+        let title: String
+        let symbol: String
+        if pitchDegrees > 25 {
+            title = "السقف"
+            symbol = "↑"
+        } else if pitchDegrees < -25 {
+            title = "الأرض"
+            symbol = "↓"
+        } else {
+            title = "أمام"
+            symbol = "→"
+        }
+        let text = Text("\(symbol) \(title) \(Int(pitchDegrees.rounded()))°")
+            .font(.caption2.bold())
+            .foregroundColor(.orange)
+        context.draw(text, at: CGPoint(x: center.x + 40, y: center.y - 28), anchor: .center)
     }
 
     private func drawFrustum(
         context: inout GraphicsContext,
         mapper: PreviewMapper,
         position: UnifiedPreviewPoint,
-        forward: SIMD2<Float>
+        forward: SIMD2<Float>,
+        horizontalMagnitude: Float
     ) {
         let halfAngle = Float.pi / 6
-        let distance: Float = max(0.8, min(2.0, mapper.worldWidth * 0.10))
+        let baseDistance: Float = max(0.8, min(2.0, mapper.worldWidth * 0.10))
+        let distance = baseDistance * max(0.12, horizontalMagnitude)
         let left = rotate(forward, radians: -halfAngle) * distance
         let right = rotate(forward, radians: halfAngle) * distance
         let origin = mapper.point(position)

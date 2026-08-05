@@ -298,6 +298,13 @@ struct UnifiedScanSettingsView: View {
 
     @ViewBuilder
     private var recordingSettings: some View {
+        SwiftUI.Section("الشاشة والطاقة") {
+            Toggle("إبقاء الشاشة مضيئة داخل شاشة المسح", isOn: $draft.keepScreenAwake)
+            Text("عند تفعيل الخيار يمنع التطبيق القفل التلقائي أثناء فتح شاشة المسح. يعود مؤقت قفل الشاشة لطبيعته فور الخروج من الشاشة أو انتقال التطبيق إلى الخلفية.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
         SwiftUI.Section("حفظ الجلسة") {
             Toggle("حفظ نسخة محلية أثناء الإرسال", isOn: $draft.saveLocalCopyWhenSending)
                 .disabled(draft.role != .sender)
@@ -368,6 +375,7 @@ struct UnifiedScanSettingsView: View {
         model.previewMinimumConfidence = draft.previewMinimumConfidence
         model.recorderFlushPackets = draft.recorderFlushPackets
         model.recorderSynchronizeOnFlush = draft.recorderSynchronizeOnFlush
+        model.keepScreenAwake = draft.keepScreenAwake
 
         showGrid = draft.showGrid
         showPath = draft.showPath
@@ -404,6 +412,7 @@ private struct UnifiedScanSettingsDraft {
     var previewMinimumConfidence: Int
     var recorderFlushPackets: Int
     var recorderSynchronizeOnFlush: Bool
+    var keepScreenAwake: Bool
     var showGrid: Bool
     var showPath: Bool
     var showCoverage: Bool
@@ -443,6 +452,7 @@ private struct UnifiedScanSettingsDraft {
         previewMinimumConfidence = model.previewMinimumConfidence
         recorderFlushPackets = model.recorderFlushPackets
         recorderSynchronizeOnFlush = model.recorderSynchronizeOnFlush
+        keepScreenAwake = model.keepScreenAwake
         self.showGrid = showGrid
         self.showPath = showPath
         self.showCoverage = showCoverage
