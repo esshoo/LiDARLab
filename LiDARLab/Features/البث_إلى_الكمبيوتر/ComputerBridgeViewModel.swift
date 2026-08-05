@@ -27,6 +27,22 @@ final class ComputerBridgeViewModel: ObservableObject {
         }
     }
 
+    enum ThermalPolicy: String, CaseIterable, Identifiable {
+        case warnOnly
+        case stopDepthAtCritical
+        case stopAllAtCritical
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .warnOnly: "تنبيه فقط — لا تغيير تلقائي"
+            case .stopDepthAtCritical: "إيقاف Depth عند الحرارة الحرجة"
+            case .stopAllAtCritical: "إيقاف كل الإرسال عند الحرارة الحرجة"
+            }
+        }
+    }
+
     @Published var serverIP: String {
         didSet { UserDefaults.standard.set(serverIP, forKey: Self.serverIPKey) }
     }
@@ -38,6 +54,15 @@ final class ComputerBridgeViewModel: ObservableObject {
     }
     @Published var streamMode: StreamMode {
         didSet { UserDefaults.standard.set(streamMode.rawValue, forKey: Self.streamModeKey) }
+    }
+    @Published var samplingStride: Int {
+        didSet { UserDefaults.standard.set(samplingStride, forKey: Self.samplingStrideKey) }
+    }
+    @Published var sendConfidence: Bool {
+        didSet { UserDefaults.standard.set(sendConfidence, forKey: Self.sendConfidenceKey) }
+    }
+    @Published var thermalPolicy: ThermalPolicy {
+        didSet { UserDefaults.standard.set(thermalPolicy.rawValue, forKey: Self.thermalPolicyKey) }
     }
 
     @Published private(set) var connectionState: ConnectionState = .disconnected
@@ -58,6 +83,9 @@ final class ComputerBridgeViewModel: ObservableObject {
     private static let serverPortKey = "computerBridge.serverPort"
     private static let targetFPSKey = "computerBridge.targetFPS"
     private static let streamModeKey = "computerBridge.streamMode"
+    private static let samplingStrideKey = "computerBridge.samplingStride"
+    private static let sendConfidenceKey = "computerBridge.sendConfidence"
+    private static let thermalPolicyKey = "computerBridge.thermalPolicy"
 
     private let client = ComputerBridgeWebSocketClient()
     private var sessionID = UInt64.random(in: 1...UInt64.max)
@@ -72,10 +100,22 @@ final class ComputerBridgeViewModel: ObservableObject {
         serverPort = UserDefaults.standard.string(forKey: Self.serverPortKey) ?? "8766"
 
         let savedFPS = UserDefaults.standard.integer(forKey: Self.targetFPSKey)
-        targetFPS = [5, 10, 15, 30].contains(savedFPS) ? savedFPS : 10
+        targetFPS = [1, 2, 5, 10, 15, 30].contains(savedFPS) ? savedFPS : 10
 
         let savedMode = UserDefaults.standard.string(forKey: Self.streamModeKey)
         streamMode = StreamMode(rawValue: savedMode ?? "") ?? .scan2D
+
+        let savedStride = UserDefaults.standard.integer(forKey: Self.samplingStrideKey)
+        samplingStride = [2, 4, 6, 8, 12].contains(savedStride) ? savedStride : 6
+
+        if UserDefaults.standard.object(forKey: Self.sendConfidenceKey) == nil {
+            sendConfidence = true
+        } else {
+            sendConfidence = UserDefaults.standard.bool(forKey: Self.sendConfidenceKey)
+        }
+
+        let savedThermalPolicy = UserDefaults.standard.string(forKey: Self.thermalPolicyKey)
+        thermalPolicy = ThermalPolicy(rawValue: savedThermalPolicy ?? "") ?? .warnOnly
     }
 
     var connectionTitle: String {
@@ -91,6 +131,10 @@ final class ComputerBridgeViewModel: ObservableObject {
         connectionState == .connected
     }
 
+    var settingsLocked: Bool {
+        isStreaming
+    }
+
     var totalSentText: String {
         let bytes = Double(bytesSent)
         if bytes >= 1_000_000 {
@@ -104,6 +148,27 @@ final class ComputerBridgeViewModel: ObservableObject {
 
     var positionText: String {
         String(format: "X %.3f  Y %.3f  Z %.3f", lastPosition.x, lastPosition.y, lastPosition.z)
+    }
+
+    var estimatedTransferText: String {
+        guard streamMode == .scan2D else {
+            let mbps = Double(72 * targetFPS * 8) / 1_000_000
+            return String(format: "تقدير الموقع فقط: %.3f Mbps", mbps)
+        }
+
+        let sourceWidth = 256
+        let sourceHeight = 192
+        let gridWidth = (sourceWidth + samplingStride - 1) / samplingStride
+        let gridHeight = (sourceHeight + samplingStride - 1) / samplingStride
+        let sampleCount = gridWidth * gridHeight
+        let bytesPerSample = sendConfidence ? 3 : 2
+        let bytesPerFrame = 72 + 68 + sampleCount * bytesPerSample
+        let mbps = Double(bytesPerFrame * targetFPS * 8) / 1_000_000
+        return String(
+            format: "تقدير تقريبي: %d عينة/Frame — %.3f Mbps",
+            sampleCount,
+            mbps
+        )
     }
 
     func connect() {
@@ -140,7 +205,7 @@ final class ComputerBridgeViewModel: ObservableObject {
                 try await client.send(hello)
                 bytesSent += UInt64(hello.count)
                 connectionState = .connected
-                lastServerMessage = "تم تعريف الجهاز. اختر بدء الإرسال."
+                lastServerMessage = "تم تعريف الجهاز. راجع إعدادات النقل ثم ابدأ الإرسال."
                 startReceiveLoop()
                 startPingLoop()
             } catch {
@@ -181,8 +246,8 @@ final class ComputerBridgeViewModel: ObservableObject {
             lastSentFrameTimestamp = -.greatestFiniteMagnitude
             isStreaming = true
             lastServerMessage = streamMode == .scan2D
-                ? "بدأ إرسال الموقع وشبكة العمق للمسح الثنائي."
-                : "بدأ إرسال موقع الجهاز فقط."
+                ? "بدأ الإرسال بالإعدادات المختارة: \(targetFPS) FPS، خطوة \(samplingStride)."
+                : "بدأ إرسال موقع الجهاز فقط بمعدل \(targetFPS) FPS."
         }
     }
 
@@ -193,6 +258,14 @@ final class ComputerBridgeViewModel: ObservableObject {
         let minimumInterval = 1.0 / Double(max(targetFPS, 1))
         guard frame.timestamp - lastSentFrameTimestamp >= minimumInterval else { return }
         lastSentFrameTimestamp = frame.timestamp
+
+        let currentThermalState = ProcessInfo.processInfo.thermalState
+        if currentThermalState == .critical, thermalPolicy == .stopAllAtCritical {
+            framesSkipped += 1
+            if streamMode == .scan2D { scanFramesSkipped += 1 }
+            depthStatusText = "الإرسال متوقف حسب سياسة الحرارة المختارة"
+            return
+        }
 
         guard !sendInProgress else {
             framesSkipped += 1
@@ -216,17 +289,15 @@ final class ComputerBridgeViewModel: ObservableObject {
             position: position,
             quaternion: quaternion,
             trackingState: trackingCode(frame.camera.trackingState),
-            thermalState: thermalCode(ProcessInfo.processInfo.thermalState)
+            thermalState: thermalCode(currentThermalState)
         )
 
         var scanPacket: Data?
         if streamMode == .scan2D {
-            let thermalState = ProcessInfo.processInfo.thermalState
-            if thermalState == .critical {
-                depthStatusText = "متوقف لحماية الجهاز"
+            if currentThermalState == .critical, thermalPolicy == .stopDepthAtCritical {
+                depthStatusText = "Depth متوقف حسب سياسة الحرارة المختارة"
                 scanFramesSkipped += 1
             } else if let depthData = frame.sceneDepth {
-                let stride = thermalState == .serious ? 6 : 4
                 scanPacket = StreamingProtocolV01.scan2DPacket(
                     sessionID: sessionID,
                     frameID: currentFrameID,
@@ -235,9 +306,13 @@ final class ComputerBridgeViewModel: ObservableObject {
                     confidenceMap: depthData.confidenceMap,
                     cameraIntrinsics: frame.camera.intrinsics,
                     cameraImageResolution: frame.camera.imageResolution,
-                    samplingStride: stride
+                    samplingStride: samplingStride,
+                    includeConfidence: sendConfidence
                 )
-                depthStatusText = scanPacket == nil ? "تعذر قراءة العمق" : "متاح — خطوة \(stride)"
+                let confidenceText = sendConfidence ? "مع Confidence" : "بدون Confidence"
+                depthStatusText = scanPacket == nil
+                    ? "تعذر قراءة العمق"
+                    : "خطوة \(samplingStride) — \(confidenceText)"
                 if scanPacket == nil {
                     scanFramesSkipped += 1
                 }
@@ -361,7 +436,7 @@ final class ComputerBridgeViewModel: ObservableObject {
 
         thermalText = thermalStateText(ProcessInfo.processInfo.thermalState)
         if streamMode == .scan2D, frame.sceneDepth != nil, !isStreaming {
-            depthStatusText = "LiDAR جاهز"
+            depthStatusText = "LiDAR جاهز — الإعدادات يدوية"
         }
     }
 

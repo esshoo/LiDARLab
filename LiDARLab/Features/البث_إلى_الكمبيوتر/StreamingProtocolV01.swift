@@ -5,6 +5,7 @@ import simd
 
 private let streamingProtocolMagic = Data([0x33, 0x45, 0x4C, 0x44]) // "3ELD"
 private let streamingProtocolVersion: UInt16 = 1
+private let scan2DConfidenceIncludedFlag: UInt32 = 1 << 0
 
 enum StreamingMessageType: UInt16 {
     case hello = 1
@@ -64,7 +65,7 @@ enum StreamingProtocolV01 {
             "device_model": deviceModel,
             "system_version": systemVersion,
             "app_feature": "البث إلى الكمبيوتر",
-            "stream_capabilities": "pose,scan2d"
+            "stream_capabilities": "pose,scan2d,optional_confidence"
         ]
         let payload = try JSONSerialization.data(withJSONObject: object, options: [])
         return packet(
@@ -117,7 +118,8 @@ enum StreamingProtocolV01 {
         confidenceMap: CVPixelBuffer?,
         cameraIntrinsics: simd_float3x3,
         cameraImageResolution: CGSize,
-        samplingStride: Int
+        samplingStride: Int,
+        includeConfidence: Bool
     ) -> Data? {
         let sourceWidth = CVPixelBufferGetWidth(depthMap)
         let sourceHeight = CVPixelBufferGetHeight(depthMap)
@@ -154,7 +156,8 @@ enum StreamingProtocolV01 {
         var confidenceHeight = 0
         var confidenceBytesPerRow = 0
 
-        if let confidenceMap,
+        if includeConfidence,
+           let confidenceMap,
            CVPixelBufferLockBaseAddress(confidenceMap, .readOnly) == kCVReturnSuccess {
             confidenceLocked = true
             confidenceBase = CVPixelBufferGetBaseAddress(confidenceMap)
@@ -168,6 +171,7 @@ enum StreamingProtocolV01 {
             }
         }
 
+        let confidenceIncluded = includeConfidence && confidenceBase != nil
         let scaleX = Float(sourceWidth) / Float(cameraImageResolution.width)
         let scaleY = Float(sourceHeight) / Float(cameraImageResolution.height)
         let fx = cameraIntrinsics.columns.0.x * scaleX
@@ -176,9 +180,9 @@ enum StreamingProtocolV01 {
         let cy = cameraIntrinsics.columns.2.y * scaleY
 
         let depthBytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
-        var payload = Data(capacity: 28 + sampleCount * 3)
+        let bytesPerSample = confidenceIncluded ? 3 : 2
+        var payload = Data(capacity: 28 + sampleCount * bytesPerSample)
 
-        // Header: source W/H, sampled grid W/H, stride X/Y, scaled intrinsics.
         payload.appendStreamingLittleEndian(UInt16(sourceWidth))
         payload.appendStreamingLittleEndian(UInt16(sourceHeight))
         payload.appendStreamingLittleEndian(UInt16(gridWidth))
@@ -190,7 +194,7 @@ enum StreamingProtocolV01 {
         payload.appendStreamingFloat32(cx)
         payload.appendStreamingFloat32(cy)
 
-        var confidenceValues = Data(capacity: sampleCount)
+        var confidenceValues = Data(capacity: confidenceIncluded ? sampleCount : 0)
 
         for gridY in 0..<gridHeight {
             let sourceY = min(gridY * stride, sourceHeight - 1)
@@ -211,7 +215,8 @@ enum StreamingProtocolV01 {
                 }
                 payload.appendStreamingLittleEndian(millimeters)
 
-                if let confidenceBase,
+                if confidenceIncluded,
+                   let confidenceBase,
                    confidenceWidth > 0,
                    confidenceHeight > 0 {
                     let confidenceX = min(
@@ -226,21 +231,22 @@ enum StreamingProtocolV01 {
                         .advanced(by: confidenceY * confidenceBytesPerRow)
                         .assumingMemoryBound(to: UInt8.self)
                     confidenceValues.append(row[confidenceX])
-                } else {
-                    // Treat missing confidence as usable, without claiming high confidence.
-                    confidenceValues.append(UInt8(1))
                 }
             }
         }
 
-        payload.append(confidenceValues)
+        if confidenceIncluded {
+            payload.append(confidenceValues)
+        }
 
         return packet(
             type: .scan2D,
             sessionID: sessionID,
             frameID: frameID,
             timestampNanoseconds: timestampNanoseconds,
-            payload: payload
+            payload: payload,
+            flags: confidenceIncluded ? scan2DConfidenceIncludedFlag : 0
         )
     }
+
 }

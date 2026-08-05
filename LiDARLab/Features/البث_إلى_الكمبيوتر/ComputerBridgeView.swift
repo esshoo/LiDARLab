@@ -3,6 +3,7 @@ import SwiftUI
 struct ComputerBridgeView: View {
     @StateObject private var model = ComputerBridgeViewModel()
     @FocusState private var focusedField: Field?
+    @State private var showTransferSettings = true
 
     private enum Field {
         case ip
@@ -24,7 +25,7 @@ struct ComputerBridgeView: View {
 
             VStack(spacing: 12) {
                 statusPanel
-                Spacer(minLength: 72)
+                Spacer(minLength: 60)
                 connectionPanel
             }
             .padding(.horizontal, 12)
@@ -110,19 +111,71 @@ struct ComputerBridgeView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .disabled(model.isStreaming)
+                .disabled(model.settingsLocked)
 
-                Picker("معدل الإرسال", selection: $model.targetFPS) {
-                    Text("5 FPS").tag(5)
-                    Text("10 FPS").tag(10)
-                    Text("15 FPS").tag(15)
-                    Text("30 FPS").tag(30)
+                DisclosureGroup("إعدادات نقل البيانات", isExpanded: $showTransferSettings) {
+                    VStack(spacing: 10) {
+                        HStack {
+                            Text("معدل الإرسال")
+                            Spacer()
+                            Picker("معدل الإرسال", selection: $model.targetFPS) {
+                                ForEach([1, 2, 5, 10, 15, 30], id: \.self) { fps in
+                                    Text("\(fps) FPS").tag(fps)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
+
+                        if model.streamMode == .scan2D {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("خطوة أخذ عينات Depth")
+                                    Text("رقم أصغر = بيانات أكثر وتفاصيل أعلى")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Picker("خطوة العينات", selection: $model.samplingStride) {
+                                    ForEach([2, 4, 6, 8, 12], id: \.self) { stride in
+                                        Text("\(stride)").tag(stride)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+
+                            Toggle("إرسال Confidence Map", isOn: $model.sendConfidence)
+
+                            HStack {
+                                Text("سياسة الحرارة")
+                                Spacer()
+                                Picker("سياسة الحرارة", selection: $model.thermalPolicy) {
+                                    ForEach(ComputerBridgeViewModel.ThermalPolicy.allCases) { policy in
+                                        Text(policy.title).tag(policy)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+                        }
+
+                        Label(model.estimatedTransferText, systemImage: "chart.bar.doc.horizontal")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if model.settingsLocked {
+                            Label("أوقف الإرسال لتغيير إعدادات النقل.", systemImage: "lock.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .padding(.top, 8)
+                    .disabled(model.settingsLocked)
                 }
-                .pickerStyle(.segmented)
 
                 if model.streamMode == .scan2D {
                     Label(
-                        "يُرسل الهاتف شبكة عمق مخففة فقط. بناء النقاط وخريطة X/Z يتم على المستقبل.",
+                        "الهاتف يرسل Pose وشبكة Depth حسب اختياراتك فقط. التنظيف واستخراج الحوائط يتمان على المستقبل.",
                         systemImage: "square.grid.3x3"
                     )
                     .font(.caption)
@@ -176,7 +229,7 @@ struct ComputerBridgeView: View {
             .padding(13)
         }
         .scrollIndicators(.hidden)
-        .frame(maxHeight: 410)
+        .frame(maxHeight: 520)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
