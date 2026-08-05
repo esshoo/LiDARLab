@@ -4,9 +4,12 @@ struct UnifiedScanView: View {
     @StateObject private var model = UnifiedScanViewModel()
     @State private var showSettings = false
     @State private var showStats = false
+    @State private var showRolePicker = false
+    @State private var showModePicker = false
     @State private var showGrid = true
     @State private var showPath = true
     @State private var showCoverage = true
+    @State private var showCurrentRays = true
     @State private var showDevice = true
 
     var body: some View {
@@ -16,6 +19,7 @@ struct UnifiedScanView: View {
                     .frame(width: 1, height: 1)
                     .opacity(0.001)
                     .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
 
             VStack(spacing: 10) {
@@ -23,15 +27,22 @@ struct UnifiedScanView: View {
 
                 UnifiedLivePreviewView(
                     path: model.path,
-                    sweeps: model.coverageSweeps,
+                    coverageCells: model.coverageCells,
+                    currentSweep: model.currentSweep,
                     currentPosition: model.currentPosition,
                     currentQuaternion: model.currentQuaternion,
+                    coverageCellSize: model.previewCellSize,
+                    coverageStyle: model.coveragePreviewStyle,
+                    pathStyle: model.pathPreviewStyle,
+                    deviceStyle: model.devicePreviewStyle,
                     showGrid: showGrid,
                     showPath: showPath,
                     showCoverage: showCoverage,
+                    showCurrentRays: showCurrentRays,
                     showDevice: showDevice
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
 
                 statusStrip
                 controlBar
@@ -42,18 +53,38 @@ struct UnifiedScanView: View {
         .navigationTitle("المسح الموحد")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .sheet(isPresented: $showSettings) {
+        .fullScreenCover(isPresented: $showSettings) {
             UnifiedScanSettingsView(
                 model: model,
                 showGrid: $showGrid,
                 showPath: $showPath,
                 showCoverage: $showCoverage,
+                showCurrentRays: $showCurrentRays,
                 showDevice: $showDevice
             )
         }
-        .sheet(isPresented: $showStats) {
+        .fullScreenCover(isPresented: $showStats) {
             UnifiedScanStatsView(model: model)
-                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showRolePicker) {
+            UnifiedRolePickerSheet(selectedRole: model.role) { selected in
+                model.role = selected
+                showRolePicker = false
+            } onCancel: {
+                showRolePicker = false
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showModePicker) {
+            UnifiedModePickerSheet(selectedMode: model.scanMode) { selected in
+                model.scanMode = selected
+                showModePicker = false
+            } onCancel: {
+                showModePicker = false
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .alert(item: $model.capabilityWarning) { warning in
             Alert(
@@ -74,49 +105,40 @@ struct UnifiedScanView: View {
 
     private var compactToolbar: some View {
         HStack(spacing: 8) {
-            Menu {
-                ForEach(UnifiedDeviceRole.allCases) { role in
-                    Button {
-                        model.role = role
-                    } label: {
-                        Label(role.title, systemImage: role.systemImage)
-                    }
-                }
+            Button {
+                showRolePicker = true
             } label: {
                 CompactMenuLabel(title: model.role.shortTitle, image: model.role.systemImage)
             }
+            .buttonStyle(.plain)
             .disabled(model.settingsLocked)
 
-            Menu {
-                ForEach(UnifiedScanMode.allCases) { mode in
-                    Button {
-                        model.scanMode = mode
-                    } label: {
-                        HStack {
-                            Label(mode.title, systemImage: mode.systemImage)
-                            if !mode.implementedInCurrentCaptureCore { Text("— تجريبي") }
-                        }
-                    }
-                }
+            Button {
+                showModePicker = true
             } label: {
                 CompactMenuLabel(title: model.scanMode.title, image: model.scanMode.systemImage)
             }
+            .buttonStyle(.plain)
             .disabled(model.settingsLocked)
 
             Spacer(minLength: 0)
 
             Button { showStats = true } label: {
                 Image(systemName: "chart.bar.xaxis")
-                    .frame(width: 34, height: 34)
+                    .frame(width: 40, height: 40)
                     .background(.thinMaterial, in: Circle())
             }
+            .buttonStyle(.plain)
+            .contentShape(Circle())
             .accessibilityLabel("الإحصائيات")
 
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
-                    .frame(width: 34, height: 34)
+                    .frame(width: 40, height: 40)
                     .background(.thinMaterial, in: Circle())
             }
+            .buttonStyle(.plain)
+            .contentShape(Circle())
             .accessibilityLabel("الإعدادات")
         }
         .font(.subheadline.weight(.semibold))
@@ -170,7 +192,9 @@ struct UnifiedScanView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.settingsLocked)
-            } else if model.role == .receiver, model.connectionState != .listening, model.connectionState != .connected {
+            } else if model.role == .receiver,
+                      model.connectionState != .listening,
+                      model.connectionState != .connected {
                 Button { model.startReceiver() } label: {
                     Label("استقبال", systemImage: "antenna.radiowaves.left.and.right")
                 }
@@ -222,8 +246,101 @@ private struct CompactMenuLabel: View {
             Text(title).lineLimit(1)
             Image(systemName: "chevron.down").font(.caption2)
         }
-        .padding(.horizontal, 9)
-        .frame(height: 34)
+        .padding(.horizontal, 10)
+        .frame(minWidth: 78, minHeight: 40)
         .background(.thinMaterial, in: Capsule())
+        .contentShape(Capsule())
+    }
+}
+
+private struct UnifiedRolePickerSheet: View {
+    let selectedRole: UnifiedDeviceRole
+    let onSelect: (UnifiedDeviceRole) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(UnifiedDeviceRole.allCases) { role in
+                    Button {
+                        onSelect(role)
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: role.systemImage)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(role.title)
+                                    .font(.body.weight(.semibold))
+                                Text(role.shortTitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if role == selectedRole {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .navigationTitle("اختيار دور الجهاز")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء", action: onCancel)
+                }
+            }
+        }
+    }
+}
+
+private struct UnifiedModePickerSheet: View {
+    let selectedMode: UnifiedScanMode
+    let onSelect: (UnifiedScanMode) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(UnifiedScanMode.allCases) { mode in
+                    Button {
+                        onSelect(mode)
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: mode.systemImage)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(mode.title)
+                                    .font(.body.weight(.semibold))
+                                if !mode.implementedInCurrentCaptureCore {
+                                    Text("قابل للتجربة — حمولة المسح ما زالت تحت التطوير")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                            Spacer()
+                            if mode == selectedMode {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .navigationTitle("اختيار وضع المسح")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء", action: onCancel)
+                }
+            }
+        }
     }
 }

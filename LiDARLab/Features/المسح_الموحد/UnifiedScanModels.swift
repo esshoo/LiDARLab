@@ -119,6 +119,57 @@ enum UnifiedConnectionKind: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+
+
+enum UnifiedCoveragePreviewStyle: String, CaseIterable, Identifiable, Codable {
+    case points
+    case filledCells
+    case outlinedCells
+    case heatCells
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .points: "نقاط"
+        case .filledCells: "خلايا ممتلئة"
+        case .outlinedCells: "شبكة خلايا"
+        case .heatCells: "تغطية حرارية"
+        }
+    }
+}
+
+enum UnifiedPathPreviewStyle: String, CaseIterable, Identifiable, Codable {
+    case line
+    case points
+    case lineAndPoints
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .line: "خط"
+        case .points: "نقاط"
+        case .lineAndPoints: "خط ونقاط"
+        }
+    }
+}
+
+enum UnifiedDevicePreviewStyle: String, CaseIterable, Identifiable, Codable {
+    case phoneAndFrustum
+    case phoneOnly
+    case arrow
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .phoneAndFrustum: "هاتف ومجال رؤية"
+        case .phoneOnly: "هاتف"
+        case .arrow: "سهم"
+        }
+    }
+}
 enum UnifiedThermalPolicy: String, CaseIterable, Identifiable, Codable {
     case warnOnly
     case stopDepthAtCritical
@@ -138,6 +189,11 @@ enum UnifiedThermalPolicy: String, CaseIterable, Identifiable, Codable {
 struct UnifiedPreviewPoint: Hashable, Codable {
     var x: Float
     var z: Float
+}
+
+struct UnifiedPreviewCell: Hashable, Codable {
+    var xIndex: Int
+    var zIndex: Int
 }
 
 struct UnifiedPreviewSweep: Identifiable, Hashable, Codable {

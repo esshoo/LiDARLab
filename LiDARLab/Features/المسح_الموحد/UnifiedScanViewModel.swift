@@ -70,11 +70,17 @@ final class UnifiedScanViewModel: ObservableObject {
     @Published var previewFPS: Int {
         didSet { defaults.set(previewFPS, forKey: Keys.previewFPS) }
     }
-    @Published var previewPathLimit: Int {
-        didSet { defaults.set(previewPathLimit, forKey: Keys.previewPathLimit) }
+    @Published var coveragePreviewStyle: UnifiedCoveragePreviewStyle {
+        didSet { defaults.set(coveragePreviewStyle.rawValue, forKey: Keys.coveragePreviewStyle) }
     }
-    @Published var previewSweepLimit: Int {
-        didSet { defaults.set(previewSweepLimit, forKey: Keys.previewSweepLimit) }
+    @Published var pathPreviewStyle: UnifiedPathPreviewStyle {
+        didSet { defaults.set(pathPreviewStyle.rawValue, forKey: Keys.pathPreviewStyle) }
+    }
+    @Published var devicePreviewStyle: UnifiedDevicePreviewStyle {
+        didSet { defaults.set(devicePreviewStyle.rawValue, forKey: Keys.devicePreviewStyle) }
+    }
+    @Published var previewCellSize: Float {
+        didSet { defaults.set(Double(previewCellSize), forKey: Keys.previewCellSize) }
     }
     @Published var previewHorizontalRays: Int {
         didSet { defaults.set(previewHorizontalRays, forKey: Keys.previewHorizontalRays) }
@@ -102,7 +108,8 @@ final class UnifiedScanViewModel: ObservableObject {
     @Published private(set) var currentPosition = SIMD3<Float>(repeating: 0)
     @Published private(set) var currentQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
     @Published private(set) var path: [UnifiedPreviewPoint] = []
-    @Published private(set) var coverageSweeps: [UnifiedPreviewSweep] = []
+    @Published private(set) var coverageCells: [UnifiedPreviewCell] = []
+    @Published private(set) var currentSweep: UnifiedPreviewSweep?
     @Published private(set) var trackingText = "غير متاح"
     @Published private(set) var thermalText = "طبيعي"
     @Published private(set) var depthText = "بانتظار الجلسة"
@@ -141,6 +148,7 @@ final class UnifiedScanViewModel: ObservableObject {
     private var pendingStartAfterWarning = false
     private var incomingPacketQueue: [Data] = []
     private var processingIncomingQueue = false
+    private var coverageCellStore: Set<UnifiedPreviewCell> = []
 
     private enum Keys {
         static let role = "unified.role"
@@ -157,8 +165,10 @@ final class UnifiedScanViewModel: ObservableObject {
         static let thermalPolicy = "unified.thermalPolicy"
         static let saveLocalCopyWhenSending = "unified.saveLocalCopyWhenSending"
         static let previewFPS = "unified.previewFPS"
-        static let previewPathLimit = "unified.previewPathLimit"
-        static let previewSweepLimit = "unified.previewSweepLimit"
+        static let coveragePreviewStyle = "unified.coveragePreviewStyle"
+        static let pathPreviewStyle = "unified.pathPreviewStyle"
+        static let devicePreviewStyle = "unified.devicePreviewStyle"
+        static let previewCellSize = "unified.previewCellSize"
         static let previewHorizontalRays = "unified.previewHorizontalRays"
         static let previewMinimumDepth = "unified.previewMinimumDepth"
         static let previewMaximumDepth = "unified.previewMaximumDepth"
@@ -186,10 +196,17 @@ final class UnifiedScanViewModel: ObservableObject {
         saveLocalCopyWhenSending = defaults.bool(forKey: Keys.saveLocalCopyWhenSending)
 
         previewFPS = Self.validChoice(defaults.integer(forKey: Keys.previewFPS), choices: Self.previewFPSChoices, fallback: 10)
-        let savedPathLimit = defaults.integer(forKey: Keys.previewPathLimit)
-        previewPathLimit = savedPathLimit > 0 ? savedPathLimit : 2_000
-        let savedSweepLimit = defaults.integer(forKey: Keys.previewSweepLimit)
-        previewSweepLimit = savedSweepLimit > 0 ? savedSweepLimit : 400
+        coveragePreviewStyle = UnifiedCoveragePreviewStyle(
+            rawValue: defaults.string(forKey: Keys.coveragePreviewStyle) ?? ""
+        ) ?? .filledCells
+        pathPreviewStyle = UnifiedPathPreviewStyle(
+            rawValue: defaults.string(forKey: Keys.pathPreviewStyle) ?? ""
+        ) ?? .line
+        devicePreviewStyle = UnifiedDevicePreviewStyle(
+            rawValue: defaults.string(forKey: Keys.devicePreviewStyle) ?? ""
+        ) ?? .phoneAndFrustum
+        let savedCellSize = defaults.double(forKey: Keys.previewCellSize)
+        previewCellSize = savedCellSize > 0 ? Float(savedCellSize) : 0.18
         let savedRays = defaults.integer(forKey: Keys.previewHorizontalRays)
         previewHorizontalRays = savedRays > 0 ? savedRays : 9
         let savedMinDepth = defaults.double(forKey: Keys.previewMinimumDepth)
@@ -485,7 +502,9 @@ final class UnifiedScanViewModel: ObservableObject {
 
     func resetLivePreview() {
         path.removeAll(keepingCapacity: false)
-        coverageSweeps.removeAll(keepingCapacity: false)
+        coverageCellStore.removeAll(keepingCapacity: false)
+        coverageCells.removeAll(keepingCapacity: false)
+        currentSweep = nil
         receiverPoses.removeAll(keepingCapacity: false)
         currentPosition = .zero
         currentQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
@@ -774,7 +793,6 @@ final class UnifiedScanViewModel: ObservableObject {
             if distance < 0.01 { return }
         }
         path.append(point)
-        trim(&path, limit: previewPathLimit)
     }
 
     private func appendCoverage(scan: UnifiedDecodedScanPreview, pose: UnifiedDecodedPose) {
@@ -790,13 +808,15 @@ final class UnifiedScanViewModel: ObservableObject {
             let cameraY = -(Float(sample.pixelY) - scan.cy) / scan.fy * sample.depthMeters
             let cameraZ = -sample.depthMeters
             let rotated = pose.quaternion.act(SIMD3<Float>(cameraX, cameraY, cameraZ))
-            endpoints.append(UnifiedPreviewPoint(x: pose.position.x + rotated.x, z: pose.position.z + rotated.z))
+            endpoints.append(
+                UnifiedPreviewPoint(
+                    x: pose.position.x + rotated.x,
+                    z: pose.position.z + rotated.z
+                )
+            )
         }
-        guard endpoints.count >= 2 else { return }
-        coverageSweeps.append(
-            UnifiedPreviewSweep(points: [UnifiedPreviewPoint(x: pose.position.x, z: pose.position.z)] + endpoints)
-        )
-        trim(&coverageSweeps, limit: previewSweepLimit)
+        let origin = UnifiedPreviewPoint(x: pose.position.x, z: pose.position.z)
+        updateCoverage(origin: origin, endpoints: endpoints)
     }
 
     private func appendCoverageFromDepth(
@@ -869,14 +889,31 @@ final class UnifiedScanViewModel: ObservableObject {
             points.append(UnifiedPreviewPoint(x: world.x, z: world.z))
         }
         guard points.count >= 3 else { return }
-        coverageSweeps.append(UnifiedPreviewSweep(points: points))
-        trim(&coverageSweeps, limit: previewSweepLimit)
+        updateCoverage(origin: origin, endpoints: Array(points.dropFirst()))
     }
 
-    private func trim<T>(_ array: inout [T], limit: Int) {
-        let safeLimit = max(1, limit)
-        if array.count > safeLimit {
-            array.removeFirst(array.count - safeLimit)
+    private func updateCoverage(origin: UnifiedPreviewPoint, endpoints: [UnifiedPreviewPoint]) {
+        guard endpoints.count >= 2 else { return }
+        currentSweep = UnifiedPreviewSweep(points: [origin] + endpoints)
+
+        let cellSize = max(0.05, previewCellSize)
+        for endpoint in endpoints {
+            let dx = endpoint.x - origin.x
+            let dz = endpoint.z - origin.z
+            let distance = max(abs(dx), abs(dz))
+            let steps = max(1, Int(ceil(distance / cellSize)))
+            for step in 0...steps {
+                let amount = Float(step) / Float(steps)
+                let x = origin.x + dx * amount
+                let z = origin.z + dz * amount
+                let cell = UnifiedPreviewCell(
+                    xIndex: Int(floor(x / cellSize)),
+                    zIndex: Int(floor(z / cellSize))
+                )
+                if coverageCellStore.insert(cell).inserted {
+                    coverageCells.append(cell)
+                }
+            }
         }
     }
 
@@ -1059,8 +1096,11 @@ final class UnifiedScanViewModel: ObservableObject {
             "confidence_enabled": sendConfidence,
             "thermal_policy": thermalPolicy.rawValue,
             "preview_fps": previewFPS,
-            "preview_path_limit": previewPathLimit,
-            "preview_sweep_limit": previewSweepLimit,
+            "coverage_preview_style": coveragePreviewStyle.rawValue,
+            "path_preview_style": pathPreviewStyle.rawValue,
+            "device_preview_style": devicePreviewStyle.rawValue,
+            "preview_cell_size_m": previewCellSize,
+            "preview_storage_policy": "append_only_no_temporal_deletion",
             "preview_horizontal_rays": previewHorizontalRays,
             "preview_minimum_depth_m": previewMinimumDepth,
             "preview_maximum_depth_m": previewMaximumDepth,
