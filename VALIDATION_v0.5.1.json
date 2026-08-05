@@ -1,0 +1,19 @@
+{
+  "version": "0.50.1",
+  "build": 51,
+  "swift_parse_ok": true,
+  "swift_parse_files": 83,
+  "roomscan_files": 18,
+  "roomscan_changed": 0,
+  "roomscan_added": 0,
+  "roomscan_deleted": 0,
+  "original_bridge_files": 6,
+  "original_bridge_changed": 0,
+  "legacy_unified_runtime_present": false,
+  "legacy_unified_runtime_excluded": true,
+  "stable_core_contains_senderBusy": false,
+  "stable_core_contains_sendInProgress": false,
+  "stable_map_expression_split": true,
+  "tracking_reason_returns_explicit": true,
+  "github_xcodebuild_required": true
+}

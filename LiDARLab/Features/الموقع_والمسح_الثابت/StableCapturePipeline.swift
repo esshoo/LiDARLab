@@ -506,11 +506,11 @@ final class StableCapturePipeline: @unchecked Sendable {
     private static func trackingReasonCode(_ state: ARCamera.TrackingState) -> UInt8 {
         guard case .limited(let reason) = state else { return 0 }
         switch reason {
-        case .initializing: 1
-        case .excessiveMotion: 2
-        case .insufficientFeatures: 3
-        case .relocalizing: 4
-        @unknown default: 255
+        case .initializing: return 1
+        case .excessiveMotion: return 2
+        case .insufficientFeatures: return 3
+        case .relocalizing: return 4
+        @unknown default: return 255
         }
     }
 

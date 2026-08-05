@@ -1,14 +1,12 @@
 {
-  "base": "3ELiDAR iOS 2DScan v0.3.1",
-  "build": 50,
-  "original_computer_bridge": {
-    "ComputerBridgeARViewContainer.swift": "11402a86722b900645a2771b470ba05e3c6c132df5d491ba36e28e5b07605dae",
-    "ComputerBridgeView.swift": "1fcfc4af0faf989e5d083ea8d7d2ae2b535cc9ffcca1bbfe5c18a861ede4d6aa",
-    "ComputerBridgeViewModel.swift": "ef9ee49fbe5be626ac6f34c9d6896ef66e06c48c80f8a68f0ec9b087ca0214f6",
-    "ComputerBridgeWebSocketClient.swift": "7accec1cd028abcc0774808685aaea553e61933dde4c902b4766fd99085eee80",
-    "README_AR.md": "7689e81ba29356d257d6392653fb68b33a6b867cc73d6eb3de9dadd178e7985a",
-    "StreamingProtocolV01.swift": "ce45d843afbdecc3a8dd546337bd7f93d31e7053831650450038676d435079ba"
-  },
+  "base": "3ELiDAR iOS Stable Core v0.5.0",
+  "version": "0.50.1",
+  "build": 51,
+  "changes": [
+    "Split StableMapView device geometry into typed subexpressions",
+    "Return tracking reason codes explicitly",
+    "Remove and exclude legacy unified scan runtime from target"
+  ],
   "roomscan": {
     "RoomCaptureViewContainer.swift": "4ccabbb85e87698351df70ee0669c87096cbaa9ffe1ff32f5b6928ebb60674cf",
     "RoomLevelsEditorView.swift": "d9b52a9fc6aef4ff8c3c6178b45c2b6f4ed146fd05fd42835f52da5ca5eb920d",
@@ -29,11 +27,19 @@
     "RoomWallGeometryEditorView.swift": "a2c80afe3cc6a4d7138ada91a8a8da3182958775af5e81deed5c28811da0a832",
     "RoomWallMetadata.swift": "320d28eb6acb0471904a9c3b80edf059e12ee2499fefa7561af91e1b7e42373e"
   },
+  "original_computer_bridge": {
+    "ComputerBridgeARViewContainer.swift": "11402a86722b900645a2771b470ba05e3c6c132df5d491ba36e28e5b07605dae",
+    "ComputerBridgeView.swift": "1fcfc4af0faf989e5d083ea8d7d2ae2b535cc9ffcca1bbfe5c18a861ede4d6aa",
+    "ComputerBridgeViewModel.swift": "ef9ee49fbe5be626ac6f34c9d6896ef66e06c48c80f8a68f0ec9b087ca0214f6",
+    "ComputerBridgeWebSocketClient.swift": "7accec1cd028abcc0774808685aaea553e61933dde4c902b4766fd99085eee80",
+    "README_AR.md": "7689e81ba29356d257d6392653fb68b33a6b867cc73d6eb3de9dadd178e7985a",
+    "StreamingProtocolV01.swift": "ce45d843afbdecc3a8dd546337bd7f93d31e7053831650450038676d435079ba"
+  },
   "stable_core": {
     "StableARSessionContainer.swift": "beca7bb9031ea8bccf251f0ab8aa85b8a58bf7e7847114430ce27427326803b9",
-    "StableCapturePipeline.swift": "6bc9907d89e0a4d19193fad9fb2cdb9c53be1ff02911d56e9c33ef4c645c6a1d",
-    "StableLocalProcessor.swift": "d285c51e10004271dc9c0b71fe563e0937886fbf157b1e1980de67bebfb71c65",
-    "StableMapView.swift": "71800522e7507658dfe8b4d28769d0f4b296b73787dc1340adfcad7e7dbf59fe",
+    "StableCapturePipeline.swift": "6a467e1e17b7bee56af61ce4ea3b6e067dd8d52496c7f310fe608832501444d9",
+    "StableLocalProcessor.swift": "b7918cf1dbd2a849aa84525c18c354ada5e8ea0a5dcb8561d4401d0357b21397",
+    "StableMapView.swift": "f187c2375f35099aafb5abcc5d262a3e11ddd3192f3f844a6f559788128d2ab3",
     "StableNetworkSender.swift": "fbfa1b8fdc8bdfca426c9e43f980993d228d4527f04d0bafc8b20ca1d0b85c05",
     "StableProtocolExtensions.swift": "4c43efa3dc9ef8516b6bb9dc730e30ba6f4ec6b584cd0f31ec1414dacb473c61",
     "StableResultView.swift": "cf904a79b53cd483fef679c1328739428586628911ad0e476e36ade70ff23957",
@@ -43,5 +49,6 @@
     "StableSessionRecorder.swift": "62ad5f4f0a6e3c2f7ec492edef3d6445cd571fee3cd503b345de5f1eb5e96e2b"
   },
   "swift_file_count": 83,
-  "version": "0.50.0"
+  "legacy_unified_runtime_present": false,
+  "legacy_unified_runtime_excluded": true
 }

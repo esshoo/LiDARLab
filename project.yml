@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.50.0"
-    CURRENT_PROJECT_VERSION: "50"
+    MARKETING_VERSION: "0.50.1"
+    CURRENT_PROJECT_VERSION: "51"
     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
     PRODUCT_NAME: LiDARLab
     DEVELOPMENT_LANGUAGE: ar
@@ -27,6 +27,7 @@ targets:
       - path: LiDARLab
         excludes:
           - "**/*.md"
+          - "Features/المسح_الموحد/**"
     info:
       path: LiDARLab/Info.plist
       properties:

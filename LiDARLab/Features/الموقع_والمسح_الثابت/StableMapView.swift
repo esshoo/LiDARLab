@@ -115,12 +115,13 @@ struct StableMapView: View {
 
         let halfWidth: Float = 0.10
         let halfLength: Float = 0.18
-        let corners = [
-            origin + right * halfWidth + forward * halfLength,
-            origin - right * halfWidth + forward * halfLength,
-            origin - right * halfWidth - forward * halfLength,
-            origin + right * halfWidth - forward * halfLength
-        ]
+        let rightOffset = right * halfWidth
+        let forwardOffset = forward * halfLength
+        let frontRight = origin + rightOffset + forwardOffset
+        let frontLeft = origin - rightOffset + forwardOffset
+        let backLeft = origin - rightOffset - forwardOffset
+        let backRight = origin + rightOffset - forwardOffset
+        let corners: [SIMD2<Float>] = [frontRight, frontLeft, backLeft, backRight]
         var phone = Path()
         phone.move(to: transform.point(x: corners[0].x, z: corners[0].y))
         for corner in corners.dropFirst() { phone.addLine(to: transform.point(x: corner.x, z: corner.y)) }
