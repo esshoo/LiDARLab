@@ -57,11 +57,15 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>يحتاج 3ELiDAR إلى الشبكة المحلية لإرسال موقع الهاتف وبيانات LiDAR إلى برنامج الكمبيوتر.</string>
+	<string>يحتاج 3ELiDAR إلى الشبكة المحلية لإرسال واستقبال وحفظ جلسات المسح بين iPhone وiPad وبرنامج Windows.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_3eld._tcp</string>
+	</array>
 </dict>
 </plist>

@@ -46,7 +46,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "اكتشاف المستويات"
         case .arPlayground: "مختبر الواقع المعزز"
         case .depthPhoto: "صورة مع العمق"
-        case .computerBridge: "البث إلى الكمبيوتر"
+        case .computerBridge: "نظام المسح الموحد"
         case .roomScan: "مسح الغرف"
         case .sensorTests: "اختبارات الحساس"
         case .recordings: "تسجيل الجلسات"
@@ -67,7 +67,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "اكتشاف الأسطح الأفقية والرأسية"
         case .arPlayground: "وضع وتحريك مجسمات داخل المكان"
         case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
-        case .computerBridge: "إرسال موقع الهاتف مباشرة إلى برنامج Windows"
+        case .computerBridge: "إرسال أو استقبال أو تسجيل الجلسات على نفس الجهاز"
         case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
         case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
@@ -88,7 +88,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "viewfinder.rectangular"
         case .arPlayground: "arkit"
         case .depthPhoto: "camera.filters"
-        case .computerBridge: "desktopcomputer.and.arrow.down"
+        case .computerBridge: "sensor.tag.radiowaves.forward"
         case .roomScan: "house.lodge"
         case .sensorTests: "waveform.path.ecg"
         case .recordings: "record.circle"
@@ -110,9 +110,9 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
 
     var requirement: FeatureRequirement {
         switch self {
-        case .deviceInfo, .exportCenter:
+        case .deviceInfo, .exportCenter, .computerBridge:
             .none
-        case .angleMeasure, .levelTool, .planeDetection, .arPlayground, .computerBridge:
+        case .angleMeasure, .levelTool, .planeDetection, .arPlayground:
             .worldTracking
         case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto,
              .sensorTests, .recordings:
@@ -154,7 +154,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .depthPhoto:
             ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
         case .computerBridge:
-            ["إرسال Pose الحقيقي", "اختيار IP ومعدل الإرسال", "مراقبة التتبع والحرارة"]
+            ["مرسل أو مستقبل أو جهاز مستقل", "مسار و2D الآن مع تجهيز أوضاع 3D", "تسجيل أولًا ومعالجة بعد إنهاء الجلسة"]
         case .roomScan:
             ["جلسة مستقلة لكل غرفة", "ARSession مشتركة بين الغرف", "حفظ الغرف المجمدة ونموذج دمج للمقارنة"]
         case .recordings:
