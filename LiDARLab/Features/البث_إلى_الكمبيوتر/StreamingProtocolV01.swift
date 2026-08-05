@@ -16,7 +16,6 @@ enum StreamingMessageType: UInt16 {
     case intrinsics = 6
     case tracking = 7
     case scan2D = 8
-    case sessionControl = 9
     case localizationResult = 100
 }
 

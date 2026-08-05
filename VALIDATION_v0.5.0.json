@@ -1,0 +1,17 @@
+{
+  "build": 50,
+  "original_bridge_changed": 0,
+  "original_bridge_files": 6,
+  "pose_policy_marker_present": true,
+  "processing_policy_marker_present": true,
+  "raw_policy_marker_present": true,
+  "roomscan_added": 0,
+  "roomscan_changed": 0,
+  "roomscan_deleted": 0,
+  "roomscan_files": 18,
+  "stable_core_contains_sendInProgress": false,
+  "stable_core_contains_senderBusy": false,
+  "swift_parse_files": 83,
+  "swift_parse_ok": true,
+  "version": "0.50.0"
+}

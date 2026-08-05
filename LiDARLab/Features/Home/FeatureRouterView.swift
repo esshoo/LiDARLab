@@ -33,7 +33,7 @@ struct FeatureRouterView: View {
             case .depthPhoto:
                 DepthPhotoView()
             case .computerBridge:
-                UnifiedScanView()
+                StableScanView()
             case .roomScan:
                 RoomScanView()
             case .sensorTests:

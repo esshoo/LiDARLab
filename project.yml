@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.40.5"
-    CURRENT_PROJECT_VERSION: "45"
+    MARKETING_VERSION: "0.50.0"
+    CURRENT_PROJECT_VERSION: "50"
     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
     PRODUCT_NAME: LiDARLab
     DEVELOPMENT_LANGUAGE: ar
@@ -42,9 +42,7 @@ targets:
         LSRequiresIPhoneOS: true
         LSSupportsOpeningDocumentsInPlace: true
         NSCameraUsageDescription: "يحتاج 3ELiDAR إلى الكاميرا وحساس LiDAR لعرض العمق وقياس المسافات وفهم البيئة المحيطة."
-        NSLocalNetworkUsageDescription: "يحتاج 3ELiDAR إلى الشبكة المحلية لإرسال واستقبال وحفظ جلسات المسح بين iPhone وiPad وبرنامج Windows."
-        NSBonjourServices:
-          - _3eld._tcp
+        NSLocalNetworkUsageDescription: "يحتاج 3ELiDAR إلى الشبكة المحلية لإرسال موقع الهاتف وبيانات LiDAR إلى برنامج الكمبيوتر."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UIApplicationSupportsIndirectInputEvents: true
@@ -72,7 +70,6 @@ targets:
       - sdk: ImageIO.framework
       - sdk: Vision.framework
       - sdk: QuickLook.framework
-      - sdk: Network.framework
     settings:
       base:
         CODE_SIGN_STYLE: Automatic
