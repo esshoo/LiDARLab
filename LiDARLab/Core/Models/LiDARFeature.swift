@@ -25,6 +25,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
     case planeDetection
     case arPlayground
     case depthPhoto
+    case computerBridge
     case roomScan
     case sensorTests
     case recordings
@@ -45,6 +46,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "اكتشاف المستويات"
         case .arPlayground: "مختبر الواقع المعزز"
         case .depthPhoto: "صورة مع العمق"
+        case .computerBridge: "البث إلى الكمبيوتر"
         case .roomScan: "مسح الغرف"
         case .sensorTests: "اختبارات الحساس"
         case .recordings: "تسجيل الجلسات"
@@ -65,6 +67,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "اكتشاف الأسطح الأفقية والرأسية"
         case .arPlayground: "وضع وتحريك مجسمات داخل المكان"
         case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
+        case .computerBridge: "إرسال موقع الهاتف مباشرة إلى برنامج Windows"
         case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
         case .recordings: "حفظ إطارات الصورة والعمق وإعادة عرضها"
@@ -85,6 +88,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "viewfinder.rectangular"
         case .arPlayground: "arkit"
         case .depthPhoto: "camera.filters"
+        case .computerBridge: "desktopcomputer.and.arrow.down"
         case .roomScan: "house.lodge"
         case .sensorTests: "waveform.path.ecg"
         case .recordings: "record.circle"
@@ -96,7 +100,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
     var phase: FeaturePhase {
         switch self {
         case .depthCamera, .distanceMeasure, .angleMeasure, .levelTool, .pointCloud, .sceneMesh,
-             .surfaceClassification, .planeDetection, .arPlayground, .depthPhoto, .roomScan,
+             .surfaceClassification, .planeDetection, .arPlayground, .depthPhoto, .computerBridge, .roomScan,
              .sensorTests, .recordings, .exportCenter, .deviceInfo:
             .ready
         default:
@@ -108,7 +112,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .deviceInfo, .exportCenter:
             .none
-        case .angleMeasure, .levelTool, .planeDetection, .arPlayground:
+        case .angleMeasure, .levelTool, .planeDetection, .arPlayground, .computerBridge:
             .worldTracking
         case .depthCamera, .distanceMeasure, .pointCloud, .depthPhoto,
              .sensorTests, .recordings:
@@ -149,6 +153,8 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
             ["مستويات أفقية ورأسية", "حدود وأبعاد كل مستوى", "تثبيت علامات على السطح"]
         case .depthPhoto:
             ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
+        case .computerBridge:
+            ["إرسال Pose الحقيقي", "اختيار IP ومعدل الإرسال", "مراقبة التتبع والحرارة"]
         case .roomScan:
             ["جلسة مستقلة لكل غرفة", "ARSession مشتركة بين الغرف", "حفظ الغرف المجمدة ونموذج دمج للمقارنة"]
         case .recordings:
