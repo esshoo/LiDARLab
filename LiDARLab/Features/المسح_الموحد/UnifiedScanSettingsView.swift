@@ -7,9 +7,9 @@ struct UnifiedScanSettingsView: View {
     @Binding var showCoverage: Bool
     @Binding var showDevice: Bool
     @Environment(\.dismiss) private var dismiss
-    @State private var section: Section = .connection
+    @State private var section: SettingsTab = .connection
 
-    private enum Section: String, CaseIterable, Identifiable {
+    private enum SettingsTab: String, CaseIterable, Identifiable {
         case connection
         case transfer
         case preview
@@ -32,7 +32,7 @@ struct UnifiedScanSettingsView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("قسم الإعدادات", selection: $section) {
-                    ForEach(Section.allCases) { item in
+                    ForEach(SettingsTab.allCases) { item in
                         Text(item.title).tag(item)
                     }
                 }
@@ -69,7 +69,7 @@ struct UnifiedScanSettingsView: View {
 
     @ViewBuilder
     private var connectionSettings: some View {
-        Section("دور الجهاز") {
+        SwiftUI.Section("دور الجهاز") {
             Picker("الدور", selection: $model.role) {
                 ForEach(UnifiedDeviceRole.allCases) { Text($0.title).tag($0) }
             }
@@ -83,7 +83,7 @@ struct UnifiedScanSettingsView: View {
         }
 
         if model.role == .sender {
-            Section("وجهة الإرسال") {
+            SwiftUI.Section("وجهة الإرسال") {
                 Picker("نوع الاتصال", selection: $model.connectionKind) {
                     ForEach(UnifiedConnectionKind.allCases) { Text($0.title).tag($0) }
                 }
@@ -114,7 +114,7 @@ struct UnifiedScanSettingsView: View {
                 }
             }
         } else if model.role == .receiver {
-            Section("الاستقبال المباشر") {
+            SwiftUI.Section("الاستقبال المباشر") {
                 Stepper("المنفذ: \(model.directPort)", value: $model.directPort, in: 1...65_535)
                     .disabled(model.settingsLocked)
                 Text("يُعلن الجهاز عن نفسه داخل الشبكة المحلية باسم 3ELiDAR عبر Bonjour.")
@@ -126,7 +126,7 @@ struct UnifiedScanSettingsView: View {
 
     @ViewBuilder
     private var transferSettings: some View {
-        Section("معدلات الإرسال") {
+        SwiftUI.Section("معدلات الإرسال") {
             Picker("موقع الجهاز", selection: $model.poseFPS) {
                 ForEach(UnifiedScanViewModel.fpsChoices, id: \.self) { Text("\($0) FPS").tag($0) }
             }
@@ -137,7 +137,7 @@ struct UnifiedScanSettingsView: View {
         }
         .disabled(model.settingsLocked)
 
-        Section("Depth") {
+        SwiftUI.Section("Depth") {
             Picker("خطوة أخذ العينات", selection: $model.samplingStride) {
                 ForEach(UnifiedScanViewModel.strideChoices, id: \.self) { Text("\($0)").tag($0) }
             }
@@ -151,7 +151,7 @@ struct UnifiedScanSettingsView: View {
         }
         .disabled(model.settingsLocked || model.scanMode == .poseOnly)
 
-        Section {
+        SwiftUI.Section {
             Text("لا يغير التطبيق هذه القيم تلقائيًا. أي تخفيف في البيانات يحدث فقط حسب الاختيار الظاهر هنا.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -160,13 +160,13 @@ struct UnifiedScanSettingsView: View {
 
     @ViewBuilder
     private var previewSettings: some View {
-        Section("الطبقات الخفيفة") {
+        SwiftUI.Section("الطبقات الخفيفة") {
             Toggle("شبكة المتر", isOn: $showGrid)
             Toggle("مسار الجهاز", isOn: $showPath)
             Toggle("تغطية المسح التقريبية", isOn: $showCoverage)
             Toggle("مكان واتجاه الجهاز", isOn: $showDevice)
         }
-        Section("معدل وذاكرة المعاينة") {
+        SwiftUI.Section("معدل وذاكرة المعاينة") {
             Picker("تحديث المعاينة", selection: $model.previewFPS) {
                 ForEach(UnifiedScanViewModel.previewFPSChoices, id: \.self) { Text("\($0) FPS").tag($0) }
             }
@@ -175,7 +175,7 @@ struct UnifiedScanSettingsView: View {
             Stepper("أشعة التغطية: \(model.previewHorizontalRays)", value: $model.previewHorizontalRays, in: 2...32)
         }
         .disabled(model.settingsLocked)
-        Section("فلتر المعاينة فقط") {
+        SwiftUI.Section("فلتر المعاينة فقط") {
             LabeledContent("أقل مسافة") {
                 TextField("0.15", value: $model.previewMinimumDepth, format: .number.precision(.fractionLength(2)))
                     .keyboardType(.decimalPad)
@@ -196,7 +196,7 @@ struct UnifiedScanSettingsView: View {
 
     @ViewBuilder
     private var recordingSettings: some View {
-        Section("حفظ الجلسة") {
+        SwiftUI.Section("حفظ الجلسة") {
             Toggle("حفظ نسخة محلية أثناء الإرسال", isOn: $model.saveLocalCopyWhenSending)
                 .disabled(model.role != .sender || model.settingsLocked)
             Stepper("دفعة الكتابة: \(model.recorderFlushPackets) حزمة", value: $model.recorderFlushPackets, in: 1...1_000)
@@ -207,7 +207,7 @@ struct UnifiedScanSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        Section("مكان الحفظ") {
+        SwiftUI.Section("مكان الحفظ") {
             Text("Documents/3ELiDAR/Sessions")
                 .font(.caption.monospaced())
             if let directory = model.currentSessionDirectory {
@@ -220,10 +220,10 @@ struct UnifiedScanSettingsView: View {
 
     @ViewBuilder
     private var capabilitySettings: some View {
-        Section("نتيجة الفحص الاسترشادي") {
+        SwiftUI.Section("نتيجة الفحص الاسترشادي") {
             ForEach(model.capabilitySummary, id: \.self) { Text($0) }
         }
-        Section {
+        SwiftUI.Section {
             Text("الفحص لا يقفل أي وضع. عند اختيار ميزة غير مؤكدة يظهر تحذير، ويمكن التجربة على أي حال ورؤية سبب النجاح أو الفشل الحقيقي.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

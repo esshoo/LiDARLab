@@ -27,6 +27,7 @@ struct UnifiedARViewContainer: UIViewRepresentable {
         coordinator.stop()
     }
 
+    @MainActor
     final class Coordinator: NSObject, ARSessionDelegate {
         var model: UnifiedScanViewModel
         private let session = ARSession()
@@ -55,13 +56,13 @@ struct UnifiedARViewContainer: UIViewRepresentable {
             session.pause()
         }
 
-        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
             Task { @MainActor [weak self] in
                 self?.model.handle(frame: frame)
             }
         }
 
-        func session(_ session: ARSession, didFailWithError error: Error) {
+        nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
             // The capability system is advisory; the actual tracking state/error
             // is surfaced by the view model without hiding or disabling the mode.
         }

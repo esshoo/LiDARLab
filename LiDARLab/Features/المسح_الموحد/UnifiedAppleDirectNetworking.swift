@@ -1,6 +1,23 @@
 import Foundation
 import Network
 
+private final class UnifiedOneShotGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasRun = false
+
+    func run(_ action: () -> Void) {
+        lock.lock()
+        guard !hasRun else {
+            lock.unlock()
+            return
+        }
+        hasRun = true
+        lock.unlock()
+        action()
+    }
+}
+
+
 actor UnifiedAppleDirectTCPClient {
     enum ClientError: LocalizedError {
         case invalidPort
@@ -34,19 +51,19 @@ actor UnifiedAppleDirectTCPClient {
         connection = newConnection
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var resumed = false
+            let gate = UnifiedOneShotGate()
             newConnection.stateUpdateHandler = { state in
-                guard !resumed else { return }
                 switch state {
                 case .ready:
-                    resumed = true
-                    continuation.resume()
+                    gate.run { continuation.resume() }
                 case .failed(let error), .waiting(let error):
-                    resumed = true
-                    continuation.resume(throwing: ClientError.connectionFailed(error.localizedDescription))
+                    gate.run {
+                        continuation.resume(throwing: ClientError.connectionFailed(error.localizedDescription))
+                    }
                 case .cancelled:
-                    resumed = true
-                    continuation.resume(throwing: ClientError.connectionFailed("تم إلغاء الاتصال."))
+                    gate.run {
+                        continuation.resume(throwing: ClientError.connectionFailed("تم إلغاء الاتصال."))
+                    }
                 default:
                     break
                 }
