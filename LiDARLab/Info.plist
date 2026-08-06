@@ -58,6 +58,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>يحتاج 3ELiDAR إلى الشبكة المحلية لإرسال موقع الهاتف وبيانات LiDAR إلى برنامج الكمبيوتر.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>يستخدم 3ELiDAR حساسات الحركة للتحقق من ثبات التتبع واكتشاف القفزات غير المنطقية.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -3,6 +3,7 @@ import SwiftUI
 struct RoomScanView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = RoomScanViewModel()
+    @StateObject private var torch = SharedTorchController()
     @State private var showingShareSheet = false
     @State private var showingResetConfirmation = false
     @State private var showingThicknessSetup = false
@@ -42,13 +43,20 @@ struct RoomScanView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(model.isScanning || model.isProcessing || model.isRelocalizing)
         .toolbar(model.isScanning ? .hidden : .visible, for: .navigationBar)
-        .onAppear { model.handleAppBecameActive() }
-        .onDisappear { model.suspendForNavigation() }
+        .onAppear {
+            torch.refreshAvailability()
+            model.handleAppBecameActive()
+        }
+        .onDisappear {
+            torch.turnOff()
+            model.suspendForNavigation()
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
                 model.handleAppBecameActive()
             case .inactive, .background:
+                torch.turnOff()
                 model.handleAppBecameInactive()
             @unknown default:
                 break
@@ -146,6 +154,8 @@ struct RoomScanView: View {
                 }
 
                 Spacer(minLength: 8)
+
+                SharedTorchButton(controller: torch, compact: true)
 
                 HStack(spacing: 6) {
                     Circle()

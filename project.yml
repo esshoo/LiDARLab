@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.20.0"
-    CURRENT_PROJECT_VERSION: "27"
+    MARKETING_VERSION: "0.50.2"
+    CURRENT_PROJECT_VERSION: "52"
     PRODUCT_BUNDLE_IDENTIFIER: com.essam.3E.LiDARLab
     PRODUCT_NAME: LiDARLab
     DEVELOPMENT_LANGUAGE: ar
@@ -25,6 +25,9 @@ targets:
     platform: iOS
     sources:
       - path: LiDARLab
+        excludes:
+          - "**/*.md"
+          - "Features/المسح_الموحد/**"
     info:
       path: LiDARLab/Info.plist
       properties:
@@ -41,6 +44,7 @@ targets:
         LSSupportsOpeningDocumentsInPlace: true
         NSCameraUsageDescription: "يحتاج 3ELiDAR إلى الكاميرا وحساس LiDAR لعرض العمق وقياس المسافات وفهم البيئة المحيطة."
         NSLocalNetworkUsageDescription: "يحتاج 3ELiDAR إلى الشبكة المحلية لإرسال موقع الهاتف وبيانات LiDAR إلى برنامج الكمبيوتر."
+        NSMotionUsageDescription: "يستخدم 3ELiDAR حساسات الحركة للتحقق من ثبات التتبع واكتشاف القفزات غير المنطقية."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UIApplicationSupportsIndirectInputEvents: true
@@ -64,6 +68,7 @@ targets:
       - sdk: RoomPlan.framework
       - sdk: SceneKit.framework
       - sdk: AVFoundation.framework
+      - sdk: CoreMotion.framework
       - sdk: CoreImage.framework
       - sdk: ImageIO.framework
       - sdk: Vision.framework

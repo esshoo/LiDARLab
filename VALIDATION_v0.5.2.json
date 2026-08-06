@@ -1,0 +1,19 @@
+{
+  "version": "0.50.2",
+  "build": 52,
+  "swift_parse": "passed",
+  "swift_file_count": 86,
+  "xcodebuild": "not_run_linux_environment",
+  "receiver_tests": "17 passed",
+  "receiver_integration": "hello_ack + start_ack + pose_ack + segmented path passed",
+  "javascript_syntax": "passed",
+  "python_compileall": "passed",
+  "info_plist": "valid",
+  "roomscan_changed_files": [
+    "RoomScanView.swift"
+  ],
+  "computer_bridge_changed_files": [],
+  "hidden_camera_pattern_present": false,
+  "stable_core_sender_busy_occurrences": 0,
+  "stable_core_reset_tracking_occurrences": 1
+}

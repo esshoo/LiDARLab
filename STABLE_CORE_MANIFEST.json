@@ -1,11 +1,19 @@
 {
-  "base": "3ELiDAR iOS Stable Core v0.5.0",
-  "version": "0.50.1",
-  "build": 51,
-  "changes": [
-    "Split StableMapView device geometry into typed subexpressions",
-    "Return tracking reason codes explicitly",
-    "Remove and exclude legacy unified scan runtime from target"
+  "base": "3ELiDAR iOS Stable Core v0.5.1",
+  "version": "0.50.2",
+  "build": 52,
+  "features": [
+    "Visible ARSCNView camera feed",
+    "Current-frame LiDAR confidence overlay",
+    "Ambient light warning",
+    "Three-level shared torch",
+    "RoomScan torch UI only",
+    "IMU-supported jump diagnostics",
+    "Windows hello/session/frame acknowledgements",
+    "Manual post-session local processing"
+  ],
+  "roomscan_changed_files": [
+    "RoomScanView.swift"
   ],
   "roomscan": {
     "RoomCaptureViewContainer.swift": "4ccabbb85e87698351df70ee0669c87096cbaa9ffe1ff32f5b6928ebb60674cf",
@@ -22,11 +30,12 @@
     "RoomScanProjectReviewEngine.swift": "dd03479347d2d1d51db3289327c58f9a68cb36ae643e165c76e3bcf1d40abc0a",
     "RoomScanProjectReviewView.swift": "6225634e468b543cd10884aacef313076b4059ad3483955fb0dd2fc79bf051da",
     "RoomScanReviewModels.swift": "713eece6612921f6fae927f3884e6c7b259b9f8e82397d16b3108da395e9a36e",
-    "RoomScanView.swift": "3c6b3904511238dbee2f7c1bcc46129e16e44075097201019e4690f6182a0996",
+    "RoomScanView.swift": "3bc71e0a01f507e9f5c1fe345efa7065892d2300a090147fcf099be0af651275",
     "RoomScanViewModel.swift": "8c633313f15116d7520268a3e4d023ef0b1805d19c9f11513e2e3d26b116613d",
     "RoomWallGeometryEditorView.swift": "a2c80afe3cc6a4d7138ada91a8a8da3182958775af5e81deed5c28811da0a832",
     "RoomWallMetadata.swift": "320d28eb6acb0471904a9c3b80edf059e12ee2499fefa7561af91e1b7e42373e"
   },
+  "computer_bridge_changed_files": [],
   "original_computer_bridge": {
     "ComputerBridgeARViewContainer.swift": "11402a86722b900645a2771b470ba05e3c6c132df5d491ba36e28e5b07605dae",
     "ComputerBridgeView.swift": "1fcfc4af0faf989e5d083ea8d7d2ae2b535cc9ffcca1bbfe5c18a861ede4d6aa",
@@ -36,19 +45,25 @@
     "StreamingProtocolV01.swift": "ce45d843afbdecc3a8dd546337bd7f93d31e7053831650450038676d435079ba"
   },
   "stable_core": {
-    "StableARSessionContainer.swift": "beca7bb9031ea8bccf251f0ab8aa85b8a58bf7e7847114430ce27427326803b9",
-    "StableCapturePipeline.swift": "6a467e1e17b7bee56af61ce4ea3b6e067dd8d52496c7f310fe608832501444d9",
-    "StableLocalProcessor.swift": "b7918cf1dbd2a849aa84525c18c354ada5e8ea0a5dcb8561d4401d0357b21397",
+    "StableARSessionContainer.swift": "071d1332a1ce1257ed3ad3ba329e5bad8db1de9b5d6a8a86c433f0447a93f545",
+    "StableCameraCoverageOverlay.swift": "aa0b60d92f0a3538731a6e7c2050db36b36272280fcf083c9762d7b20a974165",
+    "StableCapturePipeline.swift": "f7f3523f47bcd12ee1694b7c94d1b1adae7a3d0ffc6460e9b1982b15e3920068",
+    "StableLocalProcessor.swift": "db3a02f16a266f46287e412919d25a62106f01e03ddc212e6828d11ce806df4f",
     "StableMapView.swift": "f187c2375f35099aafb5abcc5d262a3e11ddd3192f3f844a6f559788128d2ab3",
-    "StableNetworkSender.swift": "fbfa1b8fdc8bdfca426c9e43f980993d228d4527f04d0bafc8b20ca1d0b85c05",
-    "StableProtocolExtensions.swift": "4c43efa3dc9ef8516b6bb9dc730e30ba6f4ec6b584cd0f31ec1414dacb473c61",
+    "StableMotionMonitor.swift": "5a342a9d589bfc996282e0a0ef3fbe3215338fff7d5bea011a981023f62f06d9",
+    "StableNetworkSender.swift": "b200cdaa8a26f83e0f2a0756ccd057ed5c6aa773c6f788f6b0289dff4cdefc8f",
+    "StableProtocolExtensions.swift": "5fc499da96444828a6693d3a721fc583fa6ac276f15fd5812f4f6cd435c77291",
     "StableResultView.swift": "cf904a79b53cd483fef679c1328739428586628911ad0e476e36ade70ff23957",
-    "StableScanModels.swift": "4891b5258c470c5928c0b762634c6c1bb4e2fbacc6614008275e7a245e9418e0",
-    "StableScanView.swift": "b9c851a6454633eb8fce912df6ae5afdf85a3795ceb1978e156c4ed70dfd3431",
-    "StableScanViewModel.swift": "e98eaadd206822d195f05c608cbc0a3fdfd851da44c6de6e3dc7b2fb81d0af19",
+    "StableScanModels.swift": "2ec10ad0a2c1d366701538fc4474c1df69785442b024d6fb661c1a1ee8f87cba",
+    "StableScanView.swift": "58df5c89d7c571dcab717c3491c65a4200aa9973b630138e58499fddff5034a4",
+    "StableScanViewModel.swift": "fdb764e9e807b6176d141c1e90c19d2ae06069b9a5ab012c24a211f505b666c1",
     "StableSessionRecorder.swift": "62ad5f4f0a6e3c2f7ec492edef3d6445cd571fee3cd503b345de5f1eb5e96e2b"
   },
-  "swift_file_count": 83,
+  "shared_torch_sha256": "4a13ec4e0524636eacb4e5bf381e71a9200342a2eca2f2b727948d2d273a4665",
+  "swift_file_count": 86,
   "legacy_unified_runtime_present": false,
-  "legacy_unified_runtime_excluded": true
+  "legacy_unified_runtime_excluded": true,
+  "hidden_camera_pattern_present": false,
+  "stable_core_sender_busy_occurrences": 0,
+  "stable_core_reset_tracking_occurrences": 1
 }
