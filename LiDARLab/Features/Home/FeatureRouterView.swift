@@ -32,6 +32,8 @@ struct FeatureRouterView: View {
                 ARPlaygroundView()
             case .depthPhoto:
                 DepthPhotoView()
+            case .color3DScan:
+                Color3DScanView()
             case .computerBridge:
                 StableScanView()
             case .roomScan:
