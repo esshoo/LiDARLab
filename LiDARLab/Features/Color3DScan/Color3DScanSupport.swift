@@ -2,6 +2,7 @@ import ARKit
 import Foundation
 import RealityKit
 import RoomPlan
+import SwiftUI
 
 struct Color3DScanSupport {
     static var sceneDepthSupported: Bool {
