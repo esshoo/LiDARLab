@@ -1,112 +1,345 @@
+import RealityKit
 import SwiftUI
 
 struct ObjectScanView: View {
-    private var captureSupported: Bool {
-        Color3DScanSupport.objectCaptureSupported
-    }
-
-    private var reconstructionSupported: Bool {
-        Color3DScanSupport.photogrammetrySupported
-    }
+    @StateObject private var model = ObjectScanViewModel()
+    @State private var showModelPreview = false
+    @State private var showCancelConfirmation = false
 
     var body: some View {
-        List {
-            Section {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("مسح جسم", systemImage: "cube.transparent")
-                        .font(.title3.bold())
+        Group {
+            if !model.isSupported {
+                unsupportedView
+            } else if model.phase == .idle {
+                startView
+            } else if model.phase == .reconstructing || model.phase == .finishing {
+                processingView
+            } else if model.phase == .completed, let modelURL = model.modelURL {
+                completedView(modelURL: modelURL)
+            } else if let session = model.objectCaptureSession {
+                captureView(session: session)
+            } else if model.phase == .failed {
+                failureView
+            } else {
+                ProgressView("جاري تجهيز الماسح…")
+            }
+        }
+        .navigationTitle("مسح جسم 3D")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if model.phase != .idle && model.phase != .completed {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("إلغاء", role: .destructive) {
+                        showCancelConfirmation = true
+                    }
+                }
+            }
+        }
+        .confirmationDialog(
+            "إلغاء المسح الحالي؟",
+            isPresented: $showCancelConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("إلغاء المسح", role: .destructive) {
+                model.cancelAndReset()
+            }
+            Button("متابعة", role: .cancel) {}
+        }
+        .alert("خطأ في المسح", isPresented: Binding(
+            get: { model.errorMessage != nil },
+            set: { if !$0 { model.clearError() } }
+        )) {
+            Button("حسنًا", role: .cancel) { model.clearError() }
+        } message: {
+            Text(model.errorMessage ?? "حدث خطأ غير معروف.")
+        }
+        .sheet(isPresented: $showModelPreview) {
+            if let url = model.modelURL {
+                NavigationStack {
+                    QuickLookPreview(url: url)
+                        .navigationTitle("النموذج ثلاثي الأبعاد")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("إغلاق") { showModelPreview = false }
+                            }
+                        }
+                }
+            }
+        }
+        .onDisappear {
+            if model.phase == .capturing || model.phase == .detecting || model.phase == .ready {
+                model.pauseCapture()
+            }
+        }
+    }
 
-                    Text("مخصص للأجسام الصغيرة مثل التماثيل والأدوات والقطع المنفصلة. المسار المستهدف يعتمد على التقاط صور متعددة حول الجسم ثم إعادة بنائه كنموذج ثلاثي الأبعاد ملوّن.")
-                        .font(.subheadline)
+    private var startView: some View {
+        ScrollView {
+            VStack(spacing: 22) {
+                Image(systemName: "cube.transparent.fill")
+                    .font(.system(size: 72, weight: .light))
+                    .foregroundStyle(.cyan)
+                    .padding(.top, 34)
+
+                VStack(spacing: 8) {
+                    Text("مسح جسم ثلاثي الأبعاد بالألوان")
+                        .font(.title2.bold())
+                    Text("ضع تمثالًا أو أداة أو قطعة ثابتة في إضاءة جيدة، ثم تحرّك حولها. التطبيق يلتقط الصور وبيانات العمق ويُنشئ نموذج USDZ ملوّن على الجهاز.")
+                        .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 6)
+
+                VStack(alignment: .leading, spacing: 11) {
+                    Label("اترك مساحة للحركة 360° حول الجسم.", systemImage: "arrow.triangle.2.circlepath")
+                    Label("تجنب الزجاج والأسطح العاكسة قدر الإمكان.", systemImage: "light.max")
+                    Label("لا تحرك الجسم أثناء الجولة إلا عند اختيار جولة بعد القلب.", systemImage: "hand.raised")
+                }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+
+                Button {
+                    model.startNewScan()
+                } label: {
+                    Label("بدء مسح جسم", systemImage: "camera.viewfinder")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+            }
+            .padding()
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func captureView(session: ObjectCaptureSession) -> some View {
+        ZStack {
+            ObjectCaptureView(session: session)
+                .ignoresSafeArea(edges: .bottom)
+
+            VStack(spacing: 0) {
+                captureStatusOverlay
+                Spacer()
+                captureControls
+            }
+        }
+        .onAppear {
+            model.resumeCapture()
+        }
+    }
+
+    private var captureStatusOverlay: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.phase.title)
+                    .font(.headline)
+                Text(model.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
 
-            Section("حالة الجهاز") {
-                ObjectScanStateRow(
-                    title: "التقاط Object Capture",
-                    isReady: captureSupported
-                )
-                ObjectScanStateRow(
-                    title: "إعادة البناء على الجهاز",
-                    isReady: reconstructionSupported
-                )
-                ObjectScanStateRow(
-                    title: "Scene Depth",
-                    isReady: Color3DScanSupport.sceneDepthSupported
-                )
-            }
+            Spacer(minLength: 8)
 
-            if !captureSupported || !reconstructionSupported {
-                Section {
-                    Label {
-                        Text("الجهاز الحالي لا يدعم كل متطلبات Object Capture. سيظل باقي التطبيق والأدوات القديمة متاحًا بصورة طبيعية.")
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                    }
-                    .font(.footnote)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("\(model.shotCount) صورة")
+                    .font(.headline.monospacedDigit())
+                if model.maximumShotCount > 0 {
+                    Text("حد الجهاز \(model.maximumShotCount)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
 
-            Section("سير العمل") {
-                ObjectScanStep(number: 1, title: "تحديد الجسم", detail: "ضع الجسم في إضاءة جيدة واترك مساحة للحركة حوله.")
-                ObjectScanStep(number: 2, title: "الالتقاط", detail: "التقاط صور متداخلة من جميع الجوانب والارتفاعات.")
-                ObjectScanStep(number: 3, title: "فحص التغطية", detail: "التأكد من عدم وجود مناطق كبيرة ناقصة قبل الإنهاء.")
-                ObjectScanStep(number: 4, title: "إعادة البناء", detail: "تحويل الصور وبيانات العمق إلى Mesh وTexture.")
-                ObjectScanStep(number: 5, title: "المراجعة والتصدير", detail: "عرض النموذج ثم حفظه بصيغة مناسبة.")
+    @ViewBuilder
+    private var captureControls: some View {
+        VStack(spacing: 10) {
+            if model.feedbackCount > 0 && model.phase == .capturing {
+                Label("يوجد \(model.feedbackCount) تنبيه جودة من نظام Object Capture", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
 
-            Section("المرحلة الحالية") {
-                Text("تم تجهيز الأداة كبنية مستقلة والتحقق من قدرات الجهاز. سيتم توصيل جلسة Object Capture ومحرك إعادة البناء في الدفعة التالية بعد نجاح هذا البناء.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            switch model.phase {
+            case .initializing:
+                ProgressView("تهيئة الكاميرا وLiDAR…")
+
+            case .ready:
+                Button {
+                    model.startDetecting()
+                } label: {
+                    Label("تحديد الجسم", systemImage: "viewfinder")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+
+            case .detecting:
+                HStack {
+                    Button("إعادة التحديد") { model.resetDetection() }
+                        .buttonStyle(.bordered)
+                    Button {
+                        model.startCapturing()
+                    } label: {
+                        Label("بدء الالتقاط", systemImage: "record.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.cyan)
+                }
+
+            case .capturing:
+                if model.scanPassComplete {
+                    VStack(spacing: 9) {
+                        Text("اكتملت جولة 360°")
+                            .font(.headline)
+                            .foregroundStyle(.green)
+
+                        HStack {
+                            Button("جولة أخرى") { model.beginAdditionalPass() }
+                                .buttonStyle(.bordered)
+
+                            if model.objectMayBeFlipped {
+                                Button("اقلب الجسم") { model.beginPassAfterFlip() }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+
+                        Button {
+                            model.finishCapture()
+                        } label: {
+                            Label("إنهاء وبناء النموذج", systemImage: "cube.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                    }
+                } else {
+                    HStack {
+                        Button {
+                            model.requestManualShot()
+                        } label: {
+                            Image(systemName: "camera.fill")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!model.canRequestManualShot)
+
+                        Text("تحرّك ببطء حول الجسم حتى يكتمل مؤشر Apple.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+
+                        if model.canFinishCapture {
+                            Button("إنهاء") { model.finishCapture() }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                }
+
+            default:
+                EmptyView()
             }
         }
-        .navigationTitle("مسح جسم")
-        .navigationBarTitleDisplayMode(.inline)
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .padding(12)
     }
-}
 
-private struct ObjectScanStateRow: View {
-    let title: String
-    let isReady: Bool
+    private var processingView: some View {
+        VStack(spacing: 22) {
+            ProgressView(value: model.phase == .reconstructing ? model.reconstructionProgress : nil)
+                .progressViewStyle(.linear)
+                .frame(maxWidth: 420)
 
-    var body: some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Image(systemName: isReady ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(isReady ? .green : .secondary)
-            Text(isReady ? "جاهز" : "غير مدعوم")
-                .font(.subheadline)
+            Image(systemName: model.phase == .reconstructing ? "cube.transparent" : "externaldrive.badge.checkmark")
+                .font(.system(size: 54))
+                .foregroundStyle(.cyan)
+
+            Text(model.phase.title)
+                .font(.title2.bold())
+
+            Text(model.statusMessage)
                 .foregroundStyle(.secondary)
-        }
-    }
-}
+                .multilineTextAlignment(.center)
 
-private struct ObjectScanStep: View {
-    let number: Int
-    let title: String
-    let detail: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text("\(number)")
-                .font(.caption.bold())
-                .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(Circle().fill(.cyan))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            if model.phase == .reconstructing {
+                Text("\(Int(model.reconstructionProgress * 100))%")
+                    .font(.title3.monospacedDigit().bold())
             }
         }
-        .padding(.vertical, 3)
+        .padding()
+    }
+
+    private func completedView(modelURL: URL) -> some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 70))
+                    .foregroundStyle(.green)
+
+                Text("تم إنشاء النموذج الملوّن")
+                    .font(.title2.bold())
+
+                Text(modelURL.lastPathComponent)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    showModelPreview = true
+                } label: {
+                    Label("معاينة 3D", systemImage: "arkit")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+
+                ShareLink(item: modelURL) {
+                    Label("مشاركة ملف USDZ", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button("مسح جسم جديد") {
+                    model.cancelAndReset()
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding()
+            .frame(maxWidth: 600)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var failureView: some View {
+        ContentUnavailableView {
+            Label("تعذر إكمال المسح", systemImage: "exclamationmark.triangle.fill")
+        } description: {
+            Text(model.statusMessage)
+        } actions: {
+            Button("بدء جلسة جديدة") {
+                model.cancelAndReset()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var unsupportedView: some View {
+        ContentUnavailableView {
+            Label("Object Capture غير مدعوم", systemImage: "iphone.slash")
+        } description: {
+            Text("مسح الأجسام الملوّن يحتاج جهازًا يدعم Object Capture وLiDAR. يمكنك استخدام مسح المكان السريع إذا كان Scene Mesh مدعومًا.")
+        }
     }
 }

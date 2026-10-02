@@ -158,7 +158,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .depthPhoto:
             ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
         case .color3DScan:
-            ["مسح جسم صغير بالألوان", "مسح غرفة أو مساحة", "تجهيز للتصدير إلى USDZ وOBJ وPLY"]
+            ["مسح جسم صغير بالألوان", "مسح غرفة أو مساحة", "تصدير فعلي إلى USDZ وOBJ وPLY"]
         case .computerBridge:
             ["تسجيل كل Pose قبل أي عمل آخر", "Depth بنفس Frame ID", "معالجة محلية بعد فصل الالتقاط"]
         case .roomScan:

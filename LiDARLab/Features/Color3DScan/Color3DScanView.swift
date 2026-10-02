@@ -8,20 +8,20 @@ struct Color3DScanView: View {
                     Label("المسح ثلاثي الأبعاد الملون", systemImage: "viewfinder")
                         .font(.title3.bold())
 
-                    Text("قسم مستقل للمسح ثلاثي الأبعاد بالألوان. اختر مسح جسم صغير أو مسح غرفة ومساحة كاملة دون التأثير على أدوات التطبيق الحالية.")
+                    Text("قسم مستقل للمسح ثلاثي الأبعاد الحقيقي. مسح الجسم يستخدم Apple Object Capture لإنشاء USDZ ملوّن، ومسح المكان يجمع LiDAR Scene Mesh وصور RGB ثم يلوّن الـMesh ويصدر ملفات 3D.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 6)
             }
 
-            Section("نوع المسح") {
+            Section("أدوات المسح") {
                 NavigationLink {
                     ObjectScanView()
                 } label: {
                     Color3DScanToolRow(
-                        title: "مسح جسم",
-                        subtitle: "تمثال، أداة أو قطعة صغيرة باستخدام الصور والعمق لإنتاج نموذج ملوّن.",
+                        title: "مسح جسم ملوّن",
+                        subtitle: "Object Capture فعلي: التقاط موجّه + Photogrammetry على الجهاز + ملف USDZ.",
                         systemImage: "cube.transparent"
                     )
                 }
@@ -30,8 +30,8 @@ struct Color3DScanView: View {
                     AreaScanView()
                 } label: {
                     Color3DScanToolRow(
-                        title: "مسح مكان / غرفة",
-                        subtitle: "غرفة أو مساحة كاملة باستخدام LiDAR وبيانات الكاميرا مع مسار للجودة العالية.",
+                        title: "مسح غرفة / مكان ملوّن",
+                        subtitle: "LiDAR Scene Mesh + صور RGB + إسقاط ألوان + PLY/OBJ وUSDZ عند دعم التصدير.",
                         systemImage: "house.lodge"
                     )
                 }
@@ -58,10 +58,6 @@ struct Color3DScanView: View {
                     title: "Photogrammetry",
                     isSupported: Color3DScanSupport.photogrammetrySupported
                 )
-                Color3DScanSupportRow(
-                    title: "RoomPlan",
-                    isSupported: Color3DScanSupport.roomPlanSupported
-                )
 
                 HStack {
                     Text("iOS")
@@ -72,14 +68,27 @@ struct Color3DScanView: View {
                 }
             }
 
-            Section("التصدير المستهدف") {
-                Color3DScanExportRow(format: "USDZ", detail: "النموذج الملوّن والمعاينة على أجهزة Apple")
-                Color3DScanExportRow(format: "OBJ", detail: "Mesh مع مواد وTextures للاستخدام الخارجي")
-                Color3DScanExportRow(format: "PLY", detail: "هندسة ونقاط للمراجعة والمعالجة")
+            Section("المخرجات الفعلية") {
+                Color3DScanExportRow(
+                    format: "USDZ",
+                    detail: "الناتج الأساسي لمسح الأجسام بواسطة Object Capture"
+                )
+                Color3DScanExportRow(
+                    format: "PLY + RGB",
+                    detail: "Mesh الغرفة مع لون حقيقي لكل Vertex"
+                )
+                Color3DScanExportRow(
+                    format: "OBJ",
+                    detail: "هندسة الغرفة مع Vertex RGB موسع"
+                )
+                Color3DScanExportRow(
+                    format: "JSON + RGB Frames",
+                    detail: "Camera poses وintrinsics وصور المصدر للمراجعة أو التطوير اللاحق"
+                )
             }
 
-            Section("خطة التنفيذ") {
-                Text("تم فصل هذا النظام بالكامل عن RoomScan وMesh والأدوات القديمة. المرحلة التالية تضيف محرك الالتقاط وإعادة البناء والحفظ داخل هذا القسم فقط.")
+            Section("مهم") {
+                Text("النظام الجديد لا يغير RoomScan أو Mesh أو أي أداة قديمة. ملفات المسح تحفظ تحت Captures/Color3D في مساحة تخزين 3ELiDAR الحالية.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
