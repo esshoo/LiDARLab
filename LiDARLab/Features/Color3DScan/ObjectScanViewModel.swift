@@ -95,8 +95,12 @@ final class ObjectScanViewModel: ObservableObject {
             configuration.checkpointDirectory = snapshots
             configuration.isOverCaptureEnabled = false
 
-            session.isAutoCaptureEnabled = true
-            session.shouldPlayHaptics = true
+            // These properties were introduced in iOS 18. Keep iOS 17 support intact.
+            if #available(iOS 18.0, *) {
+                session.isAutoCaptureEnabled = true
+                session.shouldPlayHaptics = true
+            }
+
             session.start(imagesDirectory: images, configuration: configuration)
 
             objectCaptureSession = session
