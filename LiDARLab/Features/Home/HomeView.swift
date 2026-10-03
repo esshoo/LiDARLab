@@ -13,6 +13,7 @@ struct HomeView: View {
     @State private var showFolderPicker = false
     @State private var showReselectionAlert = false
     @State private var folderPickerError: String?
+    @State private var showSettings = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -57,8 +58,21 @@ struct HomeView: View {
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("3ELiDAR")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                    }
+                    .accessibilityLabel("الإعدادات")
+                }
+            }
             .navigationDestination(for: LiDARFeature.self) { feature in
                 FeatureRouterView(feature: feature)
+            }
+            .sheet(isPresented: $showSettings) {
+                AppSettingsView()
             }
             .sheet(isPresented: $showFolderPicker) {
                 ThreeEFolderPicker { result in

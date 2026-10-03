@@ -8,7 +8,7 @@ struct Color3DScanView: View {
                     Label("المسح ثلاثي الأبعاد الملون", systemImage: "viewfinder")
                         .font(.title3.bold())
 
-                    Text("قسم مستقل للمسح ثلاثي الأبعاد الحقيقي. مسح الجسم يستخدم Apple Object Capture لإنشاء USDZ ملوّن، ومسح المكان يجمع LiDAR Scene Mesh وصور RGB ثم يلوّن الـMesh ويصدر ملفات 3D.")
+                    Text("قسم مستقل للمسح ثلاثي الأبعاد الحقيقي. مسح الجسم يستخدم Apple Object Capture، ومسح المكان يجمع LiDAR Scene Mesh وصور RGB ثم يبني UV ويستخدم الصور كخامات فعلية بدل ألوان النقاط فقط.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -34,6 +34,14 @@ struct Color3DScanView: View {
                         subtitle: "LiDAR Scene Mesh + صور RGB + إسقاط ألوان + PLY/OBJ وUSDZ عند دعم التصدير.",
                         systemImage: "house.lodge"
                     )
+                }
+            }
+
+            Section("الإعدادات") {
+                NavigationLink {
+                    Color3DScanSettingsView()
+                } label: {
+                    Label("إعدادات جودة المسح والتصدير", systemImage: "gearshape.2.fill")
                 }
             }
 
@@ -74,12 +82,12 @@ struct Color3DScanView: View {
                     detail: "الناتج الأساسي لمسح الأجسام بواسطة Object Capture"
                 )
                 Color3DScanExportRow(
-                    format: "PLY + RGB",
-                    detail: "Mesh الغرفة مع لون حقيقي لكل Vertex"
+                    format: "OBJ + MTL + Textures",
+                    detail: "Mesh الغرفة مع صور RGB كخامات فعلية وUV لكل وجه"
                 )
                 Color3DScanExportRow(
-                    format: "OBJ",
-                    detail: "هندسة الغرفة مع Vertex RGB موسع"
+                    format: "PLY + RGB",
+                    detail: "صيغة توافق بألوان Vertex مشتقة من الصور"
                 )
                 Color3DScanExportRow(
                     format: "JSON + RGB Frames",

@@ -173,7 +173,20 @@ struct ObjectScanView: View {
 
             switch model.phase {
             case .initializing:
-                ProgressView("تهيئة الكاميرا وLiDAR…")
+                VStack(spacing: 9) {
+                    ProgressView("تهيئة الكاميرا وLiDAR…")
+                    if model.initializationIsSlow {
+                        Text(model.statusMessage)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                        Button("إعادة تهيئة الكاميرا") {
+                            model.retryInitialization()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                    }
+                }
 
             case .ready:
                 Button {

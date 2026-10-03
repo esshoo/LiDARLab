@@ -1,5 +1,5 @@
-import Foundation
 import Combine
+import Foundation
 import RealityKit
 import SwiftUI
 
@@ -42,14 +42,20 @@ final class ObjectScanViewModel: ObservableObject {
     @Published private(set) var modelURL: URL?
     @Published private(set) var sessionFolderURL: URL?
     @Published private(set) var statusMessage = "ابدأ جلسة جديدة لمسح جسم صغير بالألوان."
+    @Published private(set) var initializationIsSlow = false
     @Published var errorMessage: String?
 
+    private let fileManager = FileManager.default
     private var imagesURL: URL?
     private var snapshotsURL: URL?
-    private var outputURL: URL?
+    private var localOutputURL: URL?
+    private var workingFolderURL: URL?
+    private var finalFolderURL: URL?
     private var listenerTasks: [Task<Void, Never>] = []
     private var reconstructionTask: Task<Void, Never>?
+    private var initializationWatchdogTask: Task<Void, Never>?
     private var photogrammetrySession: PhotogrammetrySession?
+    private var runtimeOptions = Color3DScanSettings.objectOptions
 
     var isSupported: Bool {
         ObjectCaptureSession.isSupported && PhotogrammetrySession.isSupported
@@ -57,7 +63,9 @@ final class ObjectScanViewModel: ObservableObject {
 
     var canStartDetection: Bool { phase == .ready }
     var canStartCapturing: Bool { phase == .detecting || phase == .ready }
-    var canFinishCapture: Bool { phase == .capturing && shotCount >= 10 }
+    var canFinishCapture: Bool {
+        phase == .capturing && shotCount >= runtimeOptions.minimumImagesBeforeFinish
+    }
     var canRequestManualShot: Bool {
         phase == .capturing && objectCaptureSession?.canRequestImageCapture == true
     }
@@ -68,59 +76,80 @@ final class ObjectScanViewModel: ObservableObject {
             return
         }
 
-        cleanupActiveSessions(cancelCapture: true)
+        cleanupActiveSessions(cancelCapture: true, removeWorkingFiles: true)
+        runtimeOptions = Color3DScanSettings.objectOptions
 
         do {
             let storage = LiDARLabStorage.shared
             try storage.ensureDirectories()
 
-            let root = storage.capturesURL
+            let finalRoot = storage.capturesURL
                 .appendingPathComponent("Color3D", isDirectory: true)
                 .appendingPathComponent("Objects", isDirectory: true)
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: finalRoot, withIntermediateDirectories: true)
 
-            let folder = root.appendingPathComponent(
-                storage.timestampedName(prefix: "ObjectScan"),
-                isDirectory: true
-            )
-            let images = folder.appendingPathComponent("Images", isDirectory: true)
-            let snapshots = folder.appendingPathComponent("Snapshots", isDirectory: true)
-            let output = folder.appendingPathComponent("Model", isDirectory: true)
-            try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: snapshots, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let uniqueName = storage.timestampedName(prefix: "ObjectScan") + "-" + String(UUID().uuidString.prefix(8))
+            let finalFolder = finalRoot.appendingPathComponent(String(uniqueName), isDirectory: true)
+
+            // ObjectCaptureSession is intentionally given an app-local writable folder.
+            // Some Files/security-scoped locations are valid for normal FileManager writes but are
+            // unreliable for camera framework working data. We publish the result afterwards.
+            let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            let workFolder = caches
+                .appendingPathComponent("3ELiDAR-ObjectCaptureWork", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let images = workFolder.appendingPathComponent("Images", isDirectory: true)
+            let snapshots = workFolder.appendingPathComponent("Snapshots", isDirectory: true)
+            let output = workFolder.appendingPathComponent("Model", isDirectory: true)
+
+            try fileManager.createDirectory(at: images, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: snapshots, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: output, withIntermediateDirectories: true)
 
             let session = ObjectCaptureSession()
             var configuration = ObjectCaptureSession.Configuration()
             configuration.checkpointDirectory = snapshots
             configuration.isOverCaptureEnabled = false
 
-            // These properties were introduced in iOS 18. Keep iOS 17 support intact.
             if #available(iOS 18.0, *) {
-                session.isAutoCaptureEnabled = true
-                session.shouldPlayHaptics = true
+                session.isAutoCaptureEnabled = runtimeOptions.autoCapture
+                session.shouldPlayHaptics = runtimeOptions.haptics
             }
 
-            session.start(imagesDirectory: images, configuration: configuration)
-
-            objectCaptureSession = session
-            sessionFolderURL = folder
+            workingFolderURL = workFolder
+            finalFolderURL = finalFolder
+            sessionFolderURL = finalFolder
             imagesURL = images
             snapshotsURL = snapshots
-            outputURL = output
+            localOutputURL = output
             modelURL = nil
             reconstructionProgress = 0
+            shotCount = 0
+            maximumShotCount = 0
+            scanPassComplete = false
+            feedbackCount = 0
+            initializationIsSlow = false
+            objectCaptureSession = session
+            phase = .initializing
+            statusMessage = "جاري تجهيز Object Capture…"
+
+            // Listen BEFORE start(). A fast state transition to .ready/.failed can otherwise be missed,
+            // leaving our UI stuck forever on the locally stored .initializing state.
+            attachListeners(to: session)
+            session.start(imagesDirectory: images, configuration: configuration)
+
+            // Reconcile synchronously as well, in case the transition happened before the async stream yielded.
+            handleCaptureState(session.state)
             shotCount = session.numberOfShotsTaken
             maximumShotCount = session.maximumNumberOfInputImages
             scanPassComplete = session.userCompletedScanPass
             feedbackCount = session.feedback.count
             objectMayBeFlipped = !session.feedback.contains(.objectNotFlippable)
-            phase = .initializing
-            statusMessage = "جاري تجهيز Object Capture…"
-            attachListeners(to: session)
+            startInitializationWatchdog(for: session)
         } catch {
             phase = .failed
             errorMessage = error.localizedDescription
+            statusMessage = "تعذر بدء جلسة Object Capture."
         }
     }
 
@@ -130,12 +159,14 @@ final class ObjectScanViewModel: ObservableObject {
             statusMessage = "تعذر بدء اكتشاف الجسم الآن. وجّه الكاميرا للجسم وحاول مرة أخرى."
             return
         }
+        handleCaptureState(session.state)
         statusMessage = "عدّل الصندوق ليحيط بالجسم فقط، ثم ابدأ الالتقاط."
     }
 
     func resetDetection() {
         guard let session = objectCaptureSession else { return }
         if session.resetDetection() {
+            handleCaptureState(session.state)
             statusMessage = "تمت إعادة تحديد الجسم. وجّه الكاميرا إليه من جديد."
         }
     }
@@ -143,6 +174,7 @@ final class ObjectScanViewModel: ObservableObject {
     func startCapturing() {
         guard let session = objectCaptureSession else { return }
         session.startCapturing()
+        handleCaptureState(session.state)
         statusMessage = "تحرّك ببطء حول الجسم وحافظ عليه داخل الإطار."
     }
 
@@ -169,30 +201,39 @@ final class ObjectScanViewModel: ObservableObject {
     func finishCapture() {
         guard let session = objectCaptureSession, phase == .capturing else { return }
         session.finish()
+        handleCaptureState(session.state)
         statusMessage = "جاري تثبيت الصور وبيانات العمق…"
     }
 
     func pauseCapture() {
-        objectCaptureSession?.pause()
+        guard let session = objectCaptureSession, !session.isPaused else { return }
+        session.pause()
     }
 
     func resumeCapture() {
-        objectCaptureSession?.resume()
+        guard let session = objectCaptureSession, session.isPaused else { return }
+        session.resume()
+    }
+
+    func retryInitialization() {
+        startNewScan()
     }
 
     func cancelAndReset() {
-        cleanupActiveSessions(cancelCapture: true)
+        cleanupActiveSessions(cancelCapture: true, removeWorkingFiles: true)
         phase = .idle
         modelURL = nil
         sessionFolderURL = nil
         imagesURL = nil
         snapshotsURL = nil
-        outputURL = nil
+        localOutputURL = nil
+        finalFolderURL = nil
         shotCount = 0
         maximumShotCount = 0
         scanPassComplete = false
         feedbackCount = 0
         reconstructionProgress = 0
+        initializationIsSlow = false
         statusMessage = "ابدأ جلسة جديدة لمسح جسم صغير بالألوان."
     }
 
@@ -203,6 +244,7 @@ final class ObjectScanViewModel: ObservableObject {
     deinit {
         for task in listenerTasks { task.cancel() }
         reconstructionTask?.cancel()
+        initializationWatchdogTask?.cancel()
     }
 
     private func attachListeners(to session: ObjectCaptureSession) {
@@ -250,33 +292,57 @@ final class ObjectScanViewModel: ObservableObject {
         listenerTasks.removeAll()
     }
 
+    private func startInitializationWatchdog(for session: ObjectCaptureSession) {
+        initializationWatchdogTask?.cancel()
+        initializationWatchdogTask = Task { [weak self, weak session] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled, let self, let session else { return }
+            if self.phase == .initializing {
+                self.initializationIsSlow = true
+                self.handleCaptureState(session.state)
+                if self.phase == .initializing {
+                    self.statusMessage = "التهيئة تستغرق وقتًا غير طبيعي. تأكد من إذن الكاميرا، أغلق أي تطبيق يستخدم الكاميرا، ثم اضغط إعادة المحاولة."
+                }
+            }
+        }
+    }
+
     private func handleCaptureState(_ state: ObjectCaptureSession.CaptureState) {
         switch state {
         case .initializing:
             phase = .initializing
             statusMessage = "جاري تهيئة الكاميرا وLiDAR…"
         case .ready:
+            initializationWatchdogTask?.cancel()
+            initializationIsSlow = false
             phase = .ready
             statusMessage = "ضع الجسم أمام الكاميرا ثم اضغط تحديد الجسم."
         case .detecting:
+            initializationWatchdogTask?.cancel()
+            initializationIsSlow = false
             phase = .detecting
             statusMessage = "اضبط صندوق الالتقاط حول الجسم ثم ابدأ المسح."
         case .capturing:
+            initializationWatchdogTask?.cancel()
+            initializationIsSlow = false
             phase = .capturing
-            statusMessage = "تحرّك ببطء حول الجسم. الالتقاط يتم تلقائيًا."
+            statusMessage = "تحرّك ببطء حول الجسم. الالتقاط يعمل الآن."
         case .finishing:
+            initializationWatchdogTask?.cancel()
             phase = .finishing
             statusMessage = "جاري إنهاء جلسة الالتقاط وحفظ الصور…"
         case .completed:
+            initializationWatchdogTask?.cancel()
             phase = .reconstructing
             statusMessage = "تم الالتقاط. جاري إنشاء USDZ ملوّن على الجهاز…"
             detachListeners()
             objectCaptureSession = nil
             startReconstruction()
         case .failed(let error):
+            initializationWatchdogTask?.cancel()
             phase = .failed
             errorMessage = error.localizedDescription
-            statusMessage = "فشلت جلسة Object Capture."
+            statusMessage = "فشلت جلسة Object Capture: \(error.localizedDescription)"
         @unknown default:
             statusMessage = "تغيّرت حالة جلسة الالتقاط."
         }
@@ -284,15 +350,15 @@ final class ObjectScanViewModel: ObservableObject {
 
     private func startReconstruction() {
         reconstructionTask?.cancel()
-        guard let imagesURL, let outputURL else {
+        guard let imagesURL, let localOutputURL else {
             phase = .failed
             errorMessage = "مجلد صور المسح غير متاح لإعادة البناء."
             return
         }
 
         let snapshotsURL = self.snapshotsURL
-        let finalURL = outputURL.appendingPathComponent("model.usdz")
-        try? FileManager.default.removeItem(at: finalURL)
+        let localModelURL = localOutputURL.appendingPathComponent("model.usdz")
+        try? fileManager.removeItem(at: localModelURL)
 
         reconstructionTask = Task { [weak self] in
             guard let self else { return }
@@ -308,7 +374,7 @@ final class ObjectScanViewModel: ObservableObject {
                 self.reconstructionProgress = 0
 
                 let request = PhotogrammetrySession.Request.modelFile(
-                    url: finalURL,
+                    url: localModelURL,
                     detail: .reduced
                 )
                 try session.process(requests: [request])
@@ -324,23 +390,17 @@ final class ObjectScanViewModel: ObservableObject {
                         self.reconstructionProgress = fraction
                         self.statusMessage = "بناء النموذج… \(Int(fraction * 100))%"
 
-                    case .requestComplete(_, let result):
-                        if case .modelFile(let url) = result {
-                            self.modelURL = url
-                        }
-
                     case .requestError(_, let error):
                         self.phase = .failed
                         self.errorMessage = error.localizedDescription
                         self.statusMessage = "تعذر إنشاء النموذج ثلاثي الأبعاد."
 
                     case .processingComplete:
-                        if FileManager.default.fileExists(atPath: finalURL.path) {
-                            self.modelURL = finalURL
+                        if self.fileManager.fileExists(atPath: localModelURL.path) {
+                            try self.publishCompletedCapture(localModelURL: localModelURL)
                             self.reconstructionProgress = 1
                             self.phase = .completed
                             self.statusMessage = "اكتمل نموذج USDZ الملوّن ويمكن معاينته أو مشاركته."
-                            self.writeManifestIfPossible()
                         } else if self.phase != .failed {
                             self.phase = .failed
                             self.errorMessage = "انتهت المعالجة لكن ملف النموذج لم يتم العثور عليه."
@@ -359,13 +419,40 @@ final class ObjectScanViewModel: ObservableObject {
         }
     }
 
-    private func writeManifestIfPossible() {
-        guard let folder = sessionFolderURL else { return }
+    private func publishCompletedCapture(localModelURL: URL) throws {
+        guard let finalFolderURL else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let modelFolder = finalFolderURL.appendingPathComponent("Model", isDirectory: true)
+        try fileManager.createDirectory(at: modelFolder, withIntermediateDirectories: true)
+        let publishedModel = modelFolder.appendingPathComponent("model.usdz")
+        try? fileManager.removeItem(at: publishedModel)
+        try fileManager.copyItem(at: localModelURL, to: publishedModel)
+
+        if runtimeOptions.keepSourceImages, let imagesURL {
+            let targetImages = finalFolderURL.appendingPathComponent("Images", isDirectory: true)
+            try? fileManager.removeItem(at: targetImages)
+            try fileManager.copyItem(at: imagesURL, to: targetImages)
+        }
+
+        modelURL = publishedModel
+        sessionFolderURL = finalFolderURL
+        writeManifestIfPossible(folder: finalFolderURL)
+
+        if let workingFolderURL {
+            try? fileManager.removeItem(at: workingFolderURL)
+            self.workingFolderURL = nil
+        }
+    }
+
+    private func writeManifestIfPossible(folder: URL) {
         let record = ObjectScanManifest(
-            schemaVersion: 1,
+            schemaVersion: 2,
             createdAt: Date(),
             imageCount: shotCount,
             modelFile: modelURL.map { "Model/\($0.lastPathComponent)" },
+            keptSourceImages: runtimeOptions.keepSourceImages,
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         )
         do {
@@ -377,12 +464,14 @@ final class ObjectScanViewModel: ObservableObject {
                 options: .atomic
             )
         } catch {
-            // The model is already complete; a metadata write failure should not discard it.
+            // The model is already complete; metadata failure must not discard it.
         }
     }
 
-    private func cleanupActiveSessions(cancelCapture: Bool) {
+    private func cleanupActiveSessions(cancelCapture: Bool, removeWorkingFiles: Bool) {
         detachListeners()
+        initializationWatchdogTask?.cancel()
+        initializationWatchdogTask = nil
         reconstructionTask?.cancel()
         reconstructionTask = nil
         photogrammetrySession?.cancel()
@@ -391,6 +480,10 @@ final class ObjectScanViewModel: ObservableObject {
             objectCaptureSession?.cancel()
         }
         objectCaptureSession = nil
+        if removeWorkingFiles, let workingFolderURL {
+            try? fileManager.removeItem(at: workingFolderURL)
+            self.workingFolderURL = nil
+        }
     }
 }
 
@@ -399,5 +492,6 @@ private struct ObjectScanManifest: Codable {
     let createdAt: Date
     let imageCount: Int
     let modelFile: String?
+    let keptSourceImages: Bool
     let appVersion: String
 }

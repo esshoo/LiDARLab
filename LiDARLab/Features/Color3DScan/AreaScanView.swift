@@ -48,15 +48,31 @@ struct AreaScanView: View {
         .sheet(isPresented: $showPreview) {
             if let mesh = model.completedMesh {
                 NavigationStack {
-                    AreaScanPreviewView(mesh: mesh)
+                    ZStack(alignment: .bottom) {
+                        AreaScanPreviewView(
+                            mesh: mesh,
+                            freeCamera: Color3DScanSettings.areaOptions.previewFreeCamera
+                        )
                         .ignoresSafeArea(edges: .bottom)
-                        .navigationTitle("معاينة Mesh الملوّن")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("إغلاق") { showPreview = false }
-                            }
+
+                        if Color3DScanSettings.areaOptions.previewFreeCamera {
+                            Text("إصبع: دوران  •  إصبعان: تحريك  •  3 أصابع: تقدم/تراجع  •  Pinch: مجال الرؤية")
+                                .font(.caption2)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .padding(.bottom, 12)
+                                .padding(.horizontal, 10)
                         }
+                    }
+                    .navigationTitle("معاينة الغرفة بالخامات")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("إغلاق") { showPreview = false }
+                        }
+                    }
                 }
             }
         }
@@ -100,7 +116,7 @@ struct AreaScanView: View {
                 Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
                     .font(.caption)
                 Spacer()
-                Text("LiDAR + RGB")
+                Text("LiDAR + RGB Textures")
                     .font(.caption.bold())
                     .foregroundStyle(.cyan)
             }
@@ -116,7 +132,7 @@ struct AreaScanView: View {
             VStack(spacing: 5) {
                 Text("مسح غرفة / مكان بالألوان")
                     .font(.headline)
-                Text("المسح يجمع Scene Mesh من LiDAR وصور RGB موزعة أثناء الحركة، ثم يسقط اللون على رؤوس الـMesh ويصدر نموذجًا ثلاثي الأبعاد.")
+                Text("المسح يجمع Scene Mesh من LiDAR وصور RGB موزعة أثناء الحركة، ثم يبني UV ويكسو الأسطح بصور الكاميرا بدل بقع ألوان الـVertex القديمة.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -181,7 +197,7 @@ struct AreaScanView: View {
         .padding(12)
     }
 
-    private func resultView(mesh: AreaScanColoredMesh, result: AreaScanExportResult) -> some View {
+    private func resultView(mesh: AreaScanTexturedMesh, result: AreaScanExportResult) -> some View {
         List {
             Section {
                 VStack(spacing: 10) {
@@ -190,7 +206,7 @@ struct AreaScanView: View {
                         .foregroundStyle(.green)
                     Text("اكتمل النموذج ثلاثي الأبعاد")
                         .font(.title3.bold())
-                    Text("تم أخذ الألوان من صور الكاميرا وإسقاطها على Mesh الناتج من LiDAR.")
+                    Text("تم ربط صور الكاميرا بالـMesh كخامات فعلية مع UV لكل وجه، لتحسين التفاصيل عند الاقتراب من الأسطح.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -215,37 +231,52 @@ struct AreaScanView: View {
                     Spacer()
                     Text(model.capturedFrameCount.formatted()).monospacedDigit()
                 }
+                HStack {
+                    Text("صور الخامات المستخدمة")
+                    Spacer()
+                    Text(mesh.textureURLs.count.formatted()).monospacedDigit()
+                }
+                HStack {
+                    Text("تغطية الوجوه بالخامات")
+                    Spacer()
+                    Text("\(mesh.faceCount > 0 ? Int((Double(mesh.texturedFaceCount) / Double(mesh.faceCount)) * 100) : 0)%")
+                        .monospacedDigit()
+                }
 
                 Button {
                     showPreview = true
                 } label: {
-                    Label("معاينة النموذج داخل التطبيق", systemImage: "rotate.3d")
+                    Label("دخول ومعاينة الغرفة بكاميرا حرة", systemImage: "move.3d")
                 }
             }
 
             Section("ملفات 3D") {
-                ShareLink(item: result.plyURL) {
-                    AreaExportRow(
-                        title: "PLY ملوّن",
-                        detail: "Mesh + Vertex RGB — الملف الأساسي الملوّن",
-                        systemImage: "cube.fill"
-                    )
-                }
-
-                ShareLink(item: result.objURL) {
-                    AreaExportRow(
-                        title: "OBJ",
-                        detail: "هندسة + ألوان رؤوس موسعة",
-                        systemImage: "shippingbox.fill"
-                    )
+                if let objURL = result.objURL {
+                    ShareLink(item: objURL) {
+                        AreaExportRow(
+                            title: "OBJ + MTL + Textures",
+                            detail: "Mesh مكسو بصور RGB فعلية — الأفضل للتفاصيل البصرية",
+                            systemImage: "photo.on.rectangle.angled"
+                        )
+                    }
                 }
 
                 if let usdzURL = result.usdzURL {
                     ShareLink(item: usdzURL) {
                         AreaExportRow(
-                            title: "USDZ",
-                            detail: "نسخة Apple عند نجاح تصدير SceneKit",
+                            title: "USDZ بخامات الصور",
+                            detail: "نسخة Apple للمعاينة والمشاركة عند نجاح التصدير",
                             systemImage: "arkit"
+                        )
+                    }
+                }
+
+                if let plyURL = result.plyURL {
+                    ShareLink(item: plyURL) {
+                        AreaExportRow(
+                            title: "PLY ملوّن",
+                            detail: "صيغة نقاط/وجوه مع RGB لكل Vertex كنسخة توافق",
+                            systemImage: "cube.fill"
                         )
                     }
                 }

@@ -27,10 +27,26 @@ struct AreaScanColoredMesh {
     var faceCount: Int { faces.count }
 }
 
+struct AreaScanTexturedMesh {
+    let vertices: [SIMD3<Float>]
+    let normals: [SIMD3<Float>]
+    let texcoords: [SIMD2<Float>]
+    let colors: [SIMD3<UInt8>]
+    let faces: [SIMD3<UInt32>]
+    let faceTextureIndices: [Int]
+    let textureURLs: [URL]
+
+    var vertexCount: Int { vertices.count }
+    var faceCount: Int { faces.count }
+    var texturedFaceCount: Int { faceTextureIndices.filter { $0 >= 0 }.count }
+}
+
 struct AreaScanExportResult {
     let folderURL: URL
-    let plyURL: URL
-    let objURL: URL
+    let plyURL: URL?
+    let objURL: URL?
+    let mtlURL: URL?
+    let textureFolderURL: URL?
     let usdzURL: URL?
     let manifestURL: URL
 }
@@ -51,7 +67,8 @@ struct AreaScanManifest: Codable {
     let vertexCount: Int
     let faceCount: Int
     let keyframeCount: Int
-    let coloredVertexCount: Int
+    let textureFrameCount: Int
+    let texturedFaceCount: Int
     let outputs: [String]
     let frames: [Frame]
 }

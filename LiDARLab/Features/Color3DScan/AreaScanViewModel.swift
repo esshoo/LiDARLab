@@ -16,7 +16,7 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var capturedFrameCount = 0
     @Published private(set) var exportProgress: Double = 0
     @Published private(set) var statusMessage = "ابدأ المسح ثم تحرّك ببطء داخل الغرفة."
-    @Published private(set) var completedMesh: AreaScanColoredMesh?
+    @Published private(set) var completedMesh: AreaScanTexturedMesh?
     @Published private(set) var exportResult: AreaScanExportResult?
     @Published var errorMessage: String?
 
@@ -35,10 +35,7 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     private var lastCaptureTimestamp: TimeInterval = -100
     private var lastStatisticsTimestamp: TimeInterval = 0
 
-    private let maximumKeyframes = 36
-    private let minimumCaptureInterval: TimeInterval = 1.15
-    private let minimumTranslation: Float = 0.14
-    private let minimumRotationRadians: Float = 8 * .pi / 180
+    private var runtimeOptions = Color3DScanSettings.areaOptions
 
     var isSupported: Bool {
         ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
@@ -48,7 +45,12 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         self.arView = arView
         arView.automaticallyConfigureSession = false
         arView.session.delegate = self
-        arView.debugOptions.insert(.showSceneUnderstanding)
+        runtimeOptions = Color3DScanSettings.areaOptions
+        if runtimeOptions.showSceneMeshWhileScanning {
+            arView.debugOptions.insert(.showSceneUnderstanding)
+        } else {
+            arView.debugOptions.remove(.showSceneUnderstanding)
+        }
     }
 
     func startScan() {
@@ -59,6 +61,13 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         guard let arView else {
             errorMessage = "عارض الواقع المعزز غير جاهز."
             return
+        }
+
+        runtimeOptions = Color3DScanSettings.areaOptions
+        if runtimeOptions.showSceneMeshWhileScanning {
+            arView.debugOptions.insert(.showSceneUnderstanding)
+        } else {
+            arView.debugOptions.remove(.showSceneUnderstanding)
         }
 
         do {
@@ -107,7 +116,8 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
                 configuration.frameSemantics.insert(.sceneDepth)
             }
-            if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            if runtimeOptions.useSmoothedDepth,
+               ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
                 configuration.frameSemantics.insert(.smoothedSceneDepth)
             }
 
@@ -167,41 +177,47 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
 
-            let coloredMesh = Color3DMeshExporter.buildColoredMesh(
+            let options = self.runtimeOptions
+            let texturedMesh = Color3DMeshExporter.buildTexturedMesh(
                 chunks: chunks,
-                keyframes: frames
+                keyframes: frames,
+                maximumTextureFrames: options.maximumTextureFrames
             ) { fraction in
                 DispatchQueue.main.async {
-                    self.exportProgress = fraction * 0.68
-                    self.statusMessage = "تلوين النموذج… \(Int(fraction * 100))%"
+                    self.exportProgress = fraction * 0.64
+                    self.statusMessage = "بناء UV وربط صور الكاميرا… \(Int(fraction * 100))%"
                 }
             }
 
             do {
                 let result = try Color3DMeshExporter.export(
-                    mesh: coloredMesh,
+                    mesh: texturedMesh,
                     keyframes: frames,
-                    folderURL: folder
+                    folderURL: folder,
+                    options: options
                 ) { fraction in
                     DispatchQueue.main.async {
-                        self.exportProgress = 0.68 + fraction * 0.32
-                        self.statusMessage = "تصدير ملفات 3D… \(Int(fraction * 100))%"
+                        self.exportProgress = 0.64 + fraction * 0.36
+                        self.statusMessage = "تصدير Mesh بخامات الصور… \(Int(fraction * 100))%"
                     }
                 }
 
                 DispatchQueue.main.async {
-                    self.completedMesh = coloredMesh
+                    self.completedMesh = texturedMesh
                     self.exportResult = result
                     self.exportProgress = 1
                     self.isExporting = false
-                    self.statusMessage = "اكتمل المسح: Mesh ملوّن جاهز بصيغة PLY وOBJ" + (result.usdzURL == nil ? "." : " وUSDZ.")
+                    let coverage = texturedMesh.faceCount > 0
+                        ? Int((Double(texturedMesh.texturedFaceCount) / Double(texturedMesh.faceCount)) * 100)
+                        : 0
+                    self.statusMessage = "اكتمل المسح بخامات RGB فعلية. تغطية الخامات: \(coverage)%"
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.completedMesh = coloredMesh
+                    self.completedMesh = texturedMesh
                     self.isExporting = false
                     self.errorMessage = error.localizedDescription
-                    self.statusMessage = "تم بناء Mesh ولكن فشل أحد ملفات التصدير."
+                    self.statusMessage = "تم بناء Mesh المكسو بالصور ولكن فشل أحد ملفات التصدير."
                 }
             }
         }
@@ -288,14 +304,14 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
 
         stateLock.lock()
         guard scanningFlag,
-              keyframes.count < maximumKeyframes,
+              keyframes.count < runtimeOptions.maximumKeyframes,
               let imagesFolderURL else {
             stateLock.unlock()
             return
         }
 
         let elapsed = frame.timestamp - lastCaptureTimestamp
-        guard elapsed >= minimumCaptureInterval else {
+        guard elapsed >= runtimeOptions.minimumCaptureInterval else {
             stateLock.unlock()
             return
         }
@@ -310,7 +326,7 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             let dotValue = min(max(simd_dot(f0, f1), -1), 1)
             let angle = acos(dotValue)
 
-            guard translation >= minimumTranslation || angle >= minimumRotationRadians else {
+            guard translation >= runtimeOptions.minimumTranslation || angle >= runtimeOptions.minimumRotationRadians else {
                 stateLock.unlock()
                 return
             }
@@ -340,12 +356,12 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let originalHeight = CVPixelBufferGetHeight(pixelBuffer)
         guard originalWidth > 0, originalHeight > 0 else { return }
 
-        let targetMaxDimension: CGFloat = 720
+        let targetMaxDimension = CGFloat(runtimeOptions.imageMaxDimension)
         let scale = min(1, targetMaxDimension / CGFloat(max(originalWidth, originalHeight)))
         let input = CIImage(cvPixelBuffer: pixelBuffer)
         let scaled = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImage = ciContext.createCGImage(scaled, from: scaled.extent.integral),
-              let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.82) else { return }
+              let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: runtimeOptions.jpegQuality) else { return }
 
         stateLock.lock()
         guard generation == activeGeneration else {
@@ -354,7 +370,7 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         }
         // Recalculate the index under lock because multiple queued frames can finish close together.
         let index = keyframes.count + 1
-        guard index <= maximumKeyframes else {
+        guard index <= runtimeOptions.maximumKeyframes else {
             stateLock.unlock()
             return
         }
