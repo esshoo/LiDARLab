@@ -15,7 +15,7 @@ struct AreaScanView: View {
                 content
             }
         }
-        .navigationTitle("مسح مكان 3D")
+        .navigationTitle("مسح منطقة بصري 3D")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if model.phase == .capturing || model.phase == .ready || model.phase == .initializing {
@@ -100,15 +100,16 @@ struct AreaScanView: View {
                     .font(.system(size: 68, weight: .light))
                     .foregroundStyle(.cyan)
 
-                Text("Apple Object Capture — Area Mode")
+                Text("Apple Area Mode — منطقة / سطح")
                     .font(.title2.bold())
 
-                Text("هذا الوضع يستخدم مسار Apple الرسمي للمساحات: يبدأ الالتقاط مباشرة بدون اكتشاف جسم أو Bounding Box. حرّك المؤشر فوق الأسطح كأنه فرشاة، وببطء مع تداخل واضح بين الصور.")
+                Text("هذا الوضع مخصص لمسح منطقة أو سطح بصريًا باستخدام Apple Object Capture Area Mode. لا نستخدمه بعد الآن كبديل لـRoomPlan عند الحاجة إلى غرفة هندسية كاملة.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("تحرك ببطء وفي مسارات منتظمة", systemImage: "figure.walk")
+                    Label("قسّم الغرفة الكبيرة إلى جدران أو مناطق صغيرة بدل لقطة واحدة ضخمة", systemImage: "square.split.2x2")
+                    Label("تحرك ببطء، موازياً للسطح، مع تداخل واضح بين اللقطات", systemImage: "figure.walk")
                     Label("كرر المرور من ارتفاعات مختلفة", systemImage: "arrow.up.and.down")
                     Label("تجنب الإضاءة القاسية والظلال الحادة", systemImage: "sun.max")
                     Label("المعالجة على iPhone تستخدم Reduced detail", systemImage: "iphone")
@@ -118,10 +119,19 @@ struct AreaScanView: View {
                 .padding()
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
 
+                NavigationLink {
+                    RoomScanView()
+                } label: {
+                    Label("غرفة كاملة ودقيقة — RoomPlan", systemImage: "ruler.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
                 Button {
                     model.prepareSession()
                 } label: {
-                    Label("فتح Area Mode", systemImage: "camera.viewfinder")
+                    Label("مسح منطقة / سطح بصري", systemImage: "camera.viewfinder")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                 }
@@ -271,13 +281,19 @@ struct AreaScanView: View {
                     Image(systemName: "checkmark.seal.fill")
                         .font(.system(size: 54))
                         .foregroundStyle(.green)
-                    Text("اكتمل Apple Area Mode")
+                    Text("اكتمل المسح البصري للمنطقة")
                         .font(.title2.bold())
-                    Text("النتيجة المعروضة هي ناتج Photogrammetry الرسمي، بدون إسقاط خامات مخصص من التطبيق.")
+                    Text("النتيجة هي Photogrammetry رسمي من Apple. إذا كانت المنطقة أكبر من قدرة المعالجة على الهاتف، احتفظ بصور المصدر لمعالجة أعلى جودة على Mac.")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
+            }
+
+            Section("تشخيص إعادة البناء") {
+                LabeledContent("صور غير صالحة", value: "\(model.invalidSampleCount)")
+                LabeledContent("صور تم تخطيها", value: "\(model.skippedSampleCount)")
+                LabeledContent("خفض تلقائي للبيانات", value: model.automaticDownsamplingOccurred ? "نعم" : "لا")
             }
 
             if let url = model.modelURL {
@@ -314,7 +330,7 @@ struct AreaScanView: View {
         ContentUnavailableView {
             Label("Area Mode غير متاح", systemImage: "iphone.slash")
         } description: {
-            Text("المسح الملون الرسمي للمساحات يحتاج iOS 18 أو أحدث وجهازًا يدعم Object Capture. لن يستخدم التطبيق محرك إسقاط الصور المخصص كبديل تلقائي لأنه كان سبب النتائج غير الصحيحة.")
+            Text("Apple Area Mode يحتاج iOS 18 أو أحدث وجهازًا يدعم Object Capture. للمسح الهندسي الكامل للغرفة استخدم RoomPlan المتاح كأداة مستقلة داخل التطبيق.")
         }
     }
 }

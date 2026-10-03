@@ -45,7 +45,11 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var maximumShotCount = 0
     @Published private(set) var passNumber = 1
     @Published private(set) var scanPassComplete = false
+    @Published private(set) var completedPasses = 0
+    @Published private(set) var captureTrackingState = "—"
     @Published private(set) var reconstructionProgress: Double = 0
+    @Published private(set) var invalidSampleCount = 0
+    @Published private(set) var skippedSampleCount = 0
     @Published private(set) var currentDistanceMeters: Float = 0
     @Published private(set) var trackingState = "متوقف"
     @Published private(set) var feedbackMessage: String?
@@ -86,6 +90,25 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         options.recommendedPasses
     }
 
+    var shouldShowPreselectionMesh: Bool {
+        phase == .aiming && targetSelected && options.showPreselectionMesh
+    }
+
+    var shouldWarnBeforeFinish: Bool {
+        guard phase == .capturing, canFinishCapture, options.preferCompletedPassBeforeFinish else { return false }
+        return completedPasses < max(options.recommendedPasses, 1)
+    }
+
+    var finishWarningMessage: String {
+        if completedPasses == 0 {
+            return "لم تكتمل أي جولة في Capture Dial بعد. يمكنك الإنهاء يدويًا، لكن إعادة البناء قد تحتوي على تشوهات أو أجزاء ناقصة."
+        }
+        if completedPasses < recommendedPasses {
+            return "اكتملت \(completedPasses) من \(recommendedPasses) جولات موصى بها. يمكنك الإنهاء الآن، أو إضافة جولة أخرى من ارتفاع مختلف لتحسين الشكل."
+        }
+        return ""
+    }
+
     func attach(to arView: ARView) {
         self.arView = arView
         arView.automaticallyConfigureSession = false
@@ -109,7 +132,11 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         maximumShotCount = 0
         passNumber = 1
         scanPassComplete = false
+        completedPasses = 0
+        captureTrackingState = "—"
         reconstructionProgress = 0
+        invalidSampleCount = 0
+        skippedSampleCount = 0
         feedbackMessage = nil
         targetWorldPoint = nil
         targetSelected = false
@@ -245,7 +272,11 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         maximumShotCount = 0
         passNumber = 1
         scanPassComplete = false
+        completedPasses = 0
+        captureTrackingState = "—"
         reconstructionProgress = 0
+        invalidSampleCount = 0
+        skippedSampleCount = 0
         currentDistanceMeters = 0
         trackingState = "متوقف"
         feedbackMessage = nil
@@ -304,6 +335,10 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         }
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
             configuration.frameSemantics.insert(.smoothedSceneDepth)
+        }
+        if options.showPreselectionMesh,
+           ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
         }
         arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         preselectionRunning = true
@@ -379,8 +414,12 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             maximumShotCount = 0
             passNumber = 1
             scanPassComplete = false
+            completedPasses = 0
+            captureTrackingState = Self.describe(tracking: session.cameraTracking)
             feedbackMessage = nil
             reconstructionProgress = 0
+            invalidSampleCount = 0
+            skippedSampleCount = 0
             phase = .preparing
             statusMessage = "جاري تشغيل Object Capture الرسمي…"
 
@@ -419,10 +458,21 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             guard let self, let session else { return }
             for await completed in session.userCompletedScanPassUpdates {
                 guard !Task.isCancelled else { return }
+                if completed && !self.scanPassComplete {
+                    self.completedPasses += 1
+                }
                 self.scanPassComplete = completed
                 if completed {
-                    self.statusMessage = "اكتملت الجولة \(self.passNumber) في Capture Dial. يمكنك إنهاء المسح أو إضافة جولة من ارتفاع مختلف."
+                    self.statusMessage = "اكتملت الجولة \(self.passNumber). راجع Point Cloud الفعلي ثم ابدأ جولة جديدة أو أنهِ المسح."
                 }
+            }
+        })
+
+        listenerTasks.append(Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for await tracking in session.cameraTrackingUpdates {
+                guard !Task.isCancelled else { return }
+                self.captureTrackingState = Self.describe(tracking: tracking)
             }
         })
 
@@ -453,7 +503,8 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             statusMessage = "راجع Bounding Box الذي رسمته Apple وعدّله حتى يحيط بالمجسم فقط."
         case .capturing:
             phase = .capturing
-            statusMessage = "لف حول المجسم ببطء واتبع Capture Dial والـPoint Cloud الظاهرين في واجهة Apple."
+            captureTrackingState = captureSession.map { Self.describe(tracking: $0.cameraTracking) } ?? captureTrackingState
+            statusMessage = "لف حول المجسم ببطء واتبع Capture Dial والـPoint Cloud. لا تعتمد على عدد الصور وحده."
         case .finishing:
             phase = .finishing
             statusMessage = "جاري إنهاء الالتقاط وحفظ الصور…"
@@ -489,6 +540,7 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             do {
                 var configuration = PhotogrammetrySession.Configuration()
                 configuration.checkpointDirectory = self.checkpointsURL
+                configuration.sampleOrdering = .sequential
                 configuration.featureSensitivity = options.highFeatureSensitivity ? .high : .normal
                 configuration.isObjectMaskingEnabled = options.objectMasking
 
@@ -510,6 +562,12 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
                         self.phase = .failed
                         self.errorMessage = error.localizedDescription
                         self.statusMessage = "تعذر بناء النموذج من صور Object Capture."
+                    case .invalidSample(_, _):
+                        self.invalidSampleCount += 1
+                    case .skippedSample(_):
+                        self.skippedSampleCount += 1
+                    case .automaticDownsampling:
+                        self.statusMessage = "RealityKit خفّض دقة بعض صور الإدخال تلقائيًا بسبب حدود ذاكرة الجهاز."
                     case .processingComplete:
                         guard self.fileManager.fileExists(atPath: localModelURL.path), let finalFolder else {
                             if self.phase != .failed {
@@ -573,6 +631,30 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         localModelURL = nil
         finalFolderURL = nil
         targetWorldPoint = nil
+    }
+
+    private static func describe(tracking: ObjectCaptureSession.Tracking) -> String {
+        switch tracking {
+        case .normal:
+            return "تتبع ممتاز"
+        case .notAvailable:
+            return "التتبع غير جاهز"
+        case .limited(reason: let reason):
+            switch reason {
+            case .initializing:
+                return "تهيئة التتبع"
+            case .excessiveMotion:
+                return "الحركة سريعة"
+            case .insufficientFeatures:
+                return "تفاصيل مرئية قليلة"
+            case .relocalizing:
+                return "إعادة تحديد الموقع"
+            @unknown default:
+                return "تتبع محدود"
+            }
+        @unknown default:
+            return "حالة تتبع غير معروفة"
+        }
     }
 
     private static func describe(feedback: Set<ObjectCaptureSession.Feedback>) -> String? {

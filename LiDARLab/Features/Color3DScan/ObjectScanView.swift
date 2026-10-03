@@ -6,6 +6,7 @@ struct ObjectScanView: View {
     @State private var showPointCloud = false
     @State private var showModelPreview = false
     @State private var showCancelConfirmation = false
+    @State private var showEarlyFinishConfirmation = false
 
     var body: some View {
         Group {
@@ -27,6 +28,12 @@ struct ObjectScanView: View {
         .confirmationDialog("إلغاء مسح المجسم؟", isPresented: $showCancelConfirmation) {
             Button("إلغاء المسح", role: .destructive) { model.cancelAndReset() }
             Button("متابعة", role: .cancel) {}
+        }
+        .confirmationDialog("التغطية ما زالت غير مكتملة", isPresented: $showEarlyFinishConfirmation) {
+            Button("إنهاء وبناء النموذج الآن") { model.finishCapture() }
+            Button("متابعة المسح", role: .cancel) {}
+        } message: {
+            Text(model.finishWarningMessage)
         }
         .alert("خطأ في المسح", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -108,6 +115,16 @@ struct ObjectScanView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
 
+                VStack(alignment: .leading, spacing: 9) {
+                    Label("لف ببطء وحافظ على تداخل واضح بين الزوايا، ولا تعتمد على عدد الصور وحده.", systemImage: "arrow.triangle.2.circlepath")
+                    Label("الأجسام الشفافة أو شديدة اللمعان أو عديمة التفاصيل قد تتشوه في Photogrammetry؛ الإضاءة المنتشرة والخلفية البسيطة تساعد كثيرًا.", systemImage: "lightbulb.max")
+                    Label("استهدف إكمال Capture Dial ثم راجع Point Cloud قبل الإنهاء؛ 3 جولات من ارتفاعات مختلفة هي الإعداد الموصى به افتراضيًا.", systemImage: "point.3.connected.trianglepath.dotted")
+                }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+
                 Button {
                     model.startNewScan()
                 } label: {
@@ -181,6 +198,13 @@ struct ObjectScanView: View {
                     .font(.headline)
                     .multilineTextAlignment(.center)
             } else {
+                if model.shouldShowPreselectionMesh {
+                    Label("الشبكة الملوّنة فوق المشهد هي LiDAR Scene Mesh حقيقية تساعدك على التأكد أن الحساس يقرأ شكل السطح قبل بدء Object Capture.", systemImage: "triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
                 HStack {
                     Button("اختيار من جديد") { model.clearTargetSelection() }
                         .buttonStyle(.bordered)
@@ -205,8 +229,13 @@ struct ObjectScanView: View {
     private var officialCaptureView: some View {
         ZStack {
             if let session = model.captureSession {
-                ObjectCaptureView(session: session)
-                    .ignoresSafeArea(edges: .bottom)
+                if model.phase == .capturing && model.scanPassComplete {
+                    pointCloudView(session: session)
+                        .ignoresSafeArea(edges: .bottom)
+                } else {
+                    ObjectCaptureView(session: session)
+                        .ignoresSafeArea(edges: .bottom)
+                }
             } else {
                 Color.clear
             }
@@ -241,11 +270,22 @@ struct ObjectScanView: View {
 
             if model.phase == .capturing {
                 HStack {
-                    Label("الجولة \(model.passNumber)/\(model.recommendedPasses)", systemImage: "arrow.triangle.2.circlepath")
+                    Label("الجولة الحالية \(model.passNumber)", systemImage: "arrow.triangle.2.circlepath")
+                    Spacer()
+                    Label("مكتملة \(model.completedPasses)/\(model.recommendedPasses)", systemImage: "checkmark.circle")
+                        .foregroundStyle(model.completedPasses >= model.recommendedPasses ? Color.green : Color.secondary)
+                }
+                .font(.caption)
+
+                HStack {
+                    Label(model.captureTrackingState, systemImage: "scope")
                     Spacer()
                     if model.scanPassComplete {
-                        Label("Capture Dial مكتمل", systemImage: "checkmark.circle.fill")
+                        Label("راجع Point Cloud", systemImage: "point.3.connected.trianglepath.dotted")
                             .foregroundStyle(.green)
+                    } else {
+                        Text("أكمل Capture Dial")
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .font(.caption)
@@ -309,19 +349,24 @@ struct ObjectScanView: View {
                     Button {
                         model.requestManualShot()
                     } label: {
-                        Label("صورة", systemImage: "camera.fill")
+                        Label("صورة إضافية", systemImage: "camera.fill")
                     }
                     .buttonStyle(.bordered)
 
                     Button {
                         showPointCloud = true
                     } label: {
-                        Label("الشبكة", systemImage: "point.3.connected.trianglepath.dotted")
+                        Label("مراجعة الشبكة", systemImage: "point.3.connected.trianglepath.dotted")
                     }
                     .buttonStyle(.bordered)
                 }
 
                 if model.scanPassComplete {
+                    Text("تمت الجولة الحالية. المعروض الآن هو Point Cloud الفعلي للجلسة مع مواقع الصور؛ لفّ النموذج وتأكد من عدم وجود مناطق ناقصة قبل المتابعة.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
                     HStack(spacing: 8) {
                         Button("جولة إضافية") { model.beginAdditionalPass() }
                             .buttonStyle(.bordered)
@@ -332,7 +377,11 @@ struct ObjectScanView: View {
                 }
 
                 Button {
-                    model.finishCapture()
+                    if model.shouldWarnBeforeFinish {
+                        showEarlyFinishConfirmation = true
+                    } else {
+                        model.finishCapture()
+                    }
                 } label: {
                     Label("إنهاء الآن وبناء النموذج", systemImage: "stop.circle.fill")
                         .font(.headline)
@@ -343,7 +392,12 @@ struct ObjectScanView: View {
                 .disabled(!model.canFinishCapture)
 
                 if !model.canFinishCapture {
-                    Text("زر الإنهاء يصبح متاحًا بعد \(model.minimumImagesBeforeFinish) صور. لا توجد نسبة 6% مصطنعة؛ Capture Dial الخاص بـApple هو مرجع التغطية.")
+                    Text("زر الإنهاء يصبح متاحًا بعد \(model.minimumImagesBeforeFinish) صور، لكن جودة الشكل تعتمد أساسًا على اكتمال Capture Dial وPoint Cloud من كل الجهات.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                } else if model.completedPasses < model.recommendedPasses {
+                    Text("يمكنك الإنهاء يدويًا، لكن لديك \(model.completedPasses) من \(model.recommendedPasses) جولات موصى بها. الجولة الإضافية من ارتفاع مختلف تقلل الحواف الناقصة والتشوهات.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -405,6 +459,24 @@ struct ObjectScanView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                }
+
+                if model.invalidSampleCount > 0 || model.skippedSampleCount > 0 {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Label("تشخيص الجودة", systemImage: "waveform.path.ecg")
+                            .font(.headline)
+                        if model.invalidSampleCount > 0 {
+                            Text("• صور غير صالحة: \(model.invalidSampleCount)")
+                        }
+                        if model.skippedSampleCount > 0 {
+                            Text("• صور لم تستخدمها RealityKit: \(model.skippedSampleCount)")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
 
                 Button("مسح مجسم جديد") { model.cancelAndReset() }

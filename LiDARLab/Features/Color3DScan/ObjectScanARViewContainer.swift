@@ -12,6 +12,7 @@ struct ObjectScanARViewContainer: UIViewRepresentable {
         let view = ARView(frame: .zero)
         view.automaticallyConfigureSession = false
         model.attach(to: view)
+        updateMeshOverlay(on: view)
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         tap.cancelsTouchesInView = false
@@ -19,7 +20,17 @@ struct ObjectScanARViewContainer: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: ARView, context: Context) {}
+    func updateUIView(_ uiView: ARView, context: Context) {
+        updateMeshOverlay(on: uiView)
+    }
+
+    private func updateMeshOverlay(on view: ARView) {
+        if model.shouldShowPreselectionMesh {
+            view.debugOptions.insert(.showSceneUnderstanding)
+        } else {
+            view.debugOptions.remove(.showSceneUnderstanding)
+        }
+    }
 
     static func dismantleUIView(_ uiView: ARView, coordinator: Coordinator) {
         uiView.session.pause()

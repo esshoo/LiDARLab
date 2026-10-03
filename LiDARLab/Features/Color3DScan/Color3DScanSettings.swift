@@ -322,9 +322,13 @@ enum Color3DScanSettings {
         static let appleAreaOverCapture = "color3d.settings.appleArea.overCapture"
         static let appleAreaKeepSourceImages = "color3d.settings.appleArea.keepSourceImages"
         static let appleAreaMinimumImages = "color3d.settings.appleArea.minimumImages"
+        static let appleAreaHighFeatureSensitivity = "color3d.settings.appleArea.highFeatureSensitivity"
+        static let appleAreaRecoverEntireScene = "color3d.settings.appleArea.recoverEntireScene"
 
         static let appleObjectRecommendedPasses = "color3d.settings.appleObject.recommendedPasses"
         static let appleObjectOverCapture = "color3d.settings.appleObject.overCapture"
+        static let appleObjectShowPreselectionMesh = "color3d.settings.appleObject.showPreselectionMesh"
+        static let appleObjectPreferCompletedPassBeforeFinish = "color3d.settings.appleObject.preferCompletedPassBeforeFinish"
     }
 
     private static let defaults = UserDefaults.standard
@@ -370,9 +374,13 @@ enum Color3DScanSettings {
             Key.appleAreaOverCapture: false,
             Key.appleAreaKeepSourceImages: true,
             Key.appleAreaMinimumImages: 12,
+            Key.appleAreaHighFeatureSensitivity: true,
+            Key.appleAreaRecoverEntireScene: true,
 
             Key.appleObjectRecommendedPasses: 3,
-            Key.appleObjectOverCapture: false
+            Key.appleObjectOverCapture: false,
+            Key.appleObjectShowPreselectionMesh: true,
+            Key.appleObjectPreferCompletedPassBeforeFinish: true
         ])
     }
 
@@ -425,6 +433,8 @@ enum Color3DScanSettings {
         let overCapture: Bool
         let keepSourceImages: Bool
         let minimumImagesBeforeFinish: Int
+        let highFeatureSensitivity: Bool
+        let recoverEntireScene: Bool
     }
 
     struct AppleObjectCaptureOptions {
@@ -436,6 +446,8 @@ enum Color3DScanSettings {
         let recommendedPasses: Int
         let highFeatureSensitivity: Bool
         let objectMasking: Bool
+        let showPreselectionMesh: Bool
+        let preferCompletedPassBeforeFinish: Bool
     }
 
     static var appleAreaOptions: AppleAreaCaptureOptions {
@@ -445,7 +457,9 @@ enum Color3DScanSettings {
             haptics: defaults.bool(forKey: Key.appleAreaHaptics),
             overCapture: defaults.bool(forKey: Key.appleAreaOverCapture),
             keepSourceImages: defaults.bool(forKey: Key.appleAreaKeepSourceImages),
-            minimumImagesBeforeFinish: min(max(defaults.integer(forKey: Key.appleAreaMinimumImages), 1), 100)
+            minimumImagesBeforeFinish: min(max(defaults.integer(forKey: Key.appleAreaMinimumImages), 1), 100),
+            highFeatureSensitivity: defaults.bool(forKey: Key.appleAreaHighFeatureSensitivity),
+            recoverEntireScene: defaults.bool(forKey: Key.appleAreaRecoverEntireScene)
         )
     }
 
@@ -460,7 +474,9 @@ enum Color3DScanSettings {
             minimumImagesBeforeFinish: object.minimumImagesBeforeFinish,
             recommendedPasses: min(max(defaults.integer(forKey: Key.appleObjectRecommendedPasses), 1), 5),
             highFeatureSensitivity: object.highFeatureSensitivity,
-            objectMasking: object.objectMasking
+            objectMasking: object.objectMasking,
+            showPreselectionMesh: defaults.bool(forKey: Key.appleObjectShowPreselectionMesh),
+            preferCompletedPassBeforeFinish: defaults.bool(forKey: Key.appleObjectPreferCompletedPassBeforeFinish)
         )
     }
 
@@ -540,8 +556,12 @@ enum Color3DScanSettings {
             Key.appleAreaOverCapture,
             Key.appleAreaKeepSourceImages,
             Key.appleAreaMinimumImages,
+            Key.appleAreaHighFeatureSensitivity,
+            Key.appleAreaRecoverEntireScene,
             Key.appleObjectRecommendedPasses,
-            Key.appleObjectOverCapture
+            Key.appleObjectOverCapture,
+            Key.appleObjectShowPreselectionMesh,
+            Key.appleObjectPreferCompletedPassBeforeFinish
         ] {
             defaults.removeObject(forKey: key)
         }

@@ -34,6 +34,9 @@ final class AreaScanViewModel: ObservableObject {
     @Published private(set) var shotCount = 0
     @Published private(set) var maximumShotCount = 0
     @Published private(set) var reconstructionProgress: Double = 0
+    @Published private(set) var invalidSampleCount = 0
+    @Published private(set) var skippedSampleCount = 0
+    @Published private(set) var automaticDownsamplingOccurred = false
     @Published private(set) var modelURL: URL?
     @Published private(set) var sessionFolderURL: URL?
     @Published private(set) var statusMessage = "Area Mode يستخدم واجهة Object Capture الرسمية من Apple."
@@ -123,6 +126,9 @@ final class AreaScanViewModel: ObservableObject {
             sessionFolderURL = finalFolder
             modelURL = nil
             reconstructionProgress = 0
+            invalidSampleCount = 0
+            skippedSampleCount = 0
+            automaticDownsamplingOccurred = false
             shotCount = 0
             maximumShotCount = 0
             feedbackMessage = nil
@@ -171,6 +177,9 @@ final class AreaScanViewModel: ObservableObject {
         shotCount = 0
         maximumShotCount = 0
         reconstructionProgress = 0
+        invalidSampleCount = 0
+        skippedSampleCount = 0
+        automaticDownsamplingOccurred = false
         modelURL = nil
         sessionFolderURL = nil
         feedbackMessage = nil
@@ -266,6 +275,12 @@ final class AreaScanViewModel: ObservableObject {
             do {
                 var configuration = PhotogrammetrySession.Configuration()
                 configuration.checkpointDirectory = self.checkpointsURL
+                configuration.sampleOrdering = .sequential
+                configuration.featureSensitivity = self.options.highFeatureSensitivity ? .high : .normal
+                // Area mode is scene capture, not foreground-object extraction. Keep the full scene
+                // available to reconstruction so broad walls/floors are not treated as background.
+                configuration.isObjectMaskingEnabled = false
+                configuration.ignoreBoundingBox = self.options.recoverEntireScene
 
                 let session = try PhotogrammetrySession(input: imagesURL, configuration: configuration)
                 self.photogrammetrySession = session
@@ -288,6 +303,13 @@ final class AreaScanViewModel: ObservableObject {
                         self.phase = .failed
                         self.errorMessage = error.localizedDescription
                         self.statusMessage = "تعذر بناء نموذج Area Mode."
+                    case .invalidSample(_, _):
+                        self.invalidSampleCount += 1
+                    case .skippedSample(_):
+                        self.skippedSampleCount += 1
+                    case .automaticDownsampling:
+                        self.automaticDownsamplingOccurred = true
+                        self.statusMessage = "RealityKit خفّض بعض بيانات الإدخال تلقائيًا بسبب حدود الجهاز."
                     case .processingComplete:
                         guard self.fileManager.fileExists(atPath: localModelURL.path), let finalFolder else {
                             if self.phase != .failed {

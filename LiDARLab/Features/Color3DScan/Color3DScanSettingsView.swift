@@ -6,6 +6,8 @@ struct Color3DScanSettingsView: View {
     @AppStorage(Color3DScanSettings.Key.appleAreaOverCapture) private var areaOverCapture = false
     @AppStorage(Color3DScanSettings.Key.appleAreaKeepSourceImages) private var areaKeepSourceImages = true
     @AppStorage(Color3DScanSettings.Key.appleAreaMinimumImages) private var areaMinimumImages = 12
+    @AppStorage(Color3DScanSettings.Key.appleAreaHighFeatureSensitivity) private var areaHighFeatureSensitivity = true
+    @AppStorage(Color3DScanSettings.Key.appleAreaRecoverEntireScene) private var areaRecoverEntireScene = true
 
     @AppStorage(Color3DScanSettings.Key.objectAutoCapture) private var objectAutoCapture = true
     @AppStorage(Color3DScanSettings.Key.objectHaptics) private var objectHaptics = true
@@ -16,6 +18,8 @@ struct Color3DScanSettingsView: View {
     @AppStorage(Color3DScanSettings.Key.objectMasking) private var objectMasking = true
     @AppStorage(Color3DScanSettings.Key.objectKeepSourceImages) private var objectKeepSourceImages = true
     @AppStorage(Color3DScanSettings.Key.objectSizePreset) private var objectSizePresetRaw = ObjectScanSizePreset.medium.rawValue
+    @AppStorage(Color3DScanSettings.Key.appleObjectShowPreselectionMesh) private var objectShowPreselectionMesh = true
+    @AppStorage(Color3DScanSettings.Key.appleObjectPreferCompletedPassBeforeFinish) private var objectPreferCompletedPassBeforeFinish = true
 
     @State private var showResetConfirmation = false
 
@@ -33,11 +37,13 @@ struct Color3DScanSettingsView: View {
                 Toggle("اهتزازات أثناء الالتقاط", isOn: $areaHaptics)
                 Toggle("Over Capture", isOn: $areaOverCapture)
                 Stepper("أقل عدد صور قبل السماح بالإنهاء: \(areaMinimumImages)", value: $areaMinimumImages, in: 1...100)
+                Toggle("حساسية تفاصيل عالية", isOn: $areaHighFeatureSensitivity)
+                Toggle("استخراج كل هندسة المشهد", isOn: $areaRecoverEntireScene)
                 Toggle("الاحتفاظ بصور المصدر", isOn: $areaKeepSourceImages)
             } header: {
-                Label("مسح الغرفة / المكان — Apple Area Mode", systemImage: "house.lodge")
+                Label("مسح منطقة / سطح — Apple Area Mode", systemImage: "square.3.layers.3d")
             } footer: {
-                Text("هذا الوضع يستخدم Object Capture Area Mode الرسمي. لا توجد إعدادات حقيقية لكثافة نقاط LiDAR أو دقة JPEG داخل ObjectCaptureSession، لذلك لا نعرض منزلقات وهمية. جودة الالتقاط تتحسن بالتغطية الجيدة، تداخل الصور، والحركة البطيئة من أكثر من ارتفاع.")
+                Text("Area Mode مناسب لمنطقة أو سطح أو مشهد 2.5D أكثر من كونه ماسح غرفة هندسي. عند تفعيل استخراج كل هندسة المشهد نوقف Object Masking ونتجاهل أي Bounding Box أثناء إعادة البناء. للمسح الكامل للجدران والأبواب والنوافذ استخدم RoomPlan.")
             }
 
             Section {
@@ -55,11 +61,13 @@ struct Color3DScanSettingsView: View {
                 Stepper("عدد الجولات الموصى به: \(objectRecommendedPasses)", value: $objectRecommendedPasses, in: 1...5)
                 Toggle("High Feature Sensitivity", isOn: $objectHighFeatureSensitivity)
                 Toggle("Object Masking", isOn: $objectMasking)
+                Toggle("شبكة LiDAR أثناء اختيار الهدف", isOn: $objectShowPreselectionMesh)
+                Toggle("تحذير قبل الإنهاء بدون جولات مكتملة", isOn: $objectPreferCompletedPassBeforeFinish)
                 Toggle("الاحتفاظ بصور المصدر", isOn: $objectKeepSourceImages)
             } header: {
                 Label("مسح المجسمات — Object Capture", systemImage: "cube.transparent")
             } footer: {
-                Text("كمية البيانات الفعلية تتحكم فيها الجولات، Over Capture، والإيقاف اليدوي. أثناء المسح سيعرض Apple Capture Dial والـPoint Cloud بدل نسبة تقديرية مصنوعة من عدد الصور.")
+                Text("أثناء الالتقاط يعرض ObjectCaptureView نفسه Point Cloud وCapture Dial. بعد اكتمال كل جولة ينتقل التطبيق تلقائيًا إلى مراجعة Point Cloud قبل أن تختار جولة جديدة أو إنهاء المسح. شبكة LiDAR المبدئية تظهر فقط في مرحلة اختيار الهدف قبل تسليم الكاميرا إلى Object Capture.")
             }
 
             Section("المعالجة على iPhone") {
@@ -86,6 +94,8 @@ struct Color3DScanSettingsView: View {
                 areaOverCapture = false
                 areaKeepSourceImages = true
                 areaMinimumImages = 12
+                areaHighFeatureSensitivity = true
+                areaRecoverEntireScene = true
                 objectAutoCapture = true
                 objectHaptics = true
                 objectOverCapture = false
@@ -95,6 +105,8 @@ struct Color3DScanSettingsView: View {
                 objectMasking = true
                 objectKeepSourceImages = true
                 objectSizePresetRaw = ObjectScanSizePreset.medium.rawValue
+                objectShowPreselectionMesh = true
+                objectPreferCompletedPassBeforeFinish = true
             }
             Button("إلغاء", role: .cancel) {}
         }
