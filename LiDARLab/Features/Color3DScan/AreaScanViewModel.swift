@@ -1,509 +1,360 @@
-import ARKit
 import Combine
-import CoreImage
 import Foundation
 import RealityKit
-import UIKit
-import simd
 
-final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
-    @Published private(set) var isScanning = false
-    @Published private(set) var isExporting = false
-    @Published private(set) var trackingState = "متوقف"
-    @Published private(set) var meshAnchorCount = 0
-    @Published private(set) var vertexCount = 0
-    @Published private(set) var faceCount = 0
-    @Published private(set) var capturedFrameCount = 0
-    @Published private(set) var exportProgress: Double = 0
-    @Published private(set) var statusMessage = "ابدأ المسح ثم تحرّك ببطء داخل الغرفة."
-    @Published private(set) var completedMesh: AreaScanTexturedMesh?
-    @Published private(set) var exportResult: AreaScanExportResult?
+@MainActor
+final class AreaScanViewModel: ObservableObject {
+    enum Phase: Equatable {
+        case idle
+        case initializing
+        case ready
+        case capturing
+        case finishing
+        case reconstructing
+        case completed
+        case failed
+
+        var title: String {
+            switch self {
+            case .idle: "جاهز"
+            case .initializing: "تهيئة Area Mode"
+            case .ready: "جاهز لبدء المسح"
+            case .capturing: "مسح المكان"
+            case .finishing: "إنهاء الالتقاط"
+            case .reconstructing: "بناء النموذج"
+            case .completed: "اكتمل النموذج"
+            case .failed: "حدث خطأ"
+            }
+        }
+    }
+
+    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var captureSession: ObjectCaptureSession?
+    @Published private(set) var shotCount = 0
+    @Published private(set) var maximumShotCount = 0
+    @Published private(set) var reconstructionProgress: Double = 0
+    @Published private(set) var modelURL: URL?
+    @Published private(set) var sessionFolderURL: URL?
+    @Published private(set) var statusMessage = "Area Mode يستخدم واجهة Object Capture الرسمية من Apple."
+    @Published private(set) var feedbackMessage: String?
     @Published var errorMessage: String?
 
-    private weak var arView: ARView?
     private let fileManager = FileManager.default
-    private let ciContext = CIContext(options: [.cacheIntermediates: false])
-    private let captureQueue = DispatchQueue(label: "com.essam.3E.LiDARLab.color3d.keyframes", qos: .utility)
-    private let stateLock = NSLock()
-
-    private var scanningFlag = false
-    private var activeGeneration = UUID()
-    private var sessionFolderURL: URL?
-    private var imagesFolderURL: URL?
-    private var keyframes: [AreaScanKeyframe] = []
-    private var lastCapturedTransform: simd_float4x4?
-    private var lastCaptureTimestamp: TimeInterval = -100
-    private var lastStatisticsTimestamp: TimeInterval = 0
-
-    private var runtimeOptions = Color3DScanSettings.areaOptions
+    private var options = Color3DScanSettings.appleAreaOptions
+    private var workFolderURL: URL?
+    private var imagesURL: URL?
+    private var checkpointsURL: URL?
+    private var localModelURL: URL?
+    private var finalFolderURL: URL?
+    private var listenerTasks: [Task<Void, Never>] = []
+    private var reconstructionTask: Task<Void, Never>?
+    private var photogrammetrySession: PhotogrammetrySession?
 
     var isSupported: Bool {
-        ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+        if #available(iOS 18.0, *) {
+            return ObjectCaptureSession.isSupported && PhotogrammetrySession.isSupported
+        }
+        return false
     }
 
-    func attach(to arView: ARView) {
-        self.arView = arView
-        arView.automaticallyConfigureSession = false
-        arView.session.delegate = self
-        runtimeOptions = Color3DScanSettings.areaOptions
-        if runtimeOptions.showSceneMeshWhileScanning {
-            arView.debugOptions.insert(.showSceneUnderstanding)
-        } else {
-            arView.debugOptions.remove(.showSceneUnderstanding)
-        }
+    var canStartCapture: Bool {
+        phase == .ready
     }
 
-    func startScan() {
-        guard isSupported else {
-            errorMessage = "Scene Mesh غير مدعوم على هذا الجهاز."
+    var canFinishCapture: Bool {
+        phase == .capturing && shotCount >= options.minimumImagesBeforeFinish
+    }
+
+    var minimumImagesBeforeFinish: Int {
+        options.minimumImagesBeforeFinish
+    }
+
+    func prepareSession() {
+        guard #available(iOS 18.0, *) else {
+            errorMessage = "Apple Object Capture Area Mode يحتاج iOS 18 أو أحدث."
             return
         }
-        guard let arView else {
-            errorMessage = "عارض الواقع المعزز غير جاهز."
+        guard ObjectCaptureSession.isSupported, PhotogrammetrySession.isSupported else {
+            errorMessage = "هذا الجهاز لا يدعم Object Capture Area Mode وإعادة البناء على الجهاز."
             return
         }
 
-        runtimeOptions = Color3DScanSettings.areaOptions
-        if runtimeOptions.showSceneMeshWhileScanning {
-            arView.debugOptions.insert(.showSceneUnderstanding)
-        } else {
-            arView.debugOptions.remove(.showSceneUnderstanding)
-        }
+        cleanup(removeWorkingFiles: true)
+        options = Color3DScanSettings.appleAreaOptions
 
         do {
             let storage = LiDARLabStorage.shared
             try storage.ensureDirectories()
-            let root = storage.capturesURL
+
+            let finalRoot = storage.capturesURL
                 .appendingPathComponent("Color3D", isDirectory: true)
                 .appendingPathComponent("Areas", isDirectory: true)
-            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: finalRoot, withIntermediateDirectories: true)
 
-            let folder = root.appendingPathComponent(
-                storage.timestampedName(prefix: "AreaScan"),
-                isDirectory: true
-            )
-            let images = folder.appendingPathComponent("Images", isDirectory: true)
+            let uniqueName = storage.timestampedName(prefix: "AreaScan") + "-" + String(UUID().uuidString.prefix(8))
+            let finalFolder = finalRoot.appendingPathComponent(uniqueName, isDirectory: true)
+
+            let cacheRoot = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("3ELiDAR-AreaCaptureWork", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let images = cacheRoot.appendingPathComponent("Images", isDirectory: true)
+            let checkpoints = cacheRoot.appendingPathComponent("Checkpoints", isDirectory: true)
+            let modelFolder = cacheRoot.appendingPathComponent("Model", isDirectory: true)
             try fileManager.createDirectory(at: images, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: checkpoints, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: modelFolder, withIntermediateDirectories: true)
 
-            stateLock.lock()
-            scanningFlag = true
-            activeGeneration = UUID()
-            keyframes.removeAll(keepingCapacity: true)
-            lastCapturedTransform = nil
-            lastCaptureTimestamp = -100
-            sessionFolderURL = folder
-            imagesFolderURL = images
-            let generation = activeGeneration
-            stateLock.unlock()
+            let session = ObjectCaptureSession()
+            var configuration = ObjectCaptureSession.Configuration()
+            configuration.checkpointDirectory = checkpoints
+            configuration.isOverCaptureEnabled = options.overCapture
 
-            completedMesh = nil
-            exportResult = nil
-            exportProgress = 0
-            capturedFrameCount = 0
-            meshAnchorCount = 0
-            vertexCount = 0
-            faceCount = 0
-            isExporting = false
-            isScanning = true
-            statusMessage = "المسح يعمل. امشِ ببطء ووجّه الكاميرا لكل الحوائط والأرضية والسقف والأثاث."
-
-            let configuration = ARWorldTrackingConfiguration()
-            configuration.worldAlignment = .gravity
-            configuration.planeDetection = [.horizontal, .vertical]
-            configuration.sceneReconstruction = ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
-                ? .meshWithClassification
-                : .mesh
-            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-                configuration.frameSemantics.insert(.sceneDepth)
-            }
-            if runtimeOptions.useSmoothedDepth,
-               ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
-                configuration.frameSemantics.insert(.smoothedSceneDepth)
+            if #available(iOS 18.0, *) {
+                session.isAutoCaptureEnabled = options.autoCapture
+                session.shouldPlayHaptics = options.haptics
             }
 
-            // Keep this generation alive through the start call. It is checked by queued image work.
-            _ = generation
-            arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            workFolderURL = cacheRoot
+            imagesURL = images
+            checkpointsURL = checkpoints
+            localModelURL = modelFolder.appendingPathComponent("area-model.usdz")
+            finalFolderURL = finalFolder
+            sessionFolderURL = finalFolder
+            modelURL = nil
+            reconstructionProgress = 0
+            shotCount = 0
+            maximumShotCount = 0
+            feedbackMessage = nil
+            captureSession = session
+            phase = .initializing
+            statusMessage = "جاري تجهيز Apple Object Capture…"
+
+            attachListeners(to: session)
+            session.start(imagesDirectory: images, configuration: configuration)
+            handleState(session.state)
+            shotCount = session.numberOfShotsTaken
+            maximumShotCount = session.maximumNumberOfInputImages
         } catch {
-            setScanning(false)
+            phase = .failed
             errorMessage = error.localizedDescription
+            statusMessage = "تعذر بدء Area Mode."
         }
     }
 
-    func stopAndBuildModel() {
-        guard let arView else { return }
-
-        stateLock.lock()
-        let wasScanning = scanningFlag
-        scanningFlag = false
-        stateLock.unlock()
-        guard wasScanning else { return }
-
-        guard let frame = arView.session.currentFrame else {
-            setScanning(false)
-            errorMessage = "لا توجد بيانات AR كافية لإنهاء المسح."
-            return
-        }
-
-        let meshAnchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-        guard !meshAnchors.isEmpty else {
-            setScanning(false)
-            errorMessage = "لم يتم التقاط أي Mesh. حرّك الهاتف داخل المكان لفترة أطول ثم حاول مرة أخرى."
-            return
-        }
-
-        statusMessage = "نسخ هندسة LiDAR…"
-        let chunks = meshAnchors.map(copyMeshChunk)
-        arView.session.pause()
-        setScanning(false)
-
-        // Finish any JPEG already queued before freezing the keyframe list.
-        captureQueue.sync {}
-
-        stateLock.lock()
-        let frames = keyframes
-        let folder = sessionFolderURL
-        stateLock.unlock()
-
-        guard let folder else {
-            errorMessage = "مجلد جلسة المسح غير متاح."
-            return
-        }
-
-        isExporting = true
-        exportProgress = 0
-        statusMessage = "إسقاط ألوان الكاميرا على Mesh…"
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-
-            let options = self.runtimeOptions
-            let texturedMesh = Color3DMeshExporter.buildTexturedMesh(
-                chunks: chunks,
-                keyframes: frames,
-                maximumTextureFrames: options.maximumTextureFrames,
-                rejectUncertainTextures: options.rejectUncertainTextures,
-                depthOcclusionToleranceMeters: options.depthOcclusionToleranceMeters,
-                maximumTextureDistanceMeters: options.maximumTextureDistanceMeters
-            ) { fraction in
-                DispatchQueue.main.async {
-                    self.exportProgress = fraction * 0.64
-                    self.statusMessage = "بناء UV وربط صور الكاميرا… \(Int(fraction * 100))%"
-                }
-            }
-
-            do {
-                let result = try Color3DMeshExporter.export(
-                    mesh: texturedMesh,
-                    keyframes: frames,
-                    folderURL: folder,
-                    options: options
-                ) { fraction in
-                    DispatchQueue.main.async {
-                        self.exportProgress = 0.64 + fraction * 0.36
-                        self.statusMessage = "تصدير Mesh بخامات الصور… \(Int(fraction * 100))%"
-                    }
-                }
-
-                DispatchQueue.main.async {
-                    self.completedMesh = texturedMesh
-                    self.exportResult = result
-                    self.exportProgress = 1
-                    self.isExporting = false
-                    let coverage = texturedMesh.faceCount > 0
-                        ? Int((Double(texturedMesh.texturedFaceCount) / Double(texturedMesh.faceCount)) * 100)
-                        : 0
-                    self.statusMessage = "اكتمل المسح بخامات RGB فعلية. تغطية الخامات: \(coverage)%"
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.completedMesh = texturedMesh
-                    self.isExporting = false
-                    self.errorMessage = error.localizedDescription
-                    self.statusMessage = "تم بناء Mesh المكسو بالصور ولكن فشل أحد ملفات التصدير."
-                }
-            }
-        }
+    /// Official Area Mode: intentionally skip startDetecting() and go straight to startCapturing().
+    func startAreaCapture() {
+        guard #available(iOS 18.0, *), let session = captureSession else { return }
+        guard phase == .ready else { return }
+        session.startCapturing()
+        handleState(session.state)
+        statusMessage = "امسح الأسطح ببطء كأن المؤشر فرشاة. حافظ على تداخل الصور وغيّر الارتفاع."
     }
 
-    func cancelScan() {
-        stateLock.lock()
-        scanningFlag = false
-        activeGeneration = UUID()
-        stateLock.unlock()
-        arView?.session.pause()
-        setScanning(false)
-        isExporting = false
-        statusMessage = "تم إيقاف المسح."
+    func requestManualShot() {
+        guard let session = captureSession,
+              phase == .capturing,
+              session.canRequestImageCapture else { return }
+        session.requestImageCapture()
     }
 
-    func resetForNewScan() {
-        cancelScan()
-        completedMesh = nil
-        exportResult = nil
-        exportProgress = 0
-        meshAnchorCount = 0
-        vertexCount = 0
-        faceCount = 0
-        capturedFrameCount = 0
-        trackingState = "متوقف"
-        statusMessage = "ابدأ المسح ثم تحرّك ببطء داخل الغرفة."
+    func finishCapture() {
+        guard let session = captureSession, phase == .capturing else { return }
+        session.finish()
+        handleState(session.state)
+        statusMessage = "جاري حفظ بيانات الالتقاط قبل إعادة البناء…"
+    }
+
+    func cancelAndReset() {
+        cleanup(removeWorkingFiles: true)
+        phase = .idle
+        shotCount = 0
+        maximumShotCount = 0
+        reconstructionProgress = 0
+        modelURL = nil
+        sessionFolderURL = nil
+        feedbackMessage = nil
         errorMessage = nil
+        statusMessage = "Area Mode يستخدم واجهة Object Capture الرسمية من Apple."
     }
 
     func clearError() {
         errorMessage = nil
     }
 
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        stateLock.lock()
-        let scanning = scanningFlag
-        stateLock.unlock()
-        guard scanning else { return }
+    private func attachListeners(to session: ObjectCaptureSession) {
+        detachListeners()
 
-        if frame.timestamp - lastStatisticsTimestamp >= 0.40 {
-            lastStatisticsTimestamp = frame.timestamp
-            let anchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            let vertices = anchors.reduce(0) { $0 + $1.geometry.vertices.count }
-            let faces = anchors.reduce(0) { $0 + $1.geometry.faces.count }
-            DispatchQueue.main.async { [weak self] in
-                self?.meshAnchorCount = anchors.count
-                self?.vertexCount = vertices
-                self?.faceCount = faces
+        listenerTasks.append(Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for await state in session.stateUpdates {
+                guard !Task.isCancelled else { return }
+                self.handleState(state)
             }
-        }
+        })
 
-        // Keep RGB/depth keyframes only while ARKit reports a stable camera pose.
-        // Limited tracking is a major source of textures appearing on the wrong wall.
-        if case .normal = frame.camera.trackingState {
-            scheduleKeyframeIfNeeded(frame)
-        }
-    }
-
-    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
-        let text: String
-        switch camera.trackingState {
-        case .normal:
-            text = "طبيعي"
-        case .notAvailable:
-            text = "غير متاح"
-        case .limited(let reason):
-            switch reason {
-            case .initializing: text = "تهيئة"
-            case .excessiveMotion: text = "حركة سريعة"
-            case .insufficientFeatures: text = "تفاصيل قليلة"
-            case .relocalizing: text = "إعادة تحديد الموقع"
-            @unknown default: text = "محدود"
+        listenerTasks.append(Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for await count in session.numberOfShotsTakenUpdates {
+                guard !Task.isCancelled else { return }
+                self.shotCount = count
             }
-        }
-        DispatchQueue.main.async { [weak self] in self?.trackingState = text }
-    }
+        })
 
-    func session(_ session: ARSession, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in
-            self?.setScanning(false)
-            self?.errorMessage = error.localizedDescription
-        }
-    }
-
-    private func scheduleKeyframeIfNeeded(_ frame: ARFrame) {
-        let transform = frame.camera.transform
-
-        stateLock.lock()
-        guard scanningFlag,
-              keyframes.count < runtimeOptions.maximumKeyframes,
-              let imagesFolderURL else {
-            stateLock.unlock()
-            return
-        }
-
-        let elapsed = frame.timestamp - lastCaptureTimestamp
-        guard elapsed >= runtimeOptions.minimumCaptureInterval else {
-            stateLock.unlock()
-            return
-        }
-
-        if let last = lastCapturedTransform {
-            let p0 = SIMD3<Float>(last.columns.3.x, last.columns.3.y, last.columns.3.z)
-            let p1 = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
-            let translation = simd_distance(p0, p1)
-
-            let f0 = simd_normalize(SIMD3<Float>(last.columns.2.x, last.columns.2.y, last.columns.2.z))
-            let f1 = simd_normalize(SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z))
-            let dotValue = min(max(simd_dot(f0, f1), -1), 1)
-            let angle = acos(dotValue)
-
-            guard translation >= runtimeOptions.minimumTranslation || angle >= runtimeOptions.minimumRotationRadians else {
-                stateLock.unlock()
-                return
+        listenerTasks.append(Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for await feedback in session.feedbackUpdates {
+                guard !Task.isCancelled else { return }
+                self.feedbackMessage = Self.describe(feedback: feedback)
             }
-        }
+        })
+    }
 
-        lastCaptureTimestamp = frame.timestamp
-        lastCapturedTransform = transform
-        let generation = activeGeneration
-        stateLock.unlock()
+    private func detachListeners() {
+        listenerTasks.forEach { $0.cancel() }
+        listenerTasks.removeAll()
+    }
 
-        captureQueue.async { [weak self, frame] in
-            self?.saveKeyframe(
-                frame: frame,
-                folder: imagesFolderURL,
-                generation: generation
-            )
+    private func handleState(_ state: ObjectCaptureSession.CaptureState) {
+        switch state {
+        case .initializing:
+            phase = .initializing
+            statusMessage = "جاري تهيئة الكاميرا وLiDAR…"
+        case .ready:
+            phase = .ready
+            statusMessage = "وجّه الهاتف للمكان ثم اضغط بدء المسح. لن يتم إنشاء Bounding Box في Area Mode."
+        case .detecting:
+            // Area Mode must never intentionally enter object detection.
+            phase = .ready
+            statusMessage = "تم إلغاء مسار اكتشاف جسم؛ Area Mode يبدأ مباشرة بالالتقاط."
+        case .capturing:
+            phase = .capturing
+            statusMessage = "حرّك الهاتف ببطء وبمسارات متداخلة ومن ارتفاعات مختلفة."
+        case .finishing:
+            phase = .finishing
+            statusMessage = "جاري إنهاء جلسة الالتقاط…"
+        case .completed:
+            phase = .reconstructing
+            statusMessage = "اكتمل الالتقاط. جاري بناء USDZ باستخدام PhotogrammetrySession…"
+            detachListeners()
+            captureSession = nil
+            startReconstruction()
+        case .failed(let error):
+            phase = .failed
+            errorMessage = error.localizedDescription
+            statusMessage = "فشل Object Capture: \(error.localizedDescription)"
+        @unknown default:
+            statusMessage = "تغيّرت حالة جلسة الالتقاط."
         }
     }
 
-    private func saveKeyframe(
-        frame: ARFrame,
-        folder: URL,
-        generation: UUID
-    ) {
-        let pixelBuffer = frame.capturedImage
-        let originalWidth = CVPixelBufferGetWidth(pixelBuffer)
-        let originalHeight = CVPixelBufferGetHeight(pixelBuffer)
-        guard originalWidth > 0, originalHeight > 0 else { return }
-
-        let targetMaxDimension = CGFloat(runtimeOptions.imageMaxDimension)
-        let scale = min(1, targetMaxDimension / CGFloat(max(originalWidth, originalHeight)))
-        let input = CIImage(cvPixelBuffer: pixelBuffer)
-        let scaled = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        guard let cgImage = ciContext.createCGImage(scaled, from: scaled.extent.integral),
-              let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: runtimeOptions.jpegQuality) else { return }
-
-        stateLock.lock()
-        guard generation == activeGeneration else {
-            stateLock.unlock()
-            return
-        }
-        // Recalculate the index under lock because multiple queued frames can finish close together.
-        let index = keyframes.count + 1
-        guard index <= runtimeOptions.maximumKeyframes else {
-            stateLock.unlock()
-            return
-        }
-        stateLock.unlock()
-
-        let fileURL = folder.appendingPathComponent(String(format: "frame-%03d.jpg", index))
-        do {
-            try jpeg.write(to: fileURL, options: .atomic)
-        } catch {
+    private func startReconstruction() {
+        reconstructionTask?.cancel()
+        guard let imagesURL, let localModelURL else {
+            phase = .failed
+            errorMessage = "صور Area Mode غير متاحة لإعادة البناء."
             return
         }
 
-        var intrinsics = frame.camera.intrinsics
-        let sx = Float(cgImage.width) / Float(originalWidth)
-        let sy = Float(cgImage.height) / Float(originalHeight)
-        intrinsics.columns.0.x *= sx
-        intrinsics.columns.1.y *= sy
-        intrinsics.columns.2.x *= sx
-        intrinsics.columns.2.y *= sy
+        try? fileManager.removeItem(at: localModelURL)
+        let keepSources = options.keepSourceImages
+        let finalFolder = finalFolderURL
+        let workingFolder = workFolderURL
 
-        let keyframe = AreaScanKeyframe(
-            imageURL: fileURL,
-            cameraTransform: frame.camera.transform,
-            intrinsics: intrinsics,
-            imageWidth: cgImage.width,
-            imageHeight: cgImage.height,
-            timestamp: frame.timestamp,
-            depthMap: copyDepthMap(from: frame)
-        )
+        reconstructionTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                var configuration = PhotogrammetrySession.Configuration()
+                configuration.checkpointDirectory = self.checkpointsURL
 
-        stateLock.lock()
-        guard generation == activeGeneration else {
-            stateLock.unlock()
-            try? fileManager.removeItem(at: fileURL)
-            return
-        }
-        keyframes.append(keyframe)
-        let count = keyframes.count
-        stateLock.unlock()
+                let session = try PhotogrammetrySession(input: imagesURL, configuration: configuration)
+                self.photogrammetrySession = session
+                self.reconstructionProgress = 0
 
-        DispatchQueue.main.async { [weak self] in
-            self?.capturedFrameCount = count
-        }
-    }
+                let request = PhotogrammetrySession.Request.modelFile(url: localModelURL, detail: .reduced)
+                try session.process(requests: [request])
 
-    private func copyDepthMap(from frame: ARFrame) -> AreaScanDepthMap? {
-        let depthData: ARDepthData?
-        if runtimeOptions.useSmoothedDepth {
-            depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
-        } else {
-            depthData = frame.sceneDepth ?? frame.smoothedSceneDepth
-        }
-        guard let depthData else { return nil }
+                for try await output in session.outputs {
+                    guard !Task.isCancelled else {
+                        session.cancel()
+                        return
+                    }
 
-        let buffer = depthData.depthMap
-        let width = CVPixelBufferGetWidth(buffer)
-        let height = CVPixelBufferGetHeight(buffer)
-        guard width > 0, height > 0 else { return nil }
+                    switch output {
+                    case .requestProgress(_, fractionComplete: let fraction):
+                        self.reconstructionProgress = fraction
+                        self.statusMessage = "بناء النموذج… \(Int(fraction * 100))%"
+                    case .requestError(_, let error):
+                        self.phase = .failed
+                        self.errorMessage = error.localizedDescription
+                        self.statusMessage = "تعذر بناء نموذج Area Mode."
+                    case .processingComplete:
+                        guard self.fileManager.fileExists(atPath: localModelURL.path), let finalFolder else {
+                            if self.phase != .failed {
+                                self.phase = .failed
+                                self.errorMessage = "انتهت المعالجة بدون ملف USDZ."
+                            }
+                            continue
+                        }
+                        try self.fileManager.createDirectory(at: finalFolder, withIntermediateDirectories: true)
+                        let finalModelFolder = finalFolder.appendingPathComponent("Model", isDirectory: true)
+                        try self.fileManager.createDirectory(at: finalModelFolder, withIntermediateDirectories: true)
+                        let published = finalModelFolder.appendingPathComponent("area-model.usdz")
+                        try? self.fileManager.removeItem(at: published)
+                        try self.fileManager.copyItem(at: localModelURL, to: published)
 
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+                        if keepSources {
+                            let sourceFolder = finalFolder.appendingPathComponent("Images", isDirectory: true)
+                            try? self.fileManager.removeItem(at: sourceFolder)
+                            try self.fileManager.copyItem(at: imagesURL, to: sourceFolder)
+                        }
 
-        let sourceStride = CVPixelBufferGetBytesPerRow(buffer) / MemoryLayout<Float32>.size
-        let source = base.assumingMemoryBound(to: Float32.self)
-        var values = [Float](repeating: .nan, count: width * height)
-
-        for y in 0..<height {
-            let sourceRow = source.advanced(by: y * sourceStride)
-            let destinationOffset = y * width
-            for x in 0..<width {
-                let value = sourceRow[x]
-                values[destinationOffset + x] = value.isFinite && value > 0 ? value : .nan
+                        self.modelURL = published
+                        self.reconstructionProgress = 1
+                        self.phase = .completed
+                        self.statusMessage = "اكتمل نموذج Apple Area Mode ويمكن فتحه في Quick Look."
+                        if let workingFolder {
+                            try? self.fileManager.removeItem(at: workingFolder)
+                            self.workFolderURL = nil
+                        }
+                    default:
+                        break
+                    }
+                }
+            } catch {
+                self.phase = .failed
+                self.errorMessage = error.localizedDescription
+                self.statusMessage = "فشلت إعادة بناء Area Mode."
             }
+            self.photogrammetrySession = nil
         }
-
-        return AreaScanDepthMap(values: values, width: width, height: height)
     }
 
-    private func copyMeshChunk(_ anchor: ARMeshAnchor) -> AreaScanMeshChunk {
-        let geometry = anchor.geometry
-        var vertices: [SIMD3<Float>] = []
-        var normals: [SIMD3<Float>] = []
-        var faces: [SIMD3<UInt32>] = []
-        vertices.reserveCapacity(geometry.vertices.count)
-        normals.reserveCapacity(geometry.normals.count)
-        faces.reserveCapacity(geometry.faces.count)
+    private func cleanup(removeWorkingFiles: Bool) {
+        detachListeners()
+        reconstructionTask?.cancel()
+        reconstructionTask = nil
+        photogrammetrySession?.cancel()
+        photogrammetrySession = nil
+        captureSession?.cancel()
+        captureSession = nil
 
-        for index in 0..<geometry.vertices.count {
-            vertices.append(vector3(from: geometry.vertices, at: index))
+        if removeWorkingFiles, let workFolderURL {
+            try? fileManager.removeItem(at: workFolderURL)
         }
-        for index in 0..<geometry.normals.count {
-            normals.append(vector3(from: geometry.normals, at: index))
-        }
-        for faceIndex in 0..<geometry.faces.count {
-            let indices = geometry.faces[faceIndex]
-            guard indices.count >= 3 else { continue }
-            faces.append(SIMD3<UInt32>(
-                UInt32(bitPattern: indices[0]),
-                UInt32(bitPattern: indices[1]),
-                UInt32(bitPattern: indices[2])
-            ))
-        }
-
-        return AreaScanMeshChunk(
-            transform: anchor.transform,
-            vertices: vertices,
-            normals: normals,
-            faces: faces
-        )
+        workFolderURL = nil
+        imagesURL = nil
+        checkpointsURL = nil
+        localModelURL = nil
+        finalFolderURL = nil
     }
 
-    private func vector3(from source: ARGeometrySource, at index: Int) -> SIMD3<Float> {
-        let pointer = source.buffer.contents().advanced(by: source.offset + source.stride * index)
-        let floats = pointer.assumingMemoryBound(to: Float.self)
-        return SIMD3<Float>(floats[0], floats[1], floats[2])
-    }
-
-    private func setScanning(_ value: Bool) {
-        stateLock.lock()
-        scanningFlag = value
-        stateLock.unlock()
-        if Thread.isMainThread {
-            isScanning = value
-        } else {
-            DispatchQueue.main.async { [weak self] in self?.isScanning = value }
-        }
+    private static func describe(feedback: Set<ObjectCaptureSession.Feedback>) -> String? {
+        if feedback.contains(.environmentTooDark) { return "الإضاءة مظلمة جدًا؛ زد الإضاءة قبل المتابعة." }
+        if feedback.contains(.environmentLowLight) { return "الإضاءة منخفضة وقد تقل جودة النموذج." }
+        if feedback.contains(.movingTooFast) { return "الحركة سريعة؛ تحرك أبطأ للحصول على صور أوضح ومتداخلة." }
+        if feedback.contains(.objectTooClose) { return "أنت قريب جدًا من السطح." }
+        if feedback.contains(.objectTooFar) { return "أنت بعيد جدًا عن السطح." }
+        if feedback.contains(.overCapturing) { return "تم تجاوز عدد الصور المفيد لإعادة البناء على الهاتف؛ يمكنك الإنهاء الآن." }
+        return nil
     }
 }

@@ -1,7 +1,9 @@
+import RealityKit
 import SwiftUI
 
 struct AreaScanView: View {
     @StateObject private var model = AreaScanViewModel()
+    @State private var showPointCloud = false
     @State private var showPreview = false
     @State private var showCancelConfirmation = false
 
@@ -9,32 +11,21 @@ struct AreaScanView: View {
         Group {
             if !model.isSupported {
                 unsupportedView
-            } else if let mesh = model.completedMesh,
-                      let result = model.exportResult,
-                      !model.isScanning,
-                      !model.isExporting {
-                resultView(mesh: mesh, result: result)
             } else {
-                scannerView
+                content
             }
         }
         .navigationTitle("مسح مكان 3D")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if model.isScanning {
+            if model.phase == .capturing || model.phase == .ready || model.phase == .initializing {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("إلغاء", role: .destructive) {
-                        showCancelConfirmation = true
-                    }
+                    Button("إلغاء", role: .destructive) { showCancelConfirmation = true }
                 }
             }
         }
-        .confirmationDialog(
-            "إلغاء مسح المكان؟",
-            isPresented: $showCancelConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("إلغاء المسح", role: .destructive) { model.cancelScan() }
+        .confirmationDialog("إلغاء مسح المكان؟", isPresented: $showCancelConfirmation) {
+            Button("إلغاء المسح", role: .destructive) { model.cancelAndReset() }
             Button("متابعة", role: .cancel) {}
         }
         .alert("خطأ في المسح", isPresented: Binding(
@@ -45,71 +36,137 @@ struct AreaScanView: View {
         } message: {
             Text(model.errorMessage ?? "حدث خطأ غير معروف.")
         }
-        .sheet(isPresented: $showPreview) {
-            if let mesh = model.completedMesh {
+        .sheet(isPresented: $showPointCloud) {
+            if let session = model.captureSession {
                 NavigationStack {
-                    Group {
-                        if let usdzURL = model.exportResult?.usdzURL {
-                            QuickLookPreview(url: usdzURL)
-                                .ignoresSafeArea(edges: .bottom)
-                        } else {
-                            AreaScanPreviewView(mesh: mesh)
-                                .ignoresSafeArea(edges: .bottom)
+                    ObjectCapturePointCloudView(session: session)
+                        .showShotLocations()
+                        .navigationTitle("تغطية الالتقاط")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("إغلاق") { showPointCloud = false }
+                            }
                         }
-                    }
-                    .navigationTitle(model.exportResult?.usdzURL != nil ? "معاينة Apple 3D" : "معاينة SceneKit")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("إغلاق") { showPreview = false }
-                        }
-                    }
                 }
             }
         }
-        .onDisappear {
-            if model.isScanning { model.cancelScan() }
+        .sheet(isPresented: $showPreview) {
+            if let url = model.modelURL {
+                NavigationStack {
+                    QuickLookPreview(url: url)
+                        .ignoresSafeArea(edges: .bottom)
+                        .navigationTitle("معاينة Apple Quick Look")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("إغلاق") { showPreview = false }
+                            }
+                        }
+                }
+            }
         }
     }
 
-    private var scannerView: some View {
+    @ViewBuilder
+    private var content: some View {
+        switch model.phase {
+        case .idle:
+            startView
+        case .initializing, .ready, .capturing, .finishing:
+            captureView
+        case .reconstructing:
+            processingView
+        case .completed:
+            completedView
+        case .failed:
+            failedView
+        }
+    }
+
+    private var startView: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                Image(systemName: "viewfinder")
+                    .font(.system(size: 68, weight: .light))
+                    .foregroundStyle(.cyan)
+
+                Text("Apple Object Capture — Area Mode")
+                    .font(.title2.bold())
+
+                Text("هذا الوضع يستخدم مسار Apple الرسمي للمساحات: يبدأ الالتقاط مباشرة بدون اكتشاف جسم أو Bounding Box. حرّك المؤشر فوق الأسطح كأنه فرشاة، وببطء مع تداخل واضح بين الصور.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("تحرك ببطء وفي مسارات منتظمة", systemImage: "figure.walk")
+                    Label("كرر المرور من ارتفاعات مختلفة", systemImage: "arrow.up.and.down")
+                    Label("تجنب الإضاءة القاسية والظلال الحادة", systemImage: "sun.max")
+                    Label("المعالجة على iPhone تستخدم Reduced detail", systemImage: "iphone")
+                }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+
+                Button {
+                    model.prepareSession()
+                } label: {
+                    Label("فتح Area Mode", systemImage: "camera.viewfinder")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+            }
+            .padding()
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var captureView: some View {
         ZStack {
-            AreaScanARViewContainer(model: model)
-                .ignoresSafeArea(edges: .bottom)
+            if #available(iOS 18.0, *), let session = model.captureSession {
+                AppleAreaObjectCaptureView(session: session)
+                    .ignoresSafeArea(edges: .bottom)
+            } else {
+                Color.clear
+            }
 
             VStack(spacing: 0) {
-                if model.isScanning {
-                    liveStats
-                }
+                statusOverlay
                 Spacer()
-
-                if model.isExporting {
-                    exportOverlay
-                } else if model.isScanning {
-                    scanningControls
-                } else {
-                    startControls
-                }
+                controlsOverlay
             }
         }
     }
 
-    private var liveStats: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 14) {
-                AreaMetric(title: "Mesh", value: "\(model.meshAnchorCount)")
-                AreaMetric(title: "Vertices", value: compact(model.vertexCount))
-                AreaMetric(title: "Faces", value: compact(model.faceCount))
-                AreaMetric(title: "RGB", value: "\(model.capturedFrameCount)")
+    private var statusOverlay: some View {
+        VStack(spacing: 7) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.phase.title)
+                        .font(.headline)
+                    Text(model.statusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(model.shotCount)")
+                        .font(.title3.bold().monospacedDigit())
+                    Text("صورة")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            HStack {
-                Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
+            if let feedback = model.feedbackMessage {
+                Label(feedback, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
-                Spacer()
-                Text("LiDAR + RGB Textures")
-                    .font(.caption.bold())
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(12)
@@ -118,224 +175,147 @@ struct AreaScanView: View {
         .padding(.top, 8)
     }
 
-    private var startControls: some View {
-        VStack(spacing: 12) {
-            VStack(spacing: 5) {
-                Text("مسح غرفة / مكان بالألوان")
-                    .font(.headline)
-                Text("المسح يجمع Scene Mesh من LiDAR وصور RGB موزعة أثناء الحركة، ثم يبني UV ويكسو الأسطح بصور الكاميرا بدل بقع ألوان الـVertex القديمة.")
+    @ViewBuilder
+    private var controlsOverlay: some View {
+        VStack(spacing: 10) {
+            if model.phase == .initializing {
+                ProgressView()
+                Text("تهيئة Object Capture…")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
+            } else if model.phase == .ready {
+                Button {
+                    model.startAreaCapture()
+                } label: {
+                    Label("بدء المسح", systemImage: "record.circle")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+            } else if model.phase == .capturing {
+                HStack(spacing: 9) {
+                    Button {
+                        model.requestManualShot()
+                    } label: {
+                        Label("صورة", systemImage: "camera.fill")
+                    }
+                    .buttonStyle(.bordered)
 
-            Button {
-                model.startScan()
-            } label: {
-                Label("بدء المسح الفعلي", systemImage: "dot.radiowaves.left.and.right")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
+                    Button {
+                        showPointCloud = true
+                    } label: {
+                        Label("التغطية", systemImage: "point.3.connected.trianglepath.dotted")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button {
+                    model.finishCapture()
+                } label: {
+                    Label("إنهاء وبناء النموذج", systemImage: "stop.circle.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .disabled(!model.canFinishCapture)
+
+                if !model.canFinishCapture {
+                    Text("يمكن الإنهاء بعد \(model.minimumImagesBeforeFinish) صور على الأقل. أنت من يحدد وقت الإنهاء، وليس التطبيق.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            } else if model.phase == .finishing {
+                ProgressView()
+                Text("حفظ بيانات الالتقاط…")
+                    .font(.caption)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.cyan)
         }
-        .padding(14)
+        .padding(13)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
         .padding(12)
     }
 
-    private var scanningControls: some View {
-        VStack(spacing: 9) {
+    private var processingView: some View {
+        VStack(spacing: 20) {
+            ProgressView(value: model.reconstructionProgress)
+                .frame(maxWidth: 420)
+            Image(systemName: "cube.transparent")
+                .font(.system(size: 54))
+                .foregroundStyle(.cyan)
+            Text("بناء النموذج بواسطة RealityKit")
+                .font(.title2.bold())
             Text(model.statusMessage)
-                .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-
-            if model.capturedFrameCount < 5 {
-                Label("استمر بالحركة لتجميع صور ألوان أكثر", systemImage: "camera.metering.center.weighted")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            Button {
-                model.stopAndBuildModel()
-            } label: {
-                Label("إنهاء وبناء النموذج الملوّن", systemImage: "cube.transparent.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .disabled(model.vertexCount < 100 || model.capturedFrameCount < 2)
-        }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .padding(12)
-    }
-
-    private var exportOverlay: some View {
-        VStack(spacing: 12) {
-            ProgressView(value: model.exportProgress)
-                .progressViewStyle(.linear)
-            Text(model.statusMessage)
-                .font(.headline)
-                .multilineTextAlignment(.center)
-            Text("\(Int(model.exportProgress * 100))%")
+            Text("\(Int(model.reconstructionProgress * 100))%")
                 .font(.title3.bold().monospacedDigit())
         }
-        .padding(18)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .padding(12)
+        .padding()
     }
 
-    private func resultView(mesh: AreaScanTexturedMesh, result: AreaScanExportResult) -> some View {
+    private var completedView: some View {
         List {
             Section {
                 VStack(spacing: 10) {
                     Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 48))
+                        .font(.system(size: 54))
                         .foregroundStyle(.green)
-                    Text("اكتمل النموذج ثلاثي الأبعاد")
-                        .font(.title3.bold())
-                    Text("تم ربط صور الكاميرا بالـMesh كخامات فعلية مع UV لكل وجه، لتحسين التفاصيل عند الاقتراب من الأسطح.")
-                        .font(.subheadline)
+                    Text("اكتمل Apple Area Mode")
+                        .font(.title2.bold())
+                    Text("النتيجة المعروضة هي ناتج Photogrammetry الرسمي، بدون إسقاط خامات مخصص من التطبيق.")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
             }
 
-            Section("النموذج") {
-                HStack {
-                    Text("Vertices")
-                    Spacer()
-                    Text(mesh.vertexCount.formatted()).monospacedDigit()
-                }
-                HStack {
-                    Text("Faces")
-                    Spacer()
-                    Text(mesh.faceCount.formatted()).monospacedDigit()
-                }
-                HStack {
-                    Text("صور RGB")
-                    Spacer()
-                    Text(model.capturedFrameCount.formatted()).monospacedDigit()
-                }
-                HStack {
-                    Text("صور الخامات المستخدمة")
-                    Spacer()
-                    Text(mesh.textureURLs.count.formatted()).monospacedDigit()
-                }
-                HStack {
-                    Text("تغطية الوجوه بالخامات")
-                    Spacer()
-                    Text("\(mesh.faceCount > 0 ? Int((Double(mesh.texturedFaceCount) / Double(mesh.faceCount)) * 100) : 0)%")
-                        .monospacedDigit()
-                }
-
-                Button {
-                    showPreview = true
-                } label: {
-                    Label("معاينة الغرفة بالعارض الافتراضي", systemImage: "arkit")
-                }
-            }
-
-            Section("ملفات 3D") {
-                if let objURL = result.objURL {
-                    ShareLink(item: objURL) {
-                        AreaExportRow(
-                            title: "OBJ + MTL + Textures",
-                            detail: "Mesh مكسو بصور RGB فعلية — الأفضل للتفاصيل البصرية",
-                            systemImage: "photo.on.rectangle.angled"
-                        )
+            if let url = model.modelURL {
+                Section("النموذج") {
+                    Button {
+                        showPreview = true
+                    } label: {
+                        Label("فتح في Quick Look", systemImage: "arkit")
                     }
-                }
-
-                if let usdzURL = result.usdzURL {
-                    ShareLink(item: usdzURL) {
-                        AreaExportRow(
-                            title: "USDZ بخامات الصور",
-                            detail: "نسخة Apple للمعاينة والمشاركة عند نجاح التصدير",
-                            systemImage: "arkit"
-                        )
+                    ShareLink(item: url) {
+                        Label("مشاركة USDZ", systemImage: "square.and.arrow.up")
                     }
-                }
-
-                if let plyURL = result.plyURL {
-                    ShareLink(item: plyURL) {
-                        AreaExportRow(
-                            title: "PLY ملوّن",
-                            detail: "صيغة نقاط/وجوه مع RGB لكل Vertex كنسخة توافق",
-                            systemImage: "cube.fill"
-                        )
-                    }
-                }
-
-                ShareLink(item: result.manifestURL) {
-                    AreaExportRow(
-                        title: "scan.json",
-                        detail: "Camera poses + intrinsics + معلومات الجلسة",
-                        systemImage: "doc.text"
-                    )
                 }
             }
 
             Section {
-                Button("بدء مسح مكان جديد") {
-                    model.resetForNewScan()
-                }
+                Button("مسح مكان جديد") { model.cancelAndReset() }
             }
+        }
+    }
+
+    private var failedView: some View {
+        ContentUnavailableView {
+            Label("تعذر إكمال Area Mode", systemImage: "exclamationmark.triangle.fill")
+        } description: {
+            Text(model.statusMessage)
+        } actions: {
+            Button("العودة") { model.cancelAndReset() }
+                .buttonStyle(.borderedProminent)
         }
     }
 
     private var unsupportedView: some View {
         ContentUnavailableView {
-            Label("Scene Mesh غير مدعوم", systemImage: "iphone.slash")
+            Label("Area Mode غير متاح", systemImage: "iphone.slash")
         } description: {
-            Text("مسح الغرفة ثلاثي الأبعاد يحتاج جهاز iPhone أو iPad يدعم LiDAR وARKit Scene Reconstruction.")
+            Text("المسح الملون الرسمي للمساحات يحتاج iOS 18 أو أحدث وجهازًا يدعم Object Capture. لن يستخدم التطبيق محرك إسقاط الصور المخصص كبديل تلقائي لأنه كان سبب النتائج غير الصحيحة.")
         }
-    }
-
-    private func compact(_ value: Int) -> String {
-        value.formatted(.number.notation(.compactName))
     }
 }
 
-private struct AreaMetric: View {
-    let title: String
-    let value: String
+@available(iOS 18.0, *)
+private struct AppleAreaObjectCaptureView: View {
+    let session: ObjectCaptureSession
 
     var body: some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.headline.monospacedDigit())
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-private struct AreaExportRow: View {
-    let title: String
-    let detail: String
-    let systemImage: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.cyan)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 3)
+        ObjectCaptureView(session: session)
+            .hideObjectReticle()
     }
 }

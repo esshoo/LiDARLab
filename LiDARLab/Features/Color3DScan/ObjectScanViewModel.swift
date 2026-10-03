@@ -1,25 +1,33 @@
 import ARKit
 import Combine
-import CoreImage
 import Foundation
 import RealityKit
 import UIKit
 import simd
 
+@MainActor
 final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     enum Phase: Equatable {
         case idle
-        case selecting
+        case aiming
+        case preparing
+        case readyForDetection
+        case detecting
         case capturing
+        case finishing
         case reconstructing
         case completed
         case failed
 
         var title: String {
             switch self {
-            case .idle: "جاهز للبدء"
-            case .selecting: "اختيار المجسم"
+            case .idle: "جاهز"
+            case .aiming: "اختيار المجسم"
+            case .preparing: "تهيئة Object Capture"
+            case .readyForDetection: "التعرف على المجسم"
+            case .detecting: "ضبط حدود المجسم"
             case .capturing: "مسح المجسم"
+            case .finishing: "إنهاء الالتقاط"
             case .reconstructing: "بناء النموذج"
             case .completed: "اكتمل النموذج"
             case .failed: "حدث خطأ"
@@ -28,255 +36,221 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     @Published private(set) var phase: Phase = .idle
-    @Published private(set) var targetSelected = false
     @Published private(set) var cameraReady = false
-    @Published private(set) var capturedImageCount = 0
-    @Published private(set) var targetImageCount = 48
-    @Published private(set) var coverageProgress: Double = 0
-    @Published private(set) var imageProgress: Double = 0
-    @Published private(set) var estimatedCompletion: Double = 0
+    @Published private(set) var targetSelected = false
+    @Published private(set) var targetCentered = false
+    @Published private(set) var captureSession: ObjectCaptureSession?
+    @Published private(set) var shotCount = 0
+    @Published private(set) var maximumShotCount = 0
+    @Published private(set) var passNumber = 1
+    @Published private(set) var scanPassComplete = false
     @Published private(set) var reconstructionProgress: Double = 0
     @Published private(set) var currentDistanceMeters: Float = 0
     @Published private(set) var trackingState = "متوقف"
-    @Published private(set) var statusMessage = "ابدأ جلسة جديدة ثم المس المجسم المطلوب على الشاشة."
+    @Published private(set) var feedbackMessage: String?
+    @Published private(set) var statusMessage = "افتح الكاميرا، المس المجسم، ثم وجّه الهدف إلى منتصف الإطار قبل اكتشاف Apple."
     @Published private(set) var modelURL: URL?
     @Published private(set) var sessionFolderURL: URL?
     @Published var errorMessage: String?
 
     private weak var arView: ARView?
     private let fileManager = FileManager.default
-    private let ciContext = CIContext(options: [.cacheIntermediates: false])
-    private let captureQueue = DispatchQueue(label: "com.essam.3E.LiDARLab.objectscan.images", qos: .utility)
-    private let stateLock = NSLock()
-
-    private var runtimeOptions = Color3DScanSettings.objectOptions
-    private var sessionStartPending = false
-    private var sessionIsRunning = false
-    private var sessionGeneration = UUID()
-    private var captureEnabled = false
     private var targetWorldPoint: SIMD3<Float>?
     private var selectionAnchor: AnchorEntity?
-    private var imagesFolderURL: URL?
-    private var modelFolderURL: URL?
-    private var capturedImageURLs: [URL] = []
-    private var visitedCoverageBins: Set<Int> = []
-    private let coverageBinCount = 36
-    private var lastCaptureTimestamp: TimeInterval = -100
-    private var lastCaptureYaw: Float?
-    private var photogrammetrySession: PhotogrammetrySession?
+    private var preselectionRunning = false
+
+    private var options = Color3DScanSettings.appleObjectOptions
+    private var workFolderURL: URL?
+    private var imagesURL: URL?
+    private var checkpointsURL: URL?
+    private var localModelURL: URL?
+    private var finalFolderURL: URL?
+    private var listenerTasks: [Task<Void, Never>] = []
     private var reconstructionTask: Task<Void, Never>?
+    private var photogrammetrySession: PhotogrammetrySession?
 
     var isSupported: Bool {
-        ARWorldTrackingConfiguration.isSupported && PhotogrammetrySession.isSupported
-    }
-
-    var canBeginCapture: Bool {
-        phase == .selecting && targetSelected
+        ARWorldTrackingConfiguration.isSupported && ObjectCaptureSession.isSupported && PhotogrammetrySession.isSupported
     }
 
     var canFinishCapture: Bool {
-        phase == .capturing && capturedImageCount >= runtimeOptions.minimumImagesBeforeFinish
+        phase == .capturing && shotCount >= options.minimumImagesBeforeFinish
     }
 
     var minimumImagesBeforeFinish: Int {
-        runtimeOptions.minimumImagesBeforeFinish
+        options.minimumImagesBeforeFinish
     }
 
-    var objectSizeTitle: String {
-        runtimeOptions.objectSizePreset.title
+    var recommendedPasses: Int {
+        options.recommendedPasses
     }
 
     func attach(to arView: ARView) {
         self.arView = arView
         arView.automaticallyConfigureSession = false
         arView.session.delegate = self
-        startARSessionIfNeeded()
+        if phase == .aiming, !preselectionRunning {
+            startPreselectionSession()
+        }
     }
 
     func startNewScan() {
         guard isSupported else {
-            errorMessage = "هذا الجهاز لا يدعم ARWorldTracking وإعادة بناء Photogrammetry على الجهاز."
+            errorMessage = "هذا الجهاز لا يدعم Object Capture وإعادة البناء على الجهاز."
             return
         }
-        cancelInternal(removeFiles: true)
-        runtimeOptions = Color3DScanSettings.objectOptions
-        targetImageCount = runtimeOptions.targetImageCount
 
-        do {
-            let storage = LiDARLabStorage.shared
-            try storage.ensureDirectories()
-            let root = storage.capturesURL
-                .appendingPathComponent("Color3D", isDirectory: true)
-                .appendingPathComponent("Objects", isDirectory: true)
-            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        cleanup(removeWorkingFiles: true)
+        options = Color3DScanSettings.appleObjectOptions
+        modelURL = nil
+        sessionFolderURL = nil
+        shotCount = 0
+        maximumShotCount = 0
+        passNumber = 1
+        scanPassComplete = false
+        reconstructionProgress = 0
+        feedbackMessage = nil
+        targetWorldPoint = nil
+        targetSelected = false
+        targetCentered = false
+        cameraReady = false
+        currentDistanceMeters = 0
+        phase = .aiming
+        statusMessage = "جاري تجهيز الكاميرا لاختيار المجسم باللمس…"
+        clearSelectionMarker()
 
-            let folder = root.appendingPathComponent(
-                storage.timestampedName(prefix: "ObjectScan") + "-" + String(UUID().uuidString.prefix(8)),
-                isDirectory: true
-            )
-            let images = folder.appendingPathComponent("Images", isDirectory: true)
-            let model = folder.appendingPathComponent("Model", isDirectory: true)
-            try fileManager.createDirectory(at: images, withIntermediateDirectories: true)
-            try fileManager.createDirectory(at: model, withIntermediateDirectories: true)
-
-            stateLock.lock()
-            sessionGeneration = UUID()
-            captureEnabled = false
-            targetWorldPoint = nil
-            imagesFolderURL = images
-            modelFolderURL = model
-            capturedImageURLs.removeAll(keepingCapacity: true)
-            visitedCoverageBins.removeAll(keepingCapacity: true)
-            lastCaptureTimestamp = -100
-            lastCaptureYaw = nil
-            stateLock.unlock()
-
-            sessionFolderURL = folder
-            modelURL = nil
-            targetSelected = false
-            capturedImageCount = 0
-            coverageProgress = 0
-            imageProgress = 0
-            estimatedCompletion = 0
-            reconstructionProgress = 0
-            currentDistanceMeters = 0
-            phase = .selecting
-            cameraReady = false
-            sessionStartPending = true
-            sessionIsRunning = false
-            statusMessage = "جاري فتح الكاميرا وتهيئة التتبع…"
-
-            clearSelectionMarker()
-            startARSessionIfNeeded()
-        } catch {
-            phase = .failed
-            errorMessage = error.localizedDescription
-            statusMessage = "تعذر بدء جلسة مسح المجسم."
+        if arView != nil {
+            startPreselectionSession()
         }
     }
 
     func selectTarget(at screenPoint: CGPoint) {
-        guard phase == .selecting else { return }
-        guard cameraReady,
-              let arView,
-              let frame = arView.session.currentFrame else {
-            statusMessage = "الكاميرا ما زالت تجهز بيانات العمق. انتظر لحظة ثم المس المجسم."
+        guard phase == .aiming else { return }
+        guard cameraReady, let arView, let frame = arView.session.currentFrame else {
+            statusMessage = "انتظر حتى تصبح الكاميرا جاهزة ثم المس المجسم."
             return
         }
 
-        let selected = depthWorldPoint(at: screenPoint, frame: frame, arView: arView)
+        let target = depthWorldPoint(at: screenPoint, frame: frame, arView: arView)
             ?? raycastWorldPoint(at: screenPoint, arView: arView)
-
-        guard let selected else {
-            DispatchQueue.main.async { [weak self] in
-                self?.statusMessage = "لم أستطع تثبيت نقطة على المجسم هنا. اقترب قليلًا، وجّه الكاميرا للجسم، ثم المسه مرة أخرى."
-                UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            }
+        guard let target else {
+            statusMessage = "لم أجد سطحًا موثوقًا عند نقطة اللمس. وجّه الهاتف للمجسم وحاول مرة أخرى."
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
             return
         }
 
-        stateLock.lock()
-        targetWorldPoint = selected
-        stateLock.unlock()
-
-        showSelectionMarker(at: selected)
-        let camera = SIMD3<Float>(
-            frame.camera.transform.columns.3.x,
-            frame.camera.transform.columns.3.y,
-            frame.camera.transform.columns.3.z
-        )
-        let distance = simd_distance(camera, selected)
-
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.targetSelected = true
-            self.currentDistanceMeters = distance
-            self.statusMessage = "تم تحديد الهدف عند \(String(format: "%.2f", distance)) م. تأكد أن العلامة على المجسم الصحيح ثم ابدأ المسح."
-            if self.runtimeOptions.haptics {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            }
+        targetWorldPoint = target
+        targetSelected = true
+        showSelectionMarker(at: target)
+        updateTargetGuidance(frame: frame, arView: arView)
+        if options.haptics {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         }
     }
 
     func clearTargetSelection() {
-        guard phase == .selecting else { return }
-        stateLock.lock()
+        guard phase == .aiming else { return }
         targetWorldPoint = nil
-        stateLock.unlock()
-        clearSelectionMarker()
         targetSelected = false
+        targetCentered = false
         currentDistanceMeters = 0
-        statusMessage = "المس المجسم المطلوب على الشاشة لتحديده من جديد."
+        clearSelectionMarker()
+        statusMessage = "المس المجسم الذي تريد مسحه."
     }
 
-    func beginCapture() {
-        guard phase == .selecting else { return }
-        stateLock.lock()
-        let hasTarget = targetWorldPoint != nil
-        captureEnabled = hasTarget
-        visitedCoverageBins.removeAll(keepingCapacity: true)
-        lastCaptureTimestamp = -100
-        lastCaptureYaw = nil
-        stateLock.unlock()
-        guard hasTarget else {
-            errorMessage = "حدد المجسم باللمس أولًا."
+    /// Touch selection is a targeting aid. Apple's detector itself only detects the object at camera center.
+    func acceptTargetAndPrepareObjectCapture() {
+        guard phase == .aiming, targetSelected else { return }
+        guard targetCentered else {
+            statusMessage = "حرّك الهاتف حتى تصبح علامة الهدف قرب منتصف الإطار ثم حاول مرة أخرى."
             return
         }
 
-        capturedImageCount = 0
-        coverageProgress = 0
-        imageProgress = 0
-        estimatedCompletion = 0
-        phase = .capturing
-        statusMessage = "لف حول المجسم ببطء مع إبقاء العلامة في منتصف المشهد. الإنهاء يدوي عندما ترى أن التغطية كافية."
+        arView?.session.pause()
+        preselectionRunning = false
+        clearSelectionMarker()
+        prepareOfficialSession()
     }
 
-    func captureManualImage() {
-        guard phase == .capturing,
-              let frame = arView?.session.currentFrame else { return }
-        scheduleImageCapture(frame: frame, force: true)
+    func startOfficialDetection() {
+        guard let session = captureSession, phase == .readyForDetection else { return }
+        guard session.startDetecting() else {
+            statusMessage = "تعذر بدء اكتشاف المجسم. اجعله في منتصف الإطار وبإضاءة جيدة ثم أعد المحاولة."
+            return
+        }
+        handleState(session.state)
+    }
+
+    func resetDetection() {
+        guard let session = captureSession else { return }
+        if session.resetDetection() {
+            handleState(session.state)
+            statusMessage = "أعيد ضبط الاكتشاف. أبقِ المجسم في المنتصف ثم ابدأ التعرف من جديد."
+        }
+    }
+
+    func startCapturing() {
+        guard let session = captureSession, phase == .detecting else { return }
+        session.startCapturing()
+        handleState(session.state)
+        statusMessage = "لف حول المجسم ببطء. واجهة Apple تعرض الـPoint Cloud وCapture Dial للمناطق الناقصة."
+    }
+
+    func requestManualShot() {
+        guard let session = captureSession,
+              phase == .capturing,
+              session.canRequestImageCapture else { return }
+        session.requestImageCapture()
+    }
+
+    func beginAdditionalPass() {
+        guard let session = captureSession, phase == .capturing else { return }
+        session.beginNewScanPass()
+        passNumber += 1
+        scanPassComplete = false
+        statusMessage = "بدأت الجولة \(passNumber). غيّر ارتفاع الهاتف لتغطية تفاصيل جديدة."
+    }
+
+    func beginPassAfterFlip() {
+        guard let session = captureSession, phase == .capturing else { return }
+        session.beginNewScanPassAfterFlip()
+        passNumber += 1
+        scanPassComplete = false
+        statusMessage = "اقلب المجسم إن كان مناسبًا ثم واصل الجولة \(passNumber)."
     }
 
     func finishCapture() {
-        guard phase == .capturing else { return }
-        guard capturedImageCount >= runtimeOptions.minimumImagesBeforeFinish else {
-            errorMessage = "التقط \(runtimeOptions.minimumImagesBeforeFinish) صور على الأقل قبل بناء النموذج. لديك الآن \(capturedImageCount)."
-            return
-        }
-
-        stateLock.lock()
-        captureEnabled = false
-        stateLock.unlock()
-        arView?.session.pause()
-        captureQueue.sync {}
-
-        phase = .reconstructing
-        reconstructionProgress = 0
-        statusMessage = "جاري تحليل \(capturedImageCount) صورة وبناء النموذج الملوّن…"
-        startReconstruction()
+        guard let session = captureSession, phase == .capturing else { return }
+        session.finish()
+        handleState(session.state)
+        statusMessage = "جاري إنهاء جلسة Object Capture وحفظ البيانات…"
     }
 
     func pauseCapture() {
-        arView?.session.pause()
+        captureSession?.pause()
+    }
+
+    func resumeCapture() {
+        captureSession?.resume()
     }
 
     func cancelAndReset() {
-        cancelInternal(removeFiles: phase != .completed)
+        cleanup(removeWorkingFiles: phase != .completed)
         phase = .idle
-        targetSelected = false
         cameraReady = false
-        sessionStartPending = false
-        sessionIsRunning = false
-        capturedImageCount = 0
-        coverageProgress = 0
-        imageProgress = 0
-        estimatedCompletion = 0
+        targetSelected = false
+        targetCentered = false
+        shotCount = 0
+        maximumShotCount = 0
+        passNumber = 1
+        scanPassComplete = false
         reconstructionProgress = 0
         currentDistanceMeters = 0
         trackingState = "متوقف"
+        feedbackMessage = nil
         modelURL = nil
         sessionFolderURL = nil
-        statusMessage = "ابدأ جلسة جديدة ثم المس المجسم المطلوب على الشاشة."
+        statusMessage = "افتح الكاميرا، المس المجسم، ثم وجّه الهدف إلى منتصف الإطار قبل اكتشاف Apple."
         errorMessage = nil
     }
 
@@ -284,273 +258,242 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         errorMessage = nil
     }
 
+    // MARK: - Preselection AR session
+
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        if phase == .selecting, !cameraReady {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.phase == .selecting, !self.cameraReady else { return }
-                self.cameraReady = true
-                self.statusMessage = "الكاميرا جاهزة. المس مباشرة على المجسم الذي تريد مسحه."
-            }
+        guard phase == .aiming else { return }
+        if !cameraReady {
+            cameraReady = true
+            statusMessage = "الكاميرا جاهزة. المس المجسم المطلوب."
         }
-
-        stateLock.lock()
-        let capturing = captureEnabled
-        let target = targetWorldPoint
-        let options = runtimeOptions
-        stateLock.unlock()
-        guard capturing, let target else { return }
-
-        let cameraTransform = frame.camera.transform
-        let cameraPosition = SIMD3<Float>(
-            cameraTransform.columns.3.x,
-            cameraTransform.columns.3.y,
-            cameraTransform.columns.3.z
-        )
-        let toTarget = target - cameraPosition
-        let distance = simd_length(toTarget)
-        guard distance > 0.001 else { return }
-
-        let directionToTarget = toTarget / distance
-        let cameraForward = -simd_normalize(SIMD3<Float>(
-            cameraTransform.columns.2.x,
-            cameraTransform.columns.2.y,
-            cameraTransform.columns.2.z
-        ))
-        let facing = simd_dot(cameraForward, directionToTarget)
-
-        let horizontal = SIMD2<Float>(cameraPosition.x - target.x, cameraPosition.z - target.z)
-        let yaw = atan2(horizontal.x, horizontal.y)
-        let bin = coverageBin(for: yaw)
-        let distanceRange = options.objectSizePreset.recommendedDistanceRange
-        let distanceOK = distanceRange.contains(distance)
-        let facingOK = facing > 0.62
-
-        if facingOK && distanceOK {
-            stateLock.lock()
-            visitedCoverageBins.insert(bin)
-            let coverageCount = visitedCoverageBins.count
-            stateLock.unlock()
-            updateLiveProgress(distance: distance, coverageCount: coverageCount)
-
-            if options.autoCapture {
-                scheduleImageCapture(frame: frame, force: false, yaw: yaw)
-            }
-        } else {
-            let guidance: String
-            if facing <= 0.62 {
-                guidance = "وجّه الكاميرا نحو علامة الهدف."
-            } else if distance < distanceRange.lowerBound {
-                guidance = "أنت قريب جدًا. ابتعد قليلًا عن المجسم."
-            } else {
-                guidance = "أنت بعيد. اقترب قليلًا من المجسم."
-            }
-            DispatchQueue.main.async { [weak self] in
-                self?.currentDistanceMeters = distance
-                self?.statusMessage = guidance
-            }
+        if let arView, targetWorldPoint != nil {
+            updateTargetGuidance(frame: frame, arView: arView)
         }
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
-        let text: String
         switch camera.trackingState {
-        case .normal: text = "طبيعي"
-        case .notAvailable: text = "غير متاح"
+        case .normal: trackingState = "طبيعي"
+        case .notAvailable: trackingState = "غير متاح"
         case .limited(let reason):
             switch reason {
-            case .initializing: text = "تهيئة"
-            case .excessiveMotion: text = "حركة سريعة"
-            case .insufficientFeatures: text = "تفاصيل قليلة"
-            case .relocalizing: text = "إعادة تحديد الموقع"
-            @unknown default: text = "محدود"
+            case .initializing: trackingState = "تهيئة"
+            case .excessiveMotion: trackingState = "حركة سريعة"
+            case .insufficientFeatures: trackingState = "تفاصيل قليلة"
+            case .relocalizing: trackingState = "إعادة تحديد الموقع"
+            @unknown default: trackingState = "محدود"
             }
         }
-        DispatchQueue.main.async { [weak self] in self?.trackingState = text }
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in
-            self?.cameraReady = false
-            self?.sessionIsRunning = false
-            self?.phase = .failed
-            self?.errorMessage = error.localizedDescription
-            self?.statusMessage = "فشلت جلسة AR أثناء مسح المجسم."
-        }
+        guard phase == .aiming else { return }
+        phase = .failed
+        errorMessage = error.localizedDescription
+        statusMessage = "فشلت جلسة AR أثناء اختيار الهدف."
     }
 
-    private func startARSessionIfNeeded() {
-        guard sessionStartPending,
-              !sessionIsRunning,
-              phase == .selecting,
-              let arView else { return }
-
-        sessionStartPending = false
-        sessionIsRunning = true
-        cameraReady = false
-
+    private func startPreselectionSession() {
+        guard phase == .aiming, let arView else { return }
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
         configuration.planeDetection = [.horizontal, .vertical]
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics.insert(.sceneDepth)
         }
-        if runtimeOptions.useSmoothedDepthForSelection,
-           ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
             configuration.frameSemantics.insert(.smoothedSceneDepth)
         }
-
         arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-        statusMessage = "جاري تهيئة الكاميرا وبيانات العمق…"
+        preselectionRunning = true
+        cameraReady = false
     }
 
-    private func updateLiveProgress(distance: Float, coverageCount: Int) {
-        let coverage = min(max(Double(coverageCount) / Double(coverageBinCount), 0), 1)
-        let image = min(max(Double(capturedImageCount) / Double(max(targetImageCount, 1)), 0), 1)
-        let completion = min(1, coverage * 0.68 + image * 0.32)
+    private func updateTargetGuidance(frame: ARFrame, arView: ARView) {
+        guard let target = targetWorldPoint, arView.bounds.width > 0, arView.bounds.height > 0 else { return }
+        let orientation = arView.window?.windowScene?.interfaceOrientation ?? .portrait
+        let projected = frame.camera.projectPoint(target, orientation: orientation, viewportSize: arView.bounds.size)
+        let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+        let dx = projected.x - center.x
+        let dy = projected.y - center.y
+        let offset = hypot(dx, dy)
+        let threshold = min(arView.bounds.width, arView.bounds.height) * 0.12
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.currentDistanceMeters = distance
-            self.coverageProgress = coverage
-            self.imageProgress = image
-            self.estimatedCompletion = completion
-            if completion >= 0.98 {
-                self.statusMessage = "التغطية ممتازة. يمكنك إنهاء المسح الآن أو التقاط صور إضافية يدويًا."
-            } else {
-                self.statusMessage = "استمر في الالتفاف حول الهدف. التغطية التقديرية \(Int(coverage * 100))%."
-            }
-        }
-    }
-
-    private func scheduleImageCapture(frame: ARFrame, force: Bool, yaw suppliedYaw: Float? = nil) {
-        stateLock.lock()
-        guard captureEnabled,
-              let imagesFolderURL else {
-            stateLock.unlock()
-            return
-        }
-
-        let maxAllowedImages = min(140, max(runtimeOptions.targetImageCount + 20, runtimeOptions.targetImageCount))
-        guard capturedImageURLs.count < maxAllowedImages else {
-            stateLock.unlock()
-            return
-        }
-
-        let yaw: Float
-        if let suppliedYaw {
-            yaw = suppliedYaw
-        } else if let target = targetWorldPoint {
-            let position = frame.camera.transform.columns.3
-            yaw = atan2(position.x - target.x, position.z - target.z)
+        let cameraPosition = SIMD3<Float>(
+            frame.camera.transform.columns.3.x,
+            frame.camera.transform.columns.3.y,
+            frame.camera.transform.columns.3.z
+        )
+        currentDistanceMeters = simd_distance(cameraPosition, target)
+        targetCentered = offset <= threshold
+        if targetCentered {
+            statusMessage = "الهدف في المنتصف. اضغط اعتماد الهدف لبدء اكتشاف Apple وحدود المجسم."
         } else {
-            stateLock.unlock()
-            return
+            statusMessage = "تم تحديد الهدف. حرّك الهاتف حتى تصبح العلامة السماوية قرب منتصف الإطار."
         }
+    }
 
-        if !force {
-            let elapsed = frame.timestamp - lastCaptureTimestamp
-            guard elapsed >= runtimeOptions.minimumCaptureInterval else {
-                stateLock.unlock()
-                return
+    // MARK: - Official Object Capture
+
+    private func prepareOfficialSession() {
+        options = Color3DScanSettings.appleObjectOptions
+        do {
+            let storage = LiDARLabStorage.shared
+            try storage.ensureDirectories()
+
+            let finalRoot = storage.capturesURL
+                .appendingPathComponent("Color3D", isDirectory: true)
+                .appendingPathComponent("Objects", isDirectory: true)
+            try fileManager.createDirectory(at: finalRoot, withIntermediateDirectories: true)
+            let uniqueName = storage.timestampedName(prefix: "ObjectScan") + "-" + String(UUID().uuidString.prefix(8))
+            let finalFolder = finalRoot.appendingPathComponent(uniqueName, isDirectory: true)
+
+            let cacheRoot = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("3ELiDAR-ObjectCaptureWork", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let images = cacheRoot.appendingPathComponent("Images", isDirectory: true)
+            let checkpoints = cacheRoot.appendingPathComponent("Checkpoints", isDirectory: true)
+            let modelFolder = cacheRoot.appendingPathComponent("Model", isDirectory: true)
+            try fileManager.createDirectory(at: images, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: checkpoints, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: modelFolder, withIntermediateDirectories: true)
+
+            let session = ObjectCaptureSession()
+            var configuration = ObjectCaptureSession.Configuration()
+            configuration.checkpointDirectory = checkpoints
+            configuration.isOverCaptureEnabled = options.overCapture
+            if #available(iOS 18.0, *) {
+                session.isAutoCaptureEnabled = options.autoCapture
+                session.shouldPlayHaptics = options.haptics
             }
-            if let lastCaptureYaw {
-                guard angularDistance(yaw, lastCaptureYaw) >= runtimeOptions.minimumAngularStepRadians else {
-                    stateLock.unlock()
-                    return
+
+            workFolderURL = cacheRoot
+            imagesURL = images
+            checkpointsURL = checkpoints
+            localModelURL = modelFolder.appendingPathComponent("model.usdz")
+            finalFolderURL = finalFolder
+            sessionFolderURL = finalFolder
+            captureSession = session
+            shotCount = 0
+            maximumShotCount = 0
+            passNumber = 1
+            scanPassComplete = false
+            feedbackMessage = nil
+            reconstructionProgress = 0
+            phase = .preparing
+            statusMessage = "جاري تشغيل Object Capture الرسمي…"
+
+            attachListeners(to: session)
+            session.start(imagesDirectory: images, configuration: configuration)
+            handleState(session.state)
+            shotCount = session.numberOfShotsTaken
+            maximumShotCount = session.maximumNumberOfInputImages
+        } catch {
+            phase = .failed
+            errorMessage = error.localizedDescription
+            statusMessage = "تعذر بدء Object Capture."
+        }
+    }
+
+    private func attachListeners(to session: ObjectCaptureSession) {
+        detachListeners()
+
+        listenerTasks.append(Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for await state in session.stateUpdates {
+                guard !Task.isCancelled else { return }
+                self.handleState(state)
+            }
+        })
+
+        listenerTasks.append(Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for await count in session.numberOfShotsTakenUpdates {
+                guard !Task.isCancelled else { return }
+                self.shotCount = count
+            }
+        })
+
+        listenerTasks.append(Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for await completed in session.userCompletedScanPassUpdates {
+                guard !Task.isCancelled else { return }
+                self.scanPassComplete = completed
+                if completed {
+                    self.statusMessage = "اكتملت الجولة \(self.passNumber) في Capture Dial. يمكنك إنهاء المسح أو إضافة جولة من ارتفاع مختلف."
                 }
             }
-            guard capturedImageURLs.count < runtimeOptions.targetImageCount else {
-                stateLock.unlock()
-                return
+        })
+
+        listenerTasks.append(Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for await feedback in session.feedbackUpdates {
+                guard !Task.isCancelled else { return }
+                self.feedbackMessage = Self.describe(feedback: feedback)
             }
-        }
-
-        lastCaptureTimestamp = frame.timestamp
-        lastCaptureYaw = yaw
-        let generation = sessionGeneration
-        stateLock.unlock()
-
-        captureQueue.async { [weak self, frame] in
-            self?.saveImage(frame: frame, folder: imagesFolderURL, generation: generation)
-        }
+        })
     }
 
-    private func saveImage(frame: ARFrame, folder: URL, generation: UUID) {
-        let pixelBuffer = frame.capturedImage
-        let originalWidth = CVPixelBufferGetWidth(pixelBuffer)
-        let originalHeight = CVPixelBufferGetHeight(pixelBuffer)
-        guard originalWidth > 0, originalHeight > 0 else { return }
+    private func detachListeners() {
+        listenerTasks.forEach { $0.cancel() }
+        listenerTasks.removeAll()
+    }
 
-        let scale = min(1, CGFloat(runtimeOptions.imageMaxDimension) / CGFloat(max(originalWidth, originalHeight)))
-        let source = CIImage(cvPixelBuffer: pixelBuffer)
-        let scaled = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        guard let cgImage = ciContext.createCGImage(scaled, from: scaled.extent.integral),
-              let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: runtimeOptions.jpegQuality) else { return }
-
-        stateLock.lock()
-        guard generation == sessionGeneration, captureEnabled else {
-            stateLock.unlock()
-            return
-        }
-        let index = capturedImageURLs.count + 1
-        stateLock.unlock()
-
-        let fileURL = folder.appendingPathComponent(String(format: "object-%03d.jpg", index))
-        do {
-            try jpeg.write(to: fileURL, options: .atomic)
-        } catch {
-            return
-        }
-
-        stateLock.lock()
-        guard generation == sessionGeneration, captureEnabled else {
-            stateLock.unlock()
-            try? fileManager.removeItem(at: fileURL)
-            return
-        }
-        capturedImageURLs.append(fileURL)
-        let count = capturedImageURLs.count
-        let target = max(runtimeOptions.targetImageCount, 1)
-        stateLock.unlock()
-
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.capturedImageCount = count
-            self.imageProgress = min(1, Double(count) / Double(target))
-            self.estimatedCompletion = min(1, self.coverageProgress * 0.68 + self.imageProgress * 0.32)
-            if self.runtimeOptions.haptics {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            }
+    private func handleState(_ state: ObjectCaptureSession.CaptureState) {
+        switch state {
+        case .initializing:
+            phase = .preparing
+            statusMessage = "جاري تهيئة كاميرا Object Capture…"
+        case .ready:
+            phase = .readyForDetection
+            statusMessage = "المجسم يجب أن يكون في منتصف الإطار. اضغط بدء التعرف الرسمي."
+        case .detecting:
+            phase = .detecting
+            statusMessage = "راجع Bounding Box الذي رسمته Apple وعدّله حتى يحيط بالمجسم فقط."
+        case .capturing:
+            phase = .capturing
+            statusMessage = "لف حول المجسم ببطء واتبع Capture Dial والـPoint Cloud الظاهرين في واجهة Apple."
+        case .finishing:
+            phase = .finishing
+            statusMessage = "جاري إنهاء الالتقاط وحفظ الصور…"
+        case .completed:
+            phase = .reconstructing
+            statusMessage = "اكتمل الالتقاط. جاري بناء USDZ…"
+            detachListeners()
+            captureSession = nil
+            startReconstruction()
+        case .failed(let error):
+            phase = .failed
+            errorMessage = error.localizedDescription
+            statusMessage = "فشل Object Capture: \(error.localizedDescription)"
+        @unknown default:
+            statusMessage = "تغيّرت حالة Object Capture."
         }
     }
 
     private func startReconstruction() {
         reconstructionTask?.cancel()
-        guard let imagesFolderURL, let modelFolderURL else {
+        guard let imagesURL, let localModelURL else {
             phase = .failed
-            errorMessage = "مجلد صور المجسم غير متاح."
+            errorMessage = "صور Object Capture غير متاحة لإعادة البناء."
             return
         }
-
-        let finalURL = modelFolderURL.appendingPathComponent("model.usdz")
-        try? fileManager.removeItem(at: finalURL)
-        let options = runtimeOptions
+        try? fileManager.removeItem(at: localModelURL)
+        let finalFolder = finalFolderURL
+        let workingFolder = workFolderURL
+        let options = options
 
         reconstructionTask = Task { [weak self] in
             guard let self else { return }
             do {
                 var configuration = PhotogrammetrySession.Configuration()
-                configuration.sampleOrdering = .sequential
+                configuration.checkpointDirectory = self.checkpointsURL
                 configuration.featureSensitivity = options.highFeatureSensitivity ? .high : .normal
                 configuration.isObjectMaskingEnabled = options.objectMasking
 
-                let session = try PhotogrammetrySession(input: imagesFolderURL, configuration: configuration)
+                let session = try PhotogrammetrySession(input: imagesURL, configuration: configuration)
                 self.photogrammetrySession = session
-                let request = PhotogrammetrySession.Request.modelFile(
-                    url: finalURL,
-                    detail: .reduced,
-                    geometry: nil
-                )
+                let request = PhotogrammetrySession.Request.modelFile(url: localModelURL, detail: .reduced)
                 try session.process(requests: [request])
 
                 for try await output in session.outputs {
@@ -560,93 +503,96 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
                     }
                     switch output {
                     case .requestProgress(_, fractionComplete: let fraction):
-                        DispatchQueue.main.async { [weak self] in
-                            self?.reconstructionProgress = fraction
-                            self?.statusMessage = "بناء النموذج… \(Int(fraction * 100))%"
-                        }
+                        self.reconstructionProgress = fraction
+                        self.statusMessage = "بناء النموذج… \(Int(fraction * 100))%"
                     case .requestError(_, let error):
-                        DispatchQueue.main.async { [weak self] in
-                            self?.phase = .failed
-                            self?.errorMessage = error.localizedDescription
-                            self?.statusMessage = "تعذر إنشاء النموذج من الصور الحالية."
-                        }
+                        self.phase = .failed
+                        self.errorMessage = error.localizedDescription
+                        self.statusMessage = "تعذر بناء النموذج من صور Object Capture."
                     case .processingComplete:
-                        if self.fileManager.fileExists(atPath: finalURL.path) {
-                            self.writeManifest(modelURL: finalURL)
-                            if !options.keepSourceImages {
-                                try? self.fileManager.removeItem(at: imagesFolderURL)
+                        guard self.fileManager.fileExists(atPath: localModelURL.path), let finalFolder else {
+                            if self.phase != .failed {
+                                self.phase = .failed
+                                self.errorMessage = "انتهت المعالجة بدون ملف USDZ."
                             }
-                            DispatchQueue.main.async { [weak self] in
-                                self?.modelURL = finalURL
-                                self?.reconstructionProgress = 1
-                                self?.phase = .completed
-                                self?.statusMessage = "اكتمل نموذج USDZ الملوّن."
-                            }
-                        } else {
-                            DispatchQueue.main.async { [weak self] in
-                                self?.phase = .failed
-                                self?.errorMessage = "انتهت المعالجة لكن ملف USDZ غير موجود."
-                            }
+                            continue
+                        }
+                        try self.fileManager.createDirectory(at: finalFolder, withIntermediateDirectories: true)
+                        let modelFolder = finalFolder.appendingPathComponent("Model", isDirectory: true)
+                        try self.fileManager.createDirectory(at: modelFolder, withIntermediateDirectories: true)
+                        let published = modelFolder.appendingPathComponent("model.usdz")
+                        try? self.fileManager.removeItem(at: published)
+                        try self.fileManager.copyItem(at: localModelURL, to: published)
+
+                        if options.keepSourceImages {
+                            let sourceFolder = finalFolder.appendingPathComponent("Images", isDirectory: true)
+                            try? self.fileManager.removeItem(at: sourceFolder)
+                            try self.fileManager.copyItem(at: imagesURL, to: sourceFolder)
+                        }
+
+                        self.modelURL = published
+                        self.reconstructionProgress = 1
+                        self.phase = .completed
+                        self.statusMessage = "اكتمل نموذج USDZ الملوّن."
+                        if let workingFolder {
+                            try? self.fileManager.removeItem(at: workingFolder)
+                            self.workFolderURL = nil
                         }
                     default:
                         break
                     }
                 }
             } catch {
-                DispatchQueue.main.async { [weak self] in
-                    self?.phase = .failed
-                    self?.errorMessage = error.localizedDescription
-                    self?.statusMessage = "فشلت إعادة بناء المجسم."
-                }
+                self.phase = .failed
+                self.errorMessage = error.localizedDescription
+                self.statusMessage = "فشلت إعادة بناء المجسم."
             }
             self.photogrammetrySession = nil
         }
     }
 
-    private func writeManifest(modelURL: URL) {
-        guard let sessionFolderURL else { return }
-        stateLock.lock()
-        let point = targetWorldPoint
-        let imageCount = capturedImageURLs.count
-        let coverage = Double(visitedCoverageBins.count) / Double(coverageBinCount)
-        stateLock.unlock()
+    private func cleanup(removeWorkingFiles: Bool) {
+        detachListeners()
+        reconstructionTask?.cancel()
+        reconstructionTask = nil
+        photogrammetrySession?.cancel()
+        photogrammetrySession = nil
+        captureSession?.cancel()
+        captureSession = nil
+        arView?.session.pause()
+        preselectionRunning = false
+        clearSelectionMarker()
 
-        let record = ObjectScanManifest(
-            schemaVersion: 3,
-            createdAt: Date(),
-            selectedTargetWorldPoint: point.map { [$0.x, $0.y, $0.z] },
-            objectSizePreset: runtimeOptions.objectSizePreset.rawValue,
-            imageCount: imageCount,
-            targetImageCount: runtimeOptions.targetImageCount,
-            estimatedCoverage: coverage,
-            imageMaxDimension: runtimeOptions.imageMaxDimension,
-            jpegQuality: runtimeOptions.jpegQuality,
-            highFeatureSensitivity: runtimeOptions.highFeatureSensitivity,
-            objectMasking: runtimeOptions.objectMasking,
-            modelFile: "Model/\(modelURL.lastPathComponent)",
-            keptSourceImages: runtimeOptions.keepSourceImages,
-            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
-        )
-
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            try encoder.encode(record).write(to: sessionFolderURL.appendingPathComponent("scan.json"), options: .atomic)
-        } catch {
-            // The model is already complete; metadata failure should not discard it.
+        if removeWorkingFiles, let workFolderURL {
+            try? fileManager.removeItem(at: workFolderURL)
         }
+        workFolderURL = nil
+        imagesURL = nil
+        checkpointsURL = nil
+        localModelURL = nil
+        finalFolderURL = nil
+        targetWorldPoint = nil
     }
 
-    private func depthWorldPoint(at screenPoint: CGPoint, frame: ARFrame, arView: ARView) -> SIMD3<Float>? {
-        let depthData: ARDepthData?
-        if runtimeOptions.useSmoothedDepthForSelection {
-            depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
-        } else {
-            depthData = frame.sceneDepth ?? frame.smoothedSceneDepth
+    private static func describe(feedback: Set<ObjectCaptureSession.Feedback>) -> String? {
+        if feedback.contains(.environmentTooDark) { return "الإضاءة مظلمة جدًا؛ زد الإضاءة." }
+        if feedback.contains(.environmentLowLight) { return "الإضاءة منخفضة وقد تقل الجودة." }
+        if feedback.contains(.movingTooFast) { return "تتحرك بسرعة؛ تحرك أبطأ." }
+        if feedback.contains(.objectNotDetected) { return "لم تتعرف Apple على المجسم جيدًا؛ عدّل الصندوق اليدوي أو أعد الاكتشاف." }
+        if feedback.contains(.objectNotFlippable) { return "يفضل عدم قلب هذا المجسم؛ استخدم جولات إضافية من ارتفاعات مختلفة." }
+        if feedback.contains(.objectTooClose) { return "أنت قريب جدًا من المجسم." }
+        if feedback.contains(.objectTooFar) { return "أنت بعيد جدًا عن المجسم." }
+        if feedback.contains(.outOfFieldOfView) { return "جزء من Bounding Box خارج مجال الكاميرا." }
+        if feedback.contains(.overCapturing) { return "تم تجاوز عدد الصور المفيد لإعادة البناء على الهاتف."
         }
-        guard let depthData else { return nil }
+        return nil
+    }
 
+    // MARK: - Target selection helpers
+
+    private func depthWorldPoint(at screenPoint: CGPoint, frame: ARFrame, arView: ARView) -> SIMD3<Float>? {
+        let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
+        guard let depthData else { return nil }
         let viewport = arView.bounds.size
         guard viewport.width > 0, viewport.height > 0 else { return nil }
         let orientation = arView.window?.windowScene?.interfaceOrientation ?? .portrait
@@ -657,15 +603,15 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
               normalizedImage.y >= 0, normalizedImage.y <= 1 else { return nil }
 
         let depthMap = depthData.depthMap
-        let depthWidth = CVPixelBufferGetWidth(depthMap)
-        let depthHeight = CVPixelBufferGetHeight(depthMap)
-        let dx = min(max(Int(normalizedImage.x * CGFloat(depthWidth)), 0), depthWidth - 1)
-        let dy = min(max(Int(normalizedImage.y * CGFloat(depthHeight)), 0), depthHeight - 1)
-        guard let depth = medianDepth(depthMap, x: dx, y: dy), depth > 0.08, depth < 8 else { return nil }
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        let x = min(max(Int(normalizedImage.x * CGFloat(width)), 0), width - 1)
+        let y = min(max(Int(normalizedImage.y * CGFloat(height)), 0), height - 1)
+        guard let depth = medianDepth(depthMap, x: x, y: y), depth > 0.08, depth < 8 else { return nil }
 
-        let imageResolution = frame.camera.imageResolution
-        let u = Float(normalizedImage.x) * Float(imageResolution.width)
-        let v = Float(normalizedImage.y) * Float(imageResolution.height)
+        let resolution = frame.camera.imageResolution
+        let u = Float(normalizedImage.x) * Float(resolution.width)
+        let v = Float(normalizedImage.y) * Float(resolution.height)
         let intrinsics = frame.camera.intrinsics
         let fx = intrinsics.columns.0.x
         let fy = intrinsics.columns.1.y
@@ -673,12 +619,7 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let cy = intrinsics.columns.2.y
         guard fx > 0, fy > 0 else { return nil }
 
-        let cameraPoint = SIMD4<Float>(
-            (u - cx) / fx * depth,
-            -(v - cy) / fy * depth,
-            -depth,
-            1
-        )
+        let cameraPoint = SIMD4<Float>((u - cx) / fx * depth, -(v - cy) / fy * depth, -depth, 1)
         let world = frame.camera.transform * cameraPoint
         return SIMD3<Float>(world.x, world.y, world.z)
     }
@@ -691,15 +632,11 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let height = CVPixelBufferGetHeight(buffer)
         let stride = CVPixelBufferGetBytesPerRow(buffer) / MemoryLayout<Float32>.size
         let values = base.assumingMemoryBound(to: Float32.self)
-
         var samples: [Float] = []
-        samples.reserveCapacity(9)
         for yy in max(0, y - 1)...min(height - 1, y + 1) {
             for xx in max(0, x - 1)...min(width - 1, x + 1) {
                 let value = values[yy * stride + xx]
-                if value.isFinite, value > 0.05, value < 10 {
-                    samples.append(value)
-                }
+                if value.isFinite, value > 0.05, value < 10 { samples.append(value) }
             }
         }
         guard !samples.isEmpty else { return nil }
@@ -718,10 +655,9 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     private func showSelectionMarker(at point: SIMD3<Float>) {
         clearSelectionMarker()
         guard let arView else { return }
-        let radius = max(0.018, runtimeOptions.objectSizePreset.approximateDiameterMeters * 0.025)
         let anchor = AnchorEntity(world: point)
         let material = SimpleMaterial(color: UIColor.systemCyan, isMetallic: false)
-        let marker = ModelEntity(mesh: .generateSphere(radius: radius), materials: [material])
+        let marker = ModelEntity(mesh: .generateSphere(radius: 0.025), materials: [material])
         anchor.addChild(marker)
         arView.scene.addAnchor(anchor)
         selectionAnchor = anchor
@@ -733,58 +669,4 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         }
         selectionAnchor = nil
     }
-
-    private func coverageBin(for yaw: Float) -> Int {
-        let twoPi = Float.pi * 2
-        var normalized = yaw + Float.pi
-        normalized.formTruncatingRemainder(dividingBy: twoPi)
-        if normalized < 0 { normalized += twoPi }
-        return min(max(Int((normalized / twoPi) * Float(coverageBinCount)), 0), coverageBinCount - 1)
-    }
-
-    private func angularDistance(_ a: Float, _ b: Float) -> Float {
-        abs(atan2(sin(a - b), cos(a - b)))
-    }
-
-    private func cancelInternal(removeFiles: Bool) {
-        stateLock.lock()
-        captureEnabled = false
-        sessionGeneration = UUID()
-        stateLock.unlock()
-        reconstructionTask?.cancel()
-        reconstructionTask = nil
-        photogrammetrySession?.cancel()
-        photogrammetrySession = nil
-        arView?.session.pause()
-        sessionStartPending = false
-        sessionIsRunning = false
-        cameraReady = false
-        clearSelectionMarker()
-
-        if removeFiles, let sessionFolderURL {
-            try? fileManager.removeItem(at: sessionFolderURL)
-        }
-    }
-
-    deinit {
-        reconstructionTask?.cancel()
-        photogrammetrySession?.cancel()
-    }
-}
-
-private struct ObjectScanManifest: Codable {
-    let schemaVersion: Int
-    let createdAt: Date
-    let selectedTargetWorldPoint: [Float]?
-    let objectSizePreset: String
-    let imageCount: Int
-    let targetImageCount: Int
-    let estimatedCoverage: Double
-    let imageMaxDimension: Int
-    let jpegQuality: Double
-    let highFeatureSensitivity: Bool
-    let objectMasking: Bool
-    let modelFile: String
-    let keptSourceImages: Bool
-    let appVersion: String
 }

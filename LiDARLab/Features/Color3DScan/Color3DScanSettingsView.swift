@@ -1,62 +1,23 @@
-import Foundation
 import SwiftUI
 
 struct Color3DScanSettingsView: View {
-    @AppStorage(Color3DScanSettings.Key.roomQualityPreset) private var roomPresetRaw = Color3DScanQualityPreset.balanced.rawValue
-    @AppStorage(Color3DScanSettings.Key.areaMaximumKeyframes) private var maximumKeyframes = 64
-    @AppStorage(Color3DScanSettings.Key.areaImageMaxDimension) private var imageMaxDimension = 1024
-    @AppStorage(Color3DScanSettings.Key.areaJPEGQuality) private var jpegQuality = 0.88
-    @AppStorage(Color3DScanSettings.Key.areaMinimumCaptureInterval) private var captureInterval = 0.75
-    @AppStorage(Color3DScanSettings.Key.areaMinimumTranslation) private var minimumTranslation = 0.10
-    @AppStorage(Color3DScanSettings.Key.areaMinimumRotationDegrees) private var minimumRotationDegrees = 6.0
-    @AppStorage(Color3DScanSettings.Key.areaMaximumTextureFrames) private var maximumTextureFrames = 12
-    @AppStorage(Color3DScanSettings.Key.areaShowSceneMesh) private var showSceneMesh = true
-    @AppStorage(Color3DScanSettings.Key.areaUseSmoothedDepth) private var useSmoothedDepth = true
-    @AppStorage(Color3DScanSettings.Key.areaRejectUncertainTextures) private var rejectUncertainTextures = true
-    @AppStorage(Color3DScanSettings.Key.areaDepthOcclusionTolerance) private var depthOcclusionTolerance = 0.12
-    @AppStorage(Color3DScanSettings.Key.areaMaximumTextureDistance) private var maximumTextureDistance = 4.5
-    @AppStorage(Color3DScanSettings.Key.areaExportPLY) private var exportPLY = true
-    @AppStorage(Color3DScanSettings.Key.areaExportOBJ) private var exportOBJ = true
-    @AppStorage(Color3DScanSettings.Key.areaExportUSDZ) private var exportUSDZ = true
+    @AppStorage(Color3DScanSettings.Key.appleAreaAutoCapture) private var areaAutoCapture = true
+    @AppStorage(Color3DScanSettings.Key.appleAreaHaptics) private var areaHaptics = true
+    @AppStorage(Color3DScanSettings.Key.appleAreaOverCapture) private var areaOverCapture = false
+    @AppStorage(Color3DScanSettings.Key.appleAreaKeepSourceImages) private var areaKeepSourceImages = true
+    @AppStorage(Color3DScanSettings.Key.appleAreaMinimumImages) private var areaMinimumImages = 12
 
-    @AppStorage(Color3DScanSettings.Key.objectDensityPreset) private var objectPresetRaw = ObjectScanDensityPreset.balanced.rawValue
     @AppStorage(Color3DScanSettings.Key.objectAutoCapture) private var objectAutoCapture = true
     @AppStorage(Color3DScanSettings.Key.objectHaptics) private var objectHaptics = true
-    @AppStorage(Color3DScanSettings.Key.objectTargetImages) private var objectTargetImages = 48
-    @AppStorage(Color3DScanSettings.Key.objectMinimumImages) private var objectMinimumImages = 16
-    @AppStorage(Color3DScanSettings.Key.objectImageMaxDimension) private var objectImageMaxDimension = 1440
-    @AppStorage(Color3DScanSettings.Key.objectJPEGQuality) private var objectJPEGQuality = 0.90
-    @AppStorage(Color3DScanSettings.Key.objectCaptureInterval) private var objectCaptureInterval = 0.70
-    @AppStorage(Color3DScanSettings.Key.objectAngularStepDegrees) private var objectAngularStepDegrees = 8.0
+    @AppStorage(Color3DScanSettings.Key.appleObjectOverCapture) private var objectOverCapture = false
+    @AppStorage(Color3DScanSettings.Key.objectMinimumImages) private var objectMinimumImages = 12
+    @AppStorage(Color3DScanSettings.Key.appleObjectRecommendedPasses) private var objectRecommendedPasses = 3
     @AppStorage(Color3DScanSettings.Key.objectHighFeatureSensitivity) private var objectHighFeatureSensitivity = true
     @AppStorage(Color3DScanSettings.Key.objectMasking) private var objectMasking = true
-    @AppStorage(Color3DScanSettings.Key.objectUseSmoothedDepth) private var objectUseSmoothedDepth = true
+    @AppStorage(Color3DScanSettings.Key.objectKeepSourceImages) private var objectKeepSourceImages = true
     @AppStorage(Color3DScanSettings.Key.objectSizePreset) private var objectSizePresetRaw = ObjectScanSizePreset.medium.rawValue
-    @AppStorage(Color3DScanSettings.Key.objectKeepSourceImages) private var keepObjectSourceImages = true
 
     @State private var showResetConfirmation = false
-
-    private var selectedRoomPreset: Binding<Color3DScanQualityPreset> {
-        Binding(
-            get: { Color3DScanQualityPreset(rawValue: roomPresetRaw) ?? .balanced },
-            set: { newValue in
-                roomPresetRaw = newValue.rawValue
-                Color3DScanSettings.applyAreaPreset(newValue)
-                syncFromDefaults()
-            }
-        )
-    }
-
-    private var selectedObjectPreset: Binding<ObjectScanDensityPreset> {
-        Binding(
-            get: { ObjectScanDensityPreset(rawValue: objectPresetRaw) ?? .balanced },
-            set: { newValue in
-                objectPresetRaw = newValue.rawValue
-                Color3DScanSettings.applyObjectPreset(newValue)
-                syncFromDefaults()
-            }
-        )
-    }
 
     private var selectedObjectSize: Binding<ObjectScanSizePreset> {
         Binding(
@@ -68,276 +29,74 @@ struct Color3DScanSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("جودة مسح الغرفة", selection: selectedRoomPreset) {
-                    ForEach(Color3DScanQualityPreset.allCases) { preset in
-                        VStack(alignment: .leading) {
-                            Text(preset.title)
-                            Text(preset.subtitle)
-                        }
-                        .tag(preset)
-                    }
-                }
-                .pickerStyle(.navigationLink)
-
-                Text("الجودة الأعلى تجمع صور RGB أكثر وبدقة أعلى. كثافة LiDAR الخام نفسها يحددها ARKit والجهاز.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Toggle("التقاط تلقائي", isOn: $areaAutoCapture)
+                Toggle("اهتزازات أثناء الالتقاط", isOn: $areaHaptics)
+                Toggle("Over Capture", isOn: $areaOverCapture)
+                Stepper("أقل عدد صور قبل السماح بالإنهاء: \(areaMinimumImages)", value: $areaMinimumImages, in: 1...100)
+                Toggle("الاحتفاظ بصور المصدر", isOn: $areaKeepSourceImages)
             } header: {
-                Label("مسح الغرفة / المكان", systemImage: "house.lodge")
-            }
-
-            Section("تغطية الغرفة وجودة اللون") {
-                Stepper("أقصى عدد لصور RGB: \(maximumKeyframes)", value: $maximumKeyframes, in: 12...180, step: 4)
-
-                Picker("دقة صورة اللون", selection: $imageMaxDimension) {
-                    Text("720 px").tag(720)
-                    Text("1024 px").tag(1024)
-                    Text("1440 px").tag(1440)
-                    Text("1920 px").tag(1920)
-                }
-
-                percentageSlider(title: "جودة JPEG", value: $jpegQuality, range: 0.65...1.0)
-
-                Stepper("عدد صور الخامات: \(maximumTextureFrames)", value: $maximumTextureFrames, in: 4...32, step: 2)
-
-                decimalSlider(
-                    title: "أقل فاصل بين الصور",
-                    suffix: "ث",
-                    value: $captureInterval,
-                    range: 0.20...2.0,
-                    step: 0.05
-                )
-
-                distanceSlider(
-                    title: "أقل حركة لالتقاط صورة",
-                    value: $minimumTranslation,
-                    range: 0.02...0.30
-                )
-
-                degreeSlider(
-                    title: "أقل دوران لالتقاط صورة",
-                    value: $minimumRotationDegrees,
-                    range: 1...15
-                )
-            }
-
-            Section("LiDAR وربط الصور بالهندسة") {
-                Toggle("استخدام Smoothed Scene Depth", isOn: $useSmoothedDepth)
-                Toggle("رفض الخامات غير المؤكدة", isOn: $rejectUncertainTextures)
-
-                distanceSlider(
-                    title: "سماحية تطابق العمق",
-                    value: $depthOcclusionTolerance,
-                    range: 0.04...0.30
-                )
-
-                decimalSlider(
-                    title: "أقصى مسافة لاختيار صورة سطح",
-                    suffix: "م",
-                    value: $maximumTextureDistance,
-                    range: 1.0...8.0,
-                    step: 0.25
-                )
-
-                Toggle("إظهار شبكة LiDAR أثناء المسح", isOn: $showSceneMesh)
-
-                Text("عند تفعيل رفض الخامات غير المؤكدة، لا تُركّب صورة على مثلث إلا إذا كان عمق LiDAR في الصورة متوافقًا مع مكان المثلث. هذا يقلل الصور التي تظهر على حائط أو جسم خاطئ، حتى لو ترك بعض المناطق بلا خامة بدل تركيب خامة غير صحيحة.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
-                Text("المعاينة بعد المسح تستخدم عارض Apple/SceneKit القياسي مثل عارض RoomScan.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("ملفات تصدير الغرفة") {
-                Toggle("PLY ملوّن", isOn: $exportPLY)
-                Toggle("OBJ + MTL + Textures", isOn: $exportOBJ)
-                Toggle("USDZ بخامات الصور", isOn: $exportUSDZ)
+                Label("مسح الغرفة / المكان — Apple Area Mode", systemImage: "house.lodge")
+            } footer: {
+                Text("هذا الوضع يستخدم Object Capture Area Mode الرسمي. لا توجد إعدادات حقيقية لكثافة نقاط LiDAR أو دقة JPEG داخل ObjectCaptureSession، لذلك لا نعرض منزلقات وهمية. جودة الالتقاط تتحسن بالتغطية الجيدة، تداخل الصور، والحركة البطيئة من أكثر من ارتفاع.")
             }
 
             Section {
-                Picker("كثافة بيانات المجسم", selection: selectedObjectPreset) {
-                    ForEach(ObjectScanDensityPreset.allCases) { preset in
-                        VStack(alignment: .leading) {
-                            Text(preset.title)
-                            Text(preset.subtitle)
-                        }
-                        .tag(preset)
-                    }
-                }
-                .pickerStyle(.navigationLink)
-
-                Picker("الحجم التقريبي للمجسم", selection: selectedObjectSize) {
+                Picker("الحجم التقريبي", selection: selectedObjectSize) {
                     ForEach(ObjectScanSizePreset.allCases) { preset in
-                        VStack(alignment: .leading) {
-                            Text(preset.title)
-                            Text(preset.subtitle)
-                        }
-                        .tag(preset)
+                        Text(preset.title).tag(preset)
                     }
                 }
                 .pickerStyle(.navigationLink)
 
-                Text("اختيار الحجم لا يفرض صندوقًا على المجسم؛ يستخدم فقط لضبط إرشادات المسافة أثناء الالتفاف حول الهدف الذي تختاره باللمس.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Toggle("التقاط تلقائي", isOn: $objectAutoCapture)
+                Toggle("اهتزازات أثناء الالتقاط", isOn: $objectHaptics)
+                Toggle("Over Capture", isOn: $objectOverCapture)
+                Stepper("أقل عدد صور قبل الإنهاء: \(objectMinimumImages)", value: $objectMinimumImages, in: 1...60)
+                Stepper("عدد الجولات الموصى به: \(objectRecommendedPasses)", value: $objectRecommendedPasses, in: 1...5)
+                Toggle("High Feature Sensitivity", isOn: $objectHighFeatureSensitivity)
+                Toggle("Object Masking", isOn: $objectMasking)
+                Toggle("الاحتفاظ بصور المصدر", isOn: $objectKeepSourceImages)
             } header: {
-                Label("مسح المجسمات", systemImage: "cube.transparent")
+                Label("مسح المجسمات — Object Capture", systemImage: "cube.transparent")
+            } footer: {
+                Text("كمية البيانات الفعلية تتحكم فيها الجولات، Over Capture، والإيقاف اليدوي. أثناء المسح سيعرض Apple Capture Dial والـPoint Cloud بدل نسبة تقديرية مصنوعة من عدد الصور.")
             }
 
-            Section("كمية بيانات المجسم") {
-                Toggle("التقاط تلقائي أثناء الالتفاف", isOn: $objectAutoCapture)
-                Toggle("اهتزاز عند تحديد الهدف/التقاط صورة", isOn: $objectHaptics)
-
-                Stepper("العدد المستهدف للصور: \(objectTargetImages)", value: $objectTargetImages, in: 12...120, step: 4)
-                Stepper("أقل عدد صور قبل الإنهاء: \(objectMinimumImages)", value: $objectMinimumImages, in: 6...60, step: 2)
-
-                Picker("دقة صور المجسم", selection: $objectImageMaxDimension) {
-                    Text("1024 px").tag(1024)
-                    Text("1440 px").tag(1440)
-                    Text("1920 px").tag(1920)
-                }
-
-                percentageSlider(title: "جودة JPEG للمجسم", value: $objectJPEGQuality, range: 0.70...1.0)
-
-                decimalSlider(
-                    title: "أقل فاصل بين الصور",
-                    suffix: "ث",
-                    value: $objectCaptureInterval,
-                    range: 0.25...2.0,
-                    step: 0.05
-                )
-
-                degreeSlider(
-                    title: "أقل زاوية جديدة لالتقاط صورة",
-                    value: $objectAngularStepDegrees,
-                    range: 2...20
-                )
-            }
-
-            Section("إعادة بناء المجسم") {
-                Toggle("حساسية عالية للتفاصيل", isOn: $objectHighFeatureSensitivity)
-                Toggle("عزل المجسم عن الخلفية", isOn: $objectMasking)
-                Toggle("استخدام Smoothed Depth عند اختيار الهدف", isOn: $objectUseSmoothedDepth)
-                Toggle("الاحتفاظ بصور المصدر بعد إنشاء النموذج", isOn: $keepObjectSourceImages)
-
-                Text("على iPhone إعادة البناء المحلية تستخدم مستوى RealityKit المحمول (.reduced). التحكم هنا يرفع أو يخفض جودة وكمية صور المصدر والتعرف على التفاصيل، وهو العامل الأهم قبل إعادة البناء.")
+            Section("المعالجة على iPhone") {
+                LabeledContent("جودة إعادة البناء", value: "Reduced")
+                Text("RealityKit يدعم .reduced فقط لإعادة البناء على iOS. للحصول على تفاصيل أعلى لمساحات كبيرة، احتفظ بصور المصدر لمعالجتها لاحقًا على Mac بمستوى أعلى.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
             Section {
-                Button("إعادة إعدادات المسح 3D للوضع الافتراضي", role: .destructive) {
+                Button("استعادة الإعدادات الافتراضية", role: .destructive) {
                     showResetConfirmation = true
                 }
             }
         }
         .navigationTitle("إعدادات المسح 3D")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            Color3DScanSettings.registerDefaults()
-            syncFromDefaults()
-        }
-        .confirmationDialog("إعادة جميع إعدادات هذا القسم؟", isPresented: $showResetConfirmation) {
-            Button("إعادة الافتراضي", role: .destructive) {
+        .onAppear { Color3DScanSettings.registerDefaults() }
+        .confirmationDialog("استعادة إعدادات المسح الافتراضية؟", isPresented: $showResetConfirmation) {
+            Button("استعادة", role: .destructive) {
                 Color3DScanSettings.resetAll()
-                syncFromDefaults()
+                areaAutoCapture = true
+                areaHaptics = true
+                areaOverCapture = false
+                areaKeepSourceImages = true
+                areaMinimumImages = 12
+                objectAutoCapture = true
+                objectHaptics = true
+                objectOverCapture = false
+                objectMinimumImages = 16
+                objectRecommendedPasses = 3
+                objectHighFeatureSensitivity = true
+                objectMasking = true
+                objectKeepSourceImages = true
+                objectSizePresetRaw = ObjectScanSizePreset.medium.rawValue
             }
             Button("إلغاء", role: .cancel) {}
         }
-    }
-
-    private func percentageSlider(title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text("\(Int(value.wrappedValue * 100))%")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            Slider(value: value, in: range, step: 0.01)
-        }
-    }
-
-    private func decimalSlider(
-        title: String,
-        suffix: String,
-        value: Binding<Double>,
-        range: ClosedRange<Double>,
-        step: Double
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text(String(format: "%.2f %@", value.wrappedValue, suffix))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            Slider(value: value, in: range, step: step)
-        }
-    }
-
-    private func distanceSlider(title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text("\(Int(value.wrappedValue * 100)) سم")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            Slider(value: value, in: range, step: 0.01)
-        }
-    }
-
-    private func degreeSlider(title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text("\(Int(value.wrappedValue))°")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            Slider(value: value, in: range, step: 1)
-        }
-    }
-
-    private func syncFromDefaults() {
-        let defaults = UserDefaults.standard
-        roomPresetRaw = defaults.string(forKey: Color3DScanSettings.Key.roomQualityPreset) ?? Color3DScanQualityPreset.balanced.rawValue
-        maximumKeyframes = defaults.integer(forKey: Color3DScanSettings.Key.areaMaximumKeyframes)
-        imageMaxDimension = defaults.integer(forKey: Color3DScanSettings.Key.areaImageMaxDimension)
-        jpegQuality = defaults.double(forKey: Color3DScanSettings.Key.areaJPEGQuality)
-        captureInterval = defaults.double(forKey: Color3DScanSettings.Key.areaMinimumCaptureInterval)
-        minimumTranslation = defaults.double(forKey: Color3DScanSettings.Key.areaMinimumTranslation)
-        minimumRotationDegrees = defaults.double(forKey: Color3DScanSettings.Key.areaMinimumRotationDegrees)
-        maximumTextureFrames = defaults.integer(forKey: Color3DScanSettings.Key.areaMaximumTextureFrames)
-        showSceneMesh = defaults.bool(forKey: Color3DScanSettings.Key.areaShowSceneMesh)
-        useSmoothedDepth = defaults.bool(forKey: Color3DScanSettings.Key.areaUseSmoothedDepth)
-        rejectUncertainTextures = defaults.bool(forKey: Color3DScanSettings.Key.areaRejectUncertainTextures)
-        depthOcclusionTolerance = defaults.double(forKey: Color3DScanSettings.Key.areaDepthOcclusionTolerance)
-        maximumTextureDistance = defaults.double(forKey: Color3DScanSettings.Key.areaMaximumTextureDistance)
-        exportPLY = defaults.bool(forKey: Color3DScanSettings.Key.areaExportPLY)
-        exportOBJ = defaults.bool(forKey: Color3DScanSettings.Key.areaExportOBJ)
-        exportUSDZ = defaults.bool(forKey: Color3DScanSettings.Key.areaExportUSDZ)
-
-        objectPresetRaw = defaults.string(forKey: Color3DScanSettings.Key.objectDensityPreset) ?? ObjectScanDensityPreset.balanced.rawValue
-        objectAutoCapture = defaults.bool(forKey: Color3DScanSettings.Key.objectAutoCapture)
-        objectHaptics = defaults.bool(forKey: Color3DScanSettings.Key.objectHaptics)
-        objectTargetImages = defaults.integer(forKey: Color3DScanSettings.Key.objectTargetImages)
-        objectMinimumImages = defaults.integer(forKey: Color3DScanSettings.Key.objectMinimumImages)
-        objectImageMaxDimension = defaults.integer(forKey: Color3DScanSettings.Key.objectImageMaxDimension)
-        objectJPEGQuality = defaults.double(forKey: Color3DScanSettings.Key.objectJPEGQuality)
-        objectCaptureInterval = defaults.double(forKey: Color3DScanSettings.Key.objectCaptureInterval)
-        objectAngularStepDegrees = defaults.double(forKey: Color3DScanSettings.Key.objectAngularStepDegrees)
-        objectHighFeatureSensitivity = defaults.bool(forKey: Color3DScanSettings.Key.objectHighFeatureSensitivity)
-        objectMasking = defaults.bool(forKey: Color3DScanSettings.Key.objectMasking)
-        objectUseSmoothedDepth = defaults.bool(forKey: Color3DScanSettings.Key.objectUseSmoothedDepth)
-        objectSizePresetRaw = defaults.string(forKey: Color3DScanSettings.Key.objectSizePreset) ?? ObjectScanSizePreset.medium.rawValue
-        keepObjectSourceImages = defaults.bool(forKey: Color3DScanSettings.Key.objectKeepSourceImages)
     }
 }

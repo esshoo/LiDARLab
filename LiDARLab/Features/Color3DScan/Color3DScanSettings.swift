@@ -315,6 +315,16 @@ enum Color3DScanSettings {
         static let objectUseSmoothedDepth = "color3d.settings.object.useSmoothedDepth"
         static let objectSizePreset = "color3d.settings.object.sizePreset"
         static let objectKeepSourceImages = "color3d.settings.object.keepSourceImages"
+
+        // Official RealityKit Object Capture / Area Mode settings.
+        static let appleAreaAutoCapture = "color3d.settings.appleArea.autoCapture"
+        static let appleAreaHaptics = "color3d.settings.appleArea.haptics"
+        static let appleAreaOverCapture = "color3d.settings.appleArea.overCapture"
+        static let appleAreaKeepSourceImages = "color3d.settings.appleArea.keepSourceImages"
+        static let appleAreaMinimumImages = "color3d.settings.appleArea.minimumImages"
+
+        static let appleObjectRecommendedPasses = "color3d.settings.appleObject.recommendedPasses"
+        static let appleObjectOverCapture = "color3d.settings.appleObject.overCapture"
     }
 
     private static let defaults = UserDefaults.standard
@@ -353,7 +363,16 @@ enum Color3DScanSettings {
             Key.objectMasking: object.objectMasking,
             Key.objectUseSmoothedDepth: object.useSmoothedDepthForSelection,
             Key.objectSizePreset: object.objectSizePreset.rawValue,
-            Key.objectKeepSourceImages: object.keepSourceImages
+            Key.objectKeepSourceImages: object.keepSourceImages,
+
+            Key.appleAreaAutoCapture: true,
+            Key.appleAreaHaptics: true,
+            Key.appleAreaOverCapture: false,
+            Key.appleAreaKeepSourceImages: true,
+            Key.appleAreaMinimumImages: 12,
+
+            Key.appleObjectRecommendedPasses: 3,
+            Key.appleObjectOverCapture: false
         ])
     }
 
@@ -397,6 +416,51 @@ enum Color3DScanSettings {
             useSmoothedDepthForSelection: defaults.bool(forKey: Key.objectUseSmoothedDepth),
             objectSizePreset: sizePreset,
             keepSourceImages: defaults.bool(forKey: Key.objectKeepSourceImages)
+        )
+    }
+
+    struct AppleAreaCaptureOptions {
+        let autoCapture: Bool
+        let haptics: Bool
+        let overCapture: Bool
+        let keepSourceImages: Bool
+        let minimumImagesBeforeFinish: Int
+    }
+
+    struct AppleObjectCaptureOptions {
+        let autoCapture: Bool
+        let haptics: Bool
+        let overCapture: Bool
+        let keepSourceImages: Bool
+        let minimumImagesBeforeFinish: Int
+        let recommendedPasses: Int
+        let highFeatureSensitivity: Bool
+        let objectMasking: Bool
+    }
+
+    static var appleAreaOptions: AppleAreaCaptureOptions {
+        registerDefaults()
+        return AppleAreaCaptureOptions(
+            autoCapture: defaults.bool(forKey: Key.appleAreaAutoCapture),
+            haptics: defaults.bool(forKey: Key.appleAreaHaptics),
+            overCapture: defaults.bool(forKey: Key.appleAreaOverCapture),
+            keepSourceImages: defaults.bool(forKey: Key.appleAreaKeepSourceImages),
+            minimumImagesBeforeFinish: min(max(defaults.integer(forKey: Key.appleAreaMinimumImages), 1), 100)
+        )
+    }
+
+    static var appleObjectOptions: AppleObjectCaptureOptions {
+        registerDefaults()
+        let object = objectOptions
+        return AppleObjectCaptureOptions(
+            autoCapture: object.autoCapture,
+            haptics: object.haptics,
+            overCapture: defaults.bool(forKey: Key.appleObjectOverCapture),
+            keepSourceImages: object.keepSourceImages,
+            minimumImagesBeforeFinish: object.minimumImagesBeforeFinish,
+            recommendedPasses: min(max(defaults.integer(forKey: Key.appleObjectRecommendedPasses), 1), 5),
+            highFeatureSensitivity: object.highFeatureSensitivity,
+            objectMasking: object.objectMasking
         )
     }
 
@@ -470,7 +534,14 @@ enum Color3DScanSettings {
             Key.objectMasking,
             Key.objectUseSmoothedDepth,
             Key.objectSizePreset,
-            Key.objectKeepSourceImages
+            Key.objectKeepSourceImages,
+            Key.appleAreaAutoCapture,
+            Key.appleAreaHaptics,
+            Key.appleAreaOverCapture,
+            Key.appleAreaKeepSourceImages,
+            Key.appleAreaMinimumImages,
+            Key.appleObjectRecommendedPasses,
+            Key.appleObjectOverCapture
         ] {
             defaults.removeObject(forKey: key)
         }

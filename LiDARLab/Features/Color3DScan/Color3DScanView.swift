@@ -8,7 +8,7 @@ struct Color3DScanView: View {
                     Label("المسح ثلاثي الأبعاد الملون", systemImage: "viewfinder")
                         .font(.title3.bold())
 
-                    Text("قسم مستقل للمسح ثلاثي الأبعاد الحقيقي. مسح المجسم يسمح باختيار الهدف باللمس ثم حساب التغطية حوله وجمع صور RGB لإعادة البناء، ومسح المكان يجمع LiDAR Scene Mesh وصور RGB ويكسو الأسطح بخامات فعلية.")
+                    Text("قسم مستقل للمسح ثلاثي الأبعاد الملون باستخدام مسارات RealityKit الرسمية. مسح المجسم يستخدم اختيارًا باللمس كمرحلة توجيه ثم Object Capture لحدود المجسم والتغطية، ومسح المكان يستخدم Apple Area Mode بدل إسقاط الصور يدويًا على LiDAR Mesh.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -21,7 +21,7 @@ struct Color3DScanView: View {
                 } label: {
                     Color3DScanToolRow(
                         title: "مسح جسم ملوّن",
-                        subtitle: "اختيار الهدف باللمس + تغطية محيطية + Photogrammetry على الجهاز + ملف USDZ.",
+                        subtitle: "اختيار الهدف باللمس للتوجيه + ObjectCaptureView + Point Cloud/Capture Dial + Photogrammetry + USDZ.",
                         systemImage: "cube.transparent"
                     )
                 }
@@ -31,7 +31,7 @@ struct Color3DScanView: View {
                 } label: {
                     Color3DScanToolRow(
                         title: "مسح غرفة / مكان ملوّن",
-                        subtitle: "LiDAR Scene Mesh + صور RGB + إسقاط ألوان + PLY/OBJ وUSDZ عند دعم التصدير.",
+                        subtitle: "Apple Object Capture Area Mode + Photogrammetry الرسمي + USDZ + الاحتفاظ بصور المصدر اختياريًا.",
                         systemImage: "house.lodge"
                     )
                 }
@@ -79,19 +79,11 @@ struct Color3DScanView: View {
             Section("المخرجات الفعلية") {
                 Color3DScanExportRow(
                     format: "USDZ",
-                    detail: "الناتج الأساسي لمسح المجسمات بعد الالتقاط الموجّه وإعادة البناء"
+                    detail: "الناتج الأساسي من Photogrammetry الرسمي لمسح المجسم أو Area Mode"
                 )
                 Color3DScanExportRow(
-                    format: "OBJ + MTL + Textures",
-                    detail: "Mesh الغرفة مع صور RGB كخامات فعلية وUV لكل وجه"
-                )
-                Color3DScanExportRow(
-                    format: "PLY + RGB",
-                    detail: "صيغة توافق بألوان Vertex مشتقة من الصور"
-                )
-                Color3DScanExportRow(
-                    format: "JSON + RGB Frames",
-                    detail: "Camera poses وintrinsics وصور المصدر للمراجعة أو التطوير اللاحق"
+                    format: "Source Capture",
+                    detail: "يمكن الاحتفاظ بصور Object Capture الأصلية لإعادة معالجة أعلى جودة على Mac"
                 )
             }
 
