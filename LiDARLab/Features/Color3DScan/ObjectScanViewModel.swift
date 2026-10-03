@@ -579,7 +579,9 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         if feedback.contains(.environmentTooDark) { return "الإضاءة مظلمة جدًا؛ زد الإضاءة." }
         if feedback.contains(.environmentLowLight) { return "الإضاءة منخفضة وقد تقل الجودة." }
         if feedback.contains(.movingTooFast) { return "تتحرك بسرعة؛ تحرك أبطأ." }
-        if feedback.contains(.objectNotDetected) { return "لم تتعرف Apple على المجسم جيدًا؛ عدّل الصندوق اليدوي أو أعد الاكتشاف." }
+        if #available(iOS 17.4, *), feedback.contains(.objectNotDetected) {
+            return "لم تتعرف Apple على المجسم جيدًا؛ عدّل الصندوق اليدوي أو أعد الاكتشاف."
+        }
         if feedback.contains(.objectNotFlippable) { return "يفضل عدم قلب هذا المجسم؛ استخدم جولات إضافية من ارتفاعات مختلفة." }
         if feedback.contains(.objectTooClose) { return "أنت قريب جدًا من المجسم." }
         if feedback.contains(.objectTooFar) { return "أنت بعيد جدًا عن المجسم." }

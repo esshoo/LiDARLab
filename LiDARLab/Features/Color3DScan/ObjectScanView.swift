@@ -39,8 +39,7 @@ struct ObjectScanView: View {
         .sheet(isPresented: $showPointCloud) {
             if let session = model.captureSession {
                 NavigationStack {
-                    ObjectCapturePointCloudView(session: session)
-                        .showShotLocations()
+                    pointCloudView(session: session)
                         .navigationTitle("الشبكة ونقاط التصوير")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
@@ -64,6 +63,16 @@ struct ObjectScanView: View {
                         }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func pointCloudView(session: ObjectCaptureSession) -> some View {
+        if #available(iOS 18.0, *) {
+            ObjectCapturePointCloudView(session: session)
+                .showShotLocations()
+        } else {
+            ObjectCapturePointCloudView(session: session)
         }
     }
 
