@@ -25,6 +25,7 @@ struct ObjectScanARViewContainer: UIViewRepresentable {
         uiView.session.pause()
     }
 
+    @MainActor
     final class Coordinator: NSObject {
         private weak var model: ObjectScanViewModel?
 

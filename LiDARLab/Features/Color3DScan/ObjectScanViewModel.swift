@@ -2,6 +2,7 @@ import ARKit
 import Combine
 import Foundation
 import RealityKit
+import SwiftUI
 import UIKit
 import simd
 

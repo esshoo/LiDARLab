@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import RealityKit
+import SwiftUI
 
 @MainActor
 final class AreaScanViewModel: ObservableObject {
