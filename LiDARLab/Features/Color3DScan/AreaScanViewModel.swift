@@ -280,7 +280,9 @@ final class AreaScanViewModel: ObservableObject {
                 // Area mode is scene capture, not foreground-object extraction. Keep the full scene
                 // available to reconstruction so broad walls/floors are not treated as background.
                 configuration.isObjectMaskingEnabled = false
-                configuration.ignoreBoundingBox = self.options.recoverEntireScene
+                if #available(iOS 18.0, *) {
+                    configuration.ignoreBoundingBox = self.options.recoverEntireScene
+                }
 
                 let session = try PhotogrammetrySession(input: imagesURL, configuration: configuration)
                 self.photogrammetrySession = session
