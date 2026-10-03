@@ -172,7 +172,17 @@ struct ObjectScanView: View {
     private var controlsOverlay: some View {
         VStack(spacing: 10) {
             if model.phase == .selecting {
-                if model.targetSelected {
+                if !model.cameraReady {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("جاري تهيئة الكاميرا وبيانات العمق…")
+                            .font(.headline)
+                        Text("سيصبح اختيار المجسم متاحًا تلقائيًا بمجرد وصول أول إطار AR صالح.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                } else if model.targetSelected {
                     Label("تم تثبيت الهدف. العلامة السماوية يجب أن تكون على المجسم المطلوب.", systemImage: "scope")
                         .font(.caption)
                         .foregroundStyle(.green)

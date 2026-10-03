@@ -29,6 +29,7 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var targetSelected = false
+    @Published private(set) var cameraReady = false
     @Published private(set) var capturedImageCount = 0
     @Published private(set) var targetImageCount = 48
     @Published private(set) var coverageProgress: Double = 0
@@ -49,6 +50,8 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     private let stateLock = NSLock()
 
     private var runtimeOptions = Color3DScanSettings.objectOptions
+    private var sessionStartPending = false
+    private var sessionIsRunning = false
     private var sessionGeneration = UUID()
     private var captureEnabled = false
     private var targetWorldPoint: SIMD3<Float>?
@@ -87,6 +90,7 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         self.arView = arView
         arView.automaticallyConfigureSession = false
         arView.session.delegate = self
+        startARSessionIfNeeded()
     }
 
     func startNewScan() {
@@ -94,11 +98,6 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             errorMessage = "هذا الجهاز لا يدعم ARWorldTracking وإعادة بناء Photogrammetry على الجهاز."
             return
         }
-        guard let arView else {
-            errorMessage = "عارض الكاميرا غير جاهز بعد."
-            return
-        }
-
         cancelInternal(removeFiles: true)
         runtimeOptions = Color3DScanSettings.objectOptions
         targetImageCount = runtimeOptions.targetImageCount
@@ -142,20 +141,13 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             reconstructionProgress = 0
             currentDistanceMeters = 0
             phase = .selecting
-            statusMessage = "المس المجسم المطلوب مباشرة على الشاشة. سنثبت نقطة الهدف ثم تلف حولها."
+            cameraReady = false
+            sessionStartPending = true
+            sessionIsRunning = false
+            statusMessage = "جاري فتح الكاميرا وتهيئة التتبع…"
 
             clearSelectionMarker()
-            let configuration = ARWorldTrackingConfiguration()
-            configuration.worldAlignment = .gravity
-            configuration.planeDetection = [.horizontal, .vertical]
-            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-                configuration.frameSemantics.insert(.sceneDepth)
-            }
-            if runtimeOptions.useSmoothedDepthForSelection,
-               ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
-                configuration.frameSemantics.insert(.smoothedSceneDepth)
-            }
-            arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            startARSessionIfNeeded()
         } catch {
             phase = .failed
             errorMessage = error.localizedDescription
@@ -164,9 +156,13 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func selectTarget(at screenPoint: CGPoint) {
-        guard phase == .selecting,
+        guard phase == .selecting else { return }
+        guard cameraReady,
               let arView,
-              let frame = arView.session.currentFrame else { return }
+              let frame = arView.session.currentFrame else {
+            statusMessage = "الكاميرا ما زالت تجهز بيانات العمق. انتظر لحظة ثم المس المجسم."
+            return
+        }
 
         let selected = depthWorldPoint(at: screenPoint, frame: frame, arView: arView)
             ?? raycastWorldPoint(at: screenPoint, arView: arView)
@@ -268,6 +264,9 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         cancelInternal(removeFiles: phase != .completed)
         phase = .idle
         targetSelected = false
+        cameraReady = false
+        sessionStartPending = false
+        sessionIsRunning = false
         capturedImageCount = 0
         coverageProgress = 0
         imageProgress = 0
@@ -286,6 +285,14 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        if phase == .selecting, !cameraReady {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.phase == .selecting, !self.cameraReady else { return }
+                self.cameraReady = true
+                self.statusMessage = "الكاميرا جاهزة. المس مباشرة على المجسم الذي تريد مسحه."
+            }
+        }
+
         stateLock.lock()
         let capturing = captureEnabled
         let target = targetWorldPoint
@@ -363,10 +370,37 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
 
     func session(_ session: ARSession, didFailWithError error: Error) {
         DispatchQueue.main.async { [weak self] in
+            self?.cameraReady = false
+            self?.sessionIsRunning = false
             self?.phase = .failed
             self?.errorMessage = error.localizedDescription
             self?.statusMessage = "فشلت جلسة AR أثناء مسح المجسم."
         }
+    }
+
+    private func startARSessionIfNeeded() {
+        guard sessionStartPending,
+              !sessionIsRunning,
+              phase == .selecting,
+              let arView else { return }
+
+        sessionStartPending = false
+        sessionIsRunning = true
+        cameraReady = false
+
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.worldAlignment = .gravity
+        configuration.planeDetection = [.horizontal, .vertical]
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics.insert(.sceneDepth)
+        }
+        if runtimeOptions.useSmoothedDepthForSelection,
+           ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+        }
+
+        arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        statusMessage = "جاري تهيئة الكاميرا وبيانات العمق…"
     }
 
     private func updateLiveProgress(distance: Float, coverageCount: Int) {
@@ -722,6 +756,9 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         photogrammetrySession?.cancel()
         photogrammetrySession = nil
         arView?.session.pause()
+        sessionStartPending = false
+        sessionIsRunning = false
+        cameraReady = false
         clearSelectionMarker()
 
         if removeFiles, let sessionFolderURL {

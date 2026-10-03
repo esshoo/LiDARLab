@@ -39,6 +39,9 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
                 maximumTextureFrames: 8,
                 showSceneMeshWhileScanning: true,
                 useSmoothedDepth: true,
+                rejectUncertainTextures: true,
+                depthOcclusionToleranceMeters: 0.18,
+                maximumTextureDistanceMeters: 4.0,
                 exportPLY: true,
                 exportOBJ: true,
                 exportUSDZ: true
@@ -54,6 +57,9 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
                 maximumTextureFrames: 12,
                 showSceneMeshWhileScanning: true,
                 useSmoothedDepth: true,
+                rejectUncertainTextures: true,
+                depthOcclusionToleranceMeters: 0.12,
+                maximumTextureDistanceMeters: 4.5,
                 exportPLY: true,
                 exportOBJ: true,
                 exportUSDZ: true
@@ -69,6 +75,9 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
                 maximumTextureFrames: 16,
                 showSceneMeshWhileScanning: true,
                 useSmoothedDepth: true,
+                rejectUncertainTextures: true,
+                depthOcclusionToleranceMeters: 0.09,
+                maximumTextureDistanceMeters: 5.0,
                 exportPLY: true,
                 exportOBJ: true,
                 exportUSDZ: true
@@ -84,6 +93,9 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
                 maximumTextureFrames: 24,
                 showSceneMeshWhileScanning: true,
                 useSmoothedDepth: true,
+                rejectUncertainTextures: true,
+                depthOcclusionToleranceMeters: 0.07,
+                maximumTextureDistanceMeters: 5.5,
                 exportPLY: true,
                 exportOBJ: true,
                 exportUSDZ: true
@@ -102,6 +114,9 @@ struct AreaScanRuntimeOptions {
     let maximumTextureFrames: Int
     let showSceneMeshWhileScanning: Bool
     let useSmoothedDepth: Bool
+    let rejectUncertainTextures: Bool
+    let depthOcclusionToleranceMeters: Float
+    let maximumTextureDistanceMeters: Float
     let exportPLY: Bool
     let exportOBJ: Bool
     let exportUSDZ: Bool
@@ -279,6 +294,9 @@ enum Color3DScanSettings {
         static let areaMaximumTextureFrames = "color3d.settings.area.maximumTextureFrames"
         static let areaShowSceneMesh = "color3d.settings.area.showSceneMesh"
         static let areaUseSmoothedDepth = "color3d.settings.area.useSmoothedDepth"
+        static let areaRejectUncertainTextures = "color3d.settings.area.rejectUncertainTextures"
+        static let areaDepthOcclusionTolerance = "color3d.settings.area.depthOcclusionTolerance"
+        static let areaMaximumTextureDistance = "color3d.settings.area.maximumTextureDistance"
         static let areaExportPLY = "color3d.settings.area.exportPLY"
         static let areaExportOBJ = "color3d.settings.area.exportOBJ"
         static let areaExportUSDZ = "color3d.settings.area.exportUSDZ"
@@ -315,6 +333,9 @@ enum Color3DScanSettings {
             Key.areaMaximumTextureFrames: area.maximumTextureFrames,
             Key.areaShowSceneMesh: area.showSceneMeshWhileScanning,
             Key.areaUseSmoothedDepth: area.useSmoothedDepth,
+            Key.areaRejectUncertainTextures: area.rejectUncertainTextures,
+            Key.areaDepthOcclusionTolerance: Double(area.depthOcclusionToleranceMeters),
+            Key.areaMaximumTextureDistance: Double(area.maximumTextureDistanceMeters),
             Key.areaExportPLY: area.exportPLY,
             Key.areaExportOBJ: area.exportOBJ,
             Key.areaExportUSDZ: area.exportUSDZ,
@@ -348,6 +369,9 @@ enum Color3DScanSettings {
             maximumTextureFrames: max(4, defaults.integer(forKey: Key.areaMaximumTextureFrames)),
             showSceneMeshWhileScanning: defaults.bool(forKey: Key.areaShowSceneMesh),
             useSmoothedDepth: defaults.bool(forKey: Key.areaUseSmoothedDepth),
+            rejectUncertainTextures: defaults.bool(forKey: Key.areaRejectUncertainTextures),
+            depthOcclusionToleranceMeters: Float(min(max(defaults.double(forKey: Key.areaDepthOcclusionTolerance), 0.04), 0.35)),
+            maximumTextureDistanceMeters: Float(min(max(defaults.double(forKey: Key.areaMaximumTextureDistance), 1.0), 10.0)),
             exportPLY: defaults.bool(forKey: Key.areaExportPLY),
             exportOBJ: defaults.bool(forKey: Key.areaExportOBJ),
             exportUSDZ: defaults.bool(forKey: Key.areaExportUSDZ)
@@ -388,6 +412,9 @@ enum Color3DScanSettings {
         defaults.set(value.maximumTextureFrames, forKey: Key.areaMaximumTextureFrames)
         defaults.set(value.showSceneMeshWhileScanning, forKey: Key.areaShowSceneMesh)
         defaults.set(value.useSmoothedDepth, forKey: Key.areaUseSmoothedDepth)
+        defaults.set(value.rejectUncertainTextures, forKey: Key.areaRejectUncertainTextures)
+        defaults.set(Double(value.depthOcclusionToleranceMeters), forKey: Key.areaDepthOcclusionTolerance)
+        defaults.set(Double(value.maximumTextureDistanceMeters), forKey: Key.areaMaximumTextureDistance)
         defaults.set(value.exportPLY, forKey: Key.areaExportPLY)
         defaults.set(value.exportOBJ, forKey: Key.areaExportOBJ)
         defaults.set(value.exportUSDZ, forKey: Key.areaExportUSDZ)
@@ -424,6 +451,9 @@ enum Color3DScanSettings {
             Key.areaMaximumTextureFrames,
             Key.areaShowSceneMesh,
             Key.areaUseSmoothedDepth,
+            Key.areaRejectUncertainTextures,
+            Key.areaDepthOcclusionTolerance,
+            Key.areaMaximumTextureDistance,
             Key.areaExportPLY,
             Key.areaExportOBJ,
             Key.areaExportUSDZ,

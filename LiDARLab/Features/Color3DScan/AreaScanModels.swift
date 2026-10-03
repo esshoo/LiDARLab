@@ -1,6 +1,36 @@
 import Foundation
 import simd
 
+struct AreaScanDepthMap {
+    let values: [Float]
+    let width: Int
+    let height: Int
+
+    func sample(normalizedX: Float, normalizedY: Float) -> Float? {
+        guard width > 0, height > 0,
+              normalizedX.isFinite, normalizedY.isFinite,
+              normalizedX >= 0, normalizedX <= 1,
+              normalizedY >= 0, normalizedY <= 1 else { return nil }
+
+        let centerX = min(max(Int((normalizedX * Float(width - 1)).rounded()), 0), width - 1)
+        let centerY = min(max(Int((normalizedY * Float(height - 1)).rounded()), 0), height - 1)
+
+        var samples: [Float] = []
+        samples.reserveCapacity(9)
+        for y in max(0, centerY - 1)...min(height - 1, centerY + 1) {
+            for x in max(0, centerX - 1)...min(width - 1, centerX + 1) {
+                let value = values[y * width + x]
+                if value.isFinite, value > 0.05, value < 12 {
+                    samples.append(value)
+                }
+            }
+        }
+        guard !samples.isEmpty else { return nil }
+        samples.sort()
+        return samples[samples.count / 2]
+    }
+}
+
 struct AreaScanKeyframe {
     let imageURL: URL
     let cameraTransform: simd_float4x4
@@ -8,6 +38,7 @@ struct AreaScanKeyframe {
     let imageWidth: Int
     let imageHeight: Int
     let timestamp: TimeInterval
+    let depthMap: AreaScanDepthMap?
 }
 
 struct AreaScanMeshChunk {

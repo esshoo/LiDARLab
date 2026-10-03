@@ -39,6 +39,9 @@ struct Color3DMeshExporter {
         chunks: [AreaScanMeshChunk],
         keyframes: [AreaScanKeyframe],
         maximumTextureFrames: Int,
+        rejectUncertainTextures: Bool,
+        depthOcclusionToleranceMeters: Float,
+        maximumTextureDistanceMeters: Float,
         progress: @escaping (Double) -> Void
     ) -> AreaScanTexturedMesh {
         let flat = flatten(chunks: chunks)
@@ -64,9 +67,24 @@ struct Color3DMeshExporter {
             let ids = [Int(face.x), Int(face.y), Int(face.z)]
             guard ids.allSatisfy({ $0 >= 0 && $0 < flat.vertices.count }) else { continue }
             let points = ids.map { flat.vertices[$0] }
+
+            // Reject only clearly implausible transient triangles caused by unstable tracking.
+            let edge01 = simd_distance(points[0], points[1])
+            let edge12 = simd_distance(points[1], points[2])
+            let edge20 = simd_distance(points[2], points[0])
+            let maximumEdge = max(edge01, max(edge12, edge20))
+            let areaVector = simd_cross(points[1] - points[0], points[2] - points[0])
+            guard maximumEdge < 0.75, simd_length(areaVector) > 0.00001 else { continue }
+
             let sourceNormals = ids.map { $0 < flat.normals.count ? flat.normals[$0] : SIMD3<Float>(0, 1, 0) }
 
-            let selection = bestTextureFrame(for: points, in: textureFrames)
+            let selection = bestTextureFrame(
+                for: points,
+                in: textureFrames,
+                rejectUncertainTextures: rejectUncertainTextures,
+                depthOcclusionToleranceMeters: depthOcclusionToleranceMeters,
+                maximumTextureDistanceMeters: maximumTextureDistanceMeters
+            )
             let base = UInt32(vertices.count)
 
             for localIndex in 0..<3 {
@@ -275,7 +293,10 @@ struct Color3DMeshExporter {
 
     private static func bestTextureFrame(
         for points: [SIMD3<Float>],
-        in frames: [TextureFrame]
+        in frames: [TextureFrame],
+        rejectUncertainTextures: Bool,
+        depthOcclusionToleranceMeters: Float,
+        maximumTextureDistanceMeters: Float
     ) -> (index: Int, frame: TextureFrame)? {
         guard points.count == 3, !frames.isEmpty else { return nil }
         let centroid = (points[0] + points[1] + points[2]) / 3
@@ -292,15 +313,74 @@ struct Color3DMeshExporter {
 
             let viewVector = frame.cameraPosition - centroid
             let distance = simd_length(viewVector)
-            guard distance > 0.05 && distance < 9.0 else { continue }
+            guard distance > 0.05, distance < maximumTextureDistanceMeters else { continue }
             let viewDirection = viewVector / max(distance, 0.0001)
             let frontal = abs(simd_dot(faceNormal, viewDirection))
-            guard frontal > 0.10 else { continue }
+            guard frontal > 0.22 else { continue }
 
             let cameraCentroid = frame.worldToCamera * SIMD4<Float>(centroid.x, centroid.y, centroid.z, 1)
-            let depth = max(-cameraCentroid.z, 0.001)
+            let expectedCentroidDepth = -cameraCentroid.z
+            guard expectedCentroidDepth > 0.06 else { continue }
+
+            var depthPenalty: Float = 0
+            if rejectUncertainTextures {
+                guard let depthMap = frame.keyframe.depthMap,
+                      let centroidProjection = project(centroid, into: frame) else { continue }
+
+                let normalizedX = centroidProjection.x / Float(frame.keyframe.imageWidth)
+                let normalizedY = centroidProjection.y / Float(frame.keyframe.imageHeight)
+                guard let measuredCentroidDepth = depthMap.sample(
+                    normalizedX: normalizedX,
+                    normalizedY: normalizedY
+                ) else { continue }
+
+                let centroidTolerance = max(
+                    depthOcclusionToleranceMeters,
+                    expectedCentroidDepth * 0.05
+                )
+                let centroidError = abs(measuredCentroidDepth - expectedCentroidDepth)
+                guard centroidError <= centroidTolerance else { continue }
+
+                var validVertexDepthSamples = 0
+                var matchingVertexDepthSamples = 0
+                var accumulatedVertexError: Float = 0
+
+                for localIndex in 0..<3 {
+                    let cameraPoint = frame.worldToCamera * SIMD4<Float>(
+                        points[localIndex].x,
+                        points[localIndex].y,
+                        points[localIndex].z,
+                        1
+                    )
+                    let expectedDepth = -cameraPoint.z
+                    guard expectedDepth > 0.06 else { continue }
+
+                    let projection = projected[localIndex]
+                    let nx = projection.x / Float(frame.keyframe.imageWidth)
+                    let ny = projection.y / Float(frame.keyframe.imageHeight)
+                    guard let measuredDepth = depthMap.sample(normalizedX: nx, normalizedY: ny) else { continue }
+
+                    validVertexDepthSamples += 1
+                    let tolerance = max(depthOcclusionToleranceMeters, expectedDepth * 0.06)
+                    let error = abs(measuredDepth - expectedDepth)
+                    accumulatedVertexError += error
+                    if error <= tolerance { matchingVertexDepthSamples += 1 }
+                }
+
+                if validVertexDepthSamples >= 2 {
+                    guard matchingVertexDepthSamples >= 2 else { continue }
+                    depthPenalty = accumulatedVertexError / Float(validVertexDepthSamples)
+                } else {
+                    depthPenalty = centroidError
+                }
+            }
+
+            let depth = max(expectedCentroidDepth, 0.001)
             let offAxis = abs(cameraCentroid.x / depth) + abs(cameraCentroid.y / depth)
-            let score = distance + offAxis * 0.45 + (1 - frontal) * 0.75
+            let score = distance
+                + offAxis * 0.55
+                + (1 - frontal) * 0.95
+                + depthPenalty * 2.0
 
             if score < bestScore {
                 bestScore = score

@@ -12,6 +12,9 @@ struct Color3DScanSettingsView: View {
     @AppStorage(Color3DScanSettings.Key.areaMaximumTextureFrames) private var maximumTextureFrames = 12
     @AppStorage(Color3DScanSettings.Key.areaShowSceneMesh) private var showSceneMesh = true
     @AppStorage(Color3DScanSettings.Key.areaUseSmoothedDepth) private var useSmoothedDepth = true
+    @AppStorage(Color3DScanSettings.Key.areaRejectUncertainTextures) private var rejectUncertainTextures = true
+    @AppStorage(Color3DScanSettings.Key.areaDepthOcclusionTolerance) private var depthOcclusionTolerance = 0.12
+    @AppStorage(Color3DScanSettings.Key.areaMaximumTextureDistance) private var maximumTextureDistance = 4.5
     @AppStorage(Color3DScanSettings.Key.areaExportPLY) private var exportPLY = true
     @AppStorage(Color3DScanSettings.Key.areaExportOBJ) private var exportOBJ = true
     @AppStorage(Color3DScanSettings.Key.areaExportUSDZ) private var exportUSDZ = true
@@ -118,10 +121,31 @@ struct Color3DScanSettingsView: View {
                 )
             }
 
-            Section("LiDAR أثناء مسح الغرفة") {
+            Section("LiDAR وربط الصور بالهندسة") {
                 Toggle("استخدام Smoothed Scene Depth", isOn: $useSmoothedDepth)
+                Toggle("رفض الخامات غير المؤكدة", isOn: $rejectUncertainTextures)
+
+                distanceSlider(
+                    title: "سماحية تطابق العمق",
+                    value: $depthOcclusionTolerance,
+                    range: 0.04...0.30
+                )
+
+                decimalSlider(
+                    title: "أقصى مسافة لاختيار صورة سطح",
+                    suffix: "م",
+                    value: $maximumTextureDistance,
+                    range: 1.0...8.0,
+                    step: 0.25
+                )
+
                 Toggle("إظهار شبكة LiDAR أثناء المسح", isOn: $showSceneMesh)
-                Text("المعاينة بعد المسح تستخدم الآن عارض Apple/SceneKit القياسي مثل عارض RoomScan، بدون وضع Fly Camera القديم.")
+
+                Text("عند تفعيل رفض الخامات غير المؤكدة، لا تُركّب صورة على مثلث إلا إذا كان عمق LiDAR في الصورة متوافقًا مع مكان المثلث. هذا يقلل الصور التي تظهر على حائط أو جسم خاطئ، حتى لو ترك بعض المناطق بلا خامة بدل تركيب خامة غير صحيحة.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Text("المعاينة بعد المسح تستخدم عارض Apple/SceneKit القياسي مثل عارض RoomScan.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -294,6 +318,9 @@ struct Color3DScanSettingsView: View {
         maximumTextureFrames = defaults.integer(forKey: Color3DScanSettings.Key.areaMaximumTextureFrames)
         showSceneMesh = defaults.bool(forKey: Color3DScanSettings.Key.areaShowSceneMesh)
         useSmoothedDepth = defaults.bool(forKey: Color3DScanSettings.Key.areaUseSmoothedDepth)
+        rejectUncertainTextures = defaults.bool(forKey: Color3DScanSettings.Key.areaRejectUncertainTextures)
+        depthOcclusionTolerance = defaults.double(forKey: Color3DScanSettings.Key.areaDepthOcclusionTolerance)
+        maximumTextureDistance = defaults.double(forKey: Color3DScanSettings.Key.areaMaximumTextureDistance)
         exportPLY = defaults.bool(forKey: Color3DScanSettings.Key.areaExportPLY)
         exportOBJ = defaults.bool(forKey: Color3DScanSettings.Key.areaExportOBJ)
         exportUSDZ = defaults.bool(forKey: Color3DScanSettings.Key.areaExportUSDZ)

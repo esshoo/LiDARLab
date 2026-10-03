@@ -181,7 +181,10 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             let texturedMesh = Color3DMeshExporter.buildTexturedMesh(
                 chunks: chunks,
                 keyframes: frames,
-                maximumTextureFrames: options.maximumTextureFrames
+                maximumTextureFrames: options.maximumTextureFrames,
+                rejectUncertainTextures: options.rejectUncertainTextures,
+                depthOcclusionToleranceMeters: options.depthOcclusionToleranceMeters,
+                maximumTextureDistanceMeters: options.maximumTextureDistanceMeters
             ) { fraction in
                 DispatchQueue.main.async {
                     self.exportProgress = fraction * 0.64
@@ -270,7 +273,11 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             }
         }
 
-        scheduleKeyframeIfNeeded(frame)
+        // Keep RGB/depth keyframes only while ARKit reports a stable camera pose.
+        // Limited tracking is a major source of textures appearing on the wrong wall.
+        if case .normal = frame.camera.trackingState {
+            scheduleKeyframeIfNeeded(frame)
+        }
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
@@ -397,7 +404,8 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
             intrinsics: intrinsics,
             imageWidth: cgImage.width,
             imageHeight: cgImage.height,
-            timestamp: frame.timestamp
+            timestamp: frame.timestamp,
+            depthMap: copyDepthMap(from: frame)
         )
 
         stateLock.lock()
@@ -413,6 +421,40 @@ final class AreaScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.capturedFrameCount = count
         }
+    }
+
+    private func copyDepthMap(from frame: ARFrame) -> AreaScanDepthMap? {
+        let depthData: ARDepthData?
+        if runtimeOptions.useSmoothedDepth {
+            depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
+        } else {
+            depthData = frame.sceneDepth ?? frame.smoothedSceneDepth
+        }
+        guard let depthData else { return nil }
+
+        let buffer = depthData.depthMap
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        guard width > 0, height > 0 else { return nil }
+
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+
+        let sourceStride = CVPixelBufferGetBytesPerRow(buffer) / MemoryLayout<Float32>.size
+        let source = base.assumingMemoryBound(to: Float32.self)
+        var values = [Float](repeating: .nan, count: width * height)
+
+        for y in 0..<height {
+            let sourceRow = source.advanced(by: y * sourceStride)
+            let destinationOffset = y * width
+            for x in 0..<width {
+                let value = sourceRow[x]
+                values[destinationOffset + x] = value.isFinite && value > 0 ? value : .nan
+            }
+        }
+
+        return AreaScanDepthMap(values: values, width: width, height: height)
     }
 
     private func copyMeshChunk(_ anchor: ARMeshAnchor) -> AreaScanMeshChunk {
