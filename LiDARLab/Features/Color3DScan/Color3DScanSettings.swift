@@ -29,7 +29,7 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
     var recommended: AreaScanRuntimeOptions {
         switch self {
         case .fast:
-            return AreaScanRuntimeOptions(
+            AreaScanRuntimeOptions(
                 maximumKeyframes: 36,
                 imageMaxDimension: 720,
                 jpegQuality: 0.82,
@@ -41,11 +41,10 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
                 useSmoothedDepth: true,
                 exportPLY: true,
                 exportOBJ: true,
-                exportUSDZ: true,
-                previewFreeCamera: true
+                exportUSDZ: true
             )
         case .balanced:
-            return AreaScanRuntimeOptions(
+            AreaScanRuntimeOptions(
                 maximumKeyframes: 64,
                 imageMaxDimension: 1024,
                 jpegQuality: 0.88,
@@ -57,11 +56,10 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
                 useSmoothedDepth: true,
                 exportPLY: true,
                 exportOBJ: true,
-                exportUSDZ: true,
-                previewFreeCamera: true
+                exportUSDZ: true
             )
         case .high:
-            return AreaScanRuntimeOptions(
+            AreaScanRuntimeOptions(
                 maximumKeyframes: 96,
                 imageMaxDimension: 1440,
                 jpegQuality: 0.92,
@@ -73,11 +71,10 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
                 useSmoothedDepth: true,
                 exportPLY: true,
                 exportOBJ: true,
-                exportUSDZ: true,
-                previewFreeCamera: true
+                exportUSDZ: true
             )
         case .ultra:
-            return AreaScanRuntimeOptions(
+            AreaScanRuntimeOptions(
                 maximumKeyframes: 140,
                 imageMaxDimension: 1920,
                 jpegQuality: 0.95,
@@ -89,8 +86,7 @@ enum Color3DScanQualityPreset: String, CaseIterable, Identifiable, Hashable {
                 useSmoothedDepth: true,
                 exportPLY: true,
                 exportOBJ: true,
-                exportUSDZ: true,
-                previewFreeCamera: true
+                exportUSDZ: true
             )
         }
     }
@@ -109,18 +105,166 @@ struct AreaScanRuntimeOptions {
     let exportPLY: Bool
     let exportOBJ: Bool
     let exportUSDZ: Bool
-    let previewFreeCamera: Bool
 
     var minimumRotationRadians: Float {
         minimumRotationDegrees * .pi / 180
     }
 }
 
+enum ObjectScanDensityPreset: String, CaseIterable, Identifiable, Hashable {
+    case light
+    case balanced
+    case high
+    case maximum
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .light: "خفيف"
+        case .balanced: "متوازن"
+        case .high: "عالي"
+        case .maximum: "أقصى بيانات"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .light: "صور أقل ومعالجة أسرع"
+        case .balanced: "مناسب لمعظم المجسمات"
+        case .high: "تغطية أدق وتفاصيل أفضل"
+        case .maximum: "أكبر عدد صور مسموح به في هذا الوضع"
+        }
+    }
+
+    var recommended: ObjectScanRuntimeOptions {
+        switch self {
+        case .light:
+            ObjectScanRuntimeOptions(
+                autoCapture: true,
+                haptics: true,
+                targetImageCount: 24,
+                minimumImagesBeforeFinish: 10,
+                imageMaxDimension: 1024,
+                jpegQuality: 0.84,
+                minimumCaptureInterval: 1.00,
+                minimumAngularStepDegrees: 14,
+                highFeatureSensitivity: false,
+                objectMasking: true,
+                useSmoothedDepthForSelection: true,
+                objectSizePreset: .medium,
+                keepSourceImages: true
+            )
+        case .balanced:
+            ObjectScanRuntimeOptions(
+                autoCapture: true,
+                haptics: true,
+                targetImageCount: 48,
+                minimumImagesBeforeFinish: 16,
+                imageMaxDimension: 1440,
+                jpegQuality: 0.90,
+                minimumCaptureInterval: 0.70,
+                minimumAngularStepDegrees: 8,
+                highFeatureSensitivity: true,
+                objectMasking: true,
+                useSmoothedDepthForSelection: true,
+                objectSizePreset: .medium,
+                keepSourceImages: true
+            )
+        case .high:
+            ObjectScanRuntimeOptions(
+                autoCapture: true,
+                haptics: true,
+                targetImageCount: 72,
+                minimumImagesBeforeFinish: 20,
+                imageMaxDimension: 1920,
+                jpegQuality: 0.94,
+                minimumCaptureInterval: 0.50,
+                minimumAngularStepDegrees: 5,
+                highFeatureSensitivity: true,
+                objectMasking: true,
+                useSmoothedDepthForSelection: true,
+                objectSizePreset: .medium,
+                keepSourceImages: true
+            )
+        case .maximum:
+            ObjectScanRuntimeOptions(
+                autoCapture: true,
+                haptics: true,
+                targetImageCount: 100,
+                minimumImagesBeforeFinish: 24,
+                imageMaxDimension: 1920,
+                jpegQuality: 0.97,
+                minimumCaptureInterval: 0.35,
+                minimumAngularStepDegrees: 3,
+                highFeatureSensitivity: true,
+                objectMasking: true,
+                useSmoothedDepthForSelection: true,
+                objectSizePreset: .medium,
+                keepSourceImages: true
+            )
+        }
+    }
+}
+
+enum ObjectScanSizePreset: String, CaseIterable, Identifiable, Hashable, Codable {
+    case small
+    case medium
+    case large
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .small: "صغير"
+        case .medium: "متوسط"
+        case .large: "كبير"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .small: "تمثال صغير، أداة، قطعة مكتبية"
+        case .medium: "كرسي، جهاز، صندوق، قطعة أثاث صغيرة"
+        case .large: "قطعة أثاث كبيرة أو مجسم بحجم إنسان تقريبًا"
+        }
+    }
+
+    var approximateDiameterMeters: Float {
+        switch self {
+        case .small: 0.25
+        case .medium: 0.70
+        case .large: 1.60
+        }
+    }
+
+    var recommendedDistanceRange: ClosedRange<Float> {
+        switch self {
+        case .small: 0.28...1.10
+        case .medium: 0.55...2.30
+        case .large: 1.00...4.50
+        }
+    }
+}
+
 struct ObjectScanRuntimeOptions {
     let autoCapture: Bool
     let haptics: Bool
+    let targetImageCount: Int
     let minimumImagesBeforeFinish: Int
+    let imageMaxDimension: Int
+    let jpegQuality: Double
+    let minimumCaptureInterval: TimeInterval
+    let minimumAngularStepDegrees: Float
+    let highFeatureSensitivity: Bool
+    let objectMasking: Bool
+    let useSmoothedDepthForSelection: Bool
+    let objectSizePreset: ObjectScanSizePreset
     let keepSourceImages: Bool
+
+    var minimumAngularStepRadians: Float {
+        minimumAngularStepDegrees * .pi / 180
+    }
 }
 
 enum Color3DScanSettings {
@@ -138,36 +282,57 @@ enum Color3DScanSettings {
         static let areaExportPLY = "color3d.settings.area.exportPLY"
         static let areaExportOBJ = "color3d.settings.area.exportOBJ"
         static let areaExportUSDZ = "color3d.settings.area.exportUSDZ"
-        static let previewFreeCamera = "color3d.settings.preview.freeCamera"
+
+        static let objectDensityPreset = "color3d.settings.object.densityPreset"
         static let objectAutoCapture = "color3d.settings.object.autoCapture"
         static let objectHaptics = "color3d.settings.object.haptics"
+        static let objectTargetImages = "color3d.settings.object.targetImages"
         static let objectMinimumImages = "color3d.settings.object.minimumImages"
+        static let objectImageMaxDimension = "color3d.settings.object.imageMaxDimension"
+        static let objectJPEGQuality = "color3d.settings.object.jpegQuality"
+        static let objectCaptureInterval = "color3d.settings.object.captureInterval"
+        static let objectAngularStepDegrees = "color3d.settings.object.angularStepDegrees"
+        static let objectHighFeatureSensitivity = "color3d.settings.object.highFeatureSensitivity"
+        static let objectMasking = "color3d.settings.object.masking"
+        static let objectUseSmoothedDepth = "color3d.settings.object.useSmoothedDepth"
+        static let objectSizePreset = "color3d.settings.object.sizePreset"
         static let objectKeepSourceImages = "color3d.settings.object.keepSourceImages"
     }
 
     private static let defaults = UserDefaults.standard
 
     static func registerDefaults() {
-        let options = Color3DScanQualityPreset.balanced.recommended
+        let area = Color3DScanQualityPreset.balanced.recommended
+        let object = ObjectScanDensityPreset.balanced.recommended
         defaults.register(defaults: [
             Key.roomQualityPreset: Color3DScanQualityPreset.balanced.rawValue,
-            Key.areaMaximumKeyframes: options.maximumKeyframes,
-            Key.areaImageMaxDimension: options.imageMaxDimension,
-            Key.areaJPEGQuality: options.jpegQuality,
-            Key.areaMinimumCaptureInterval: options.minimumCaptureInterval,
-            Key.areaMinimumTranslation: Double(options.minimumTranslation),
-            Key.areaMinimumRotationDegrees: Double(options.minimumRotationDegrees),
-            Key.areaMaximumTextureFrames: options.maximumTextureFrames,
-            Key.areaShowSceneMesh: options.showSceneMeshWhileScanning,
-            Key.areaUseSmoothedDepth: options.useSmoothedDepth,
-            Key.areaExportPLY: options.exportPLY,
-            Key.areaExportOBJ: options.exportOBJ,
-            Key.areaExportUSDZ: options.exportUSDZ,
-            Key.previewFreeCamera: options.previewFreeCamera,
-            Key.objectAutoCapture: true,
-            Key.objectHaptics: true,
-            Key.objectMinimumImages: 20,
-            Key.objectKeepSourceImages: true
+            Key.areaMaximumKeyframes: area.maximumKeyframes,
+            Key.areaImageMaxDimension: area.imageMaxDimension,
+            Key.areaJPEGQuality: area.jpegQuality,
+            Key.areaMinimumCaptureInterval: area.minimumCaptureInterval,
+            Key.areaMinimumTranslation: Double(area.minimumTranslation),
+            Key.areaMinimumRotationDegrees: Double(area.minimumRotationDegrees),
+            Key.areaMaximumTextureFrames: area.maximumTextureFrames,
+            Key.areaShowSceneMesh: area.showSceneMeshWhileScanning,
+            Key.areaUseSmoothedDepth: area.useSmoothedDepth,
+            Key.areaExportPLY: area.exportPLY,
+            Key.areaExportOBJ: area.exportOBJ,
+            Key.areaExportUSDZ: area.exportUSDZ,
+
+            Key.objectDensityPreset: ObjectScanDensityPreset.balanced.rawValue,
+            Key.objectAutoCapture: object.autoCapture,
+            Key.objectHaptics: object.haptics,
+            Key.objectTargetImages: object.targetImageCount,
+            Key.objectMinimumImages: object.minimumImagesBeforeFinish,
+            Key.objectImageMaxDimension: object.imageMaxDimension,
+            Key.objectJPEGQuality: object.jpegQuality,
+            Key.objectCaptureInterval: object.minimumCaptureInterval,
+            Key.objectAngularStepDegrees: Double(object.minimumAngularStepDegrees),
+            Key.objectHighFeatureSensitivity: object.highFeatureSensitivity,
+            Key.objectMasking: object.objectMasking,
+            Key.objectUseSmoothedDepth: object.useSmoothedDepthForSelection,
+            Key.objectSizePreset: object.objectSizePreset.rawValue,
+            Key.objectKeepSourceImages: object.keepSourceImages
         ])
     }
 
@@ -185,22 +350,33 @@ enum Color3DScanSettings {
             useSmoothedDepth: defaults.bool(forKey: Key.areaUseSmoothedDepth),
             exportPLY: defaults.bool(forKey: Key.areaExportPLY),
             exportOBJ: defaults.bool(forKey: Key.areaExportOBJ),
-            exportUSDZ: defaults.bool(forKey: Key.areaExportUSDZ),
-            previewFreeCamera: defaults.bool(forKey: Key.previewFreeCamera)
+            exportUSDZ: defaults.bool(forKey: Key.areaExportUSDZ)
         )
     }
 
     static var objectOptions: ObjectScanRuntimeOptions {
         registerDefaults()
+        let sizePreset = ObjectScanSizePreset(
+            rawValue: defaults.string(forKey: Key.objectSizePreset) ?? ObjectScanSizePreset.medium.rawValue
+        ) ?? .medium
         return ObjectScanRuntimeOptions(
             autoCapture: defaults.bool(forKey: Key.objectAutoCapture),
             haptics: defaults.bool(forKey: Key.objectHaptics),
-            minimumImagesBeforeFinish: max(8, defaults.integer(forKey: Key.objectMinimumImages)),
+            targetImageCount: min(max(defaults.integer(forKey: Key.objectTargetImages), 12), 140),
+            minimumImagesBeforeFinish: min(max(defaults.integer(forKey: Key.objectMinimumImages), 6), 60),
+            imageMaxDimension: max(720, defaults.integer(forKey: Key.objectImageMaxDimension)),
+            jpegQuality: min(max(defaults.double(forKey: Key.objectJPEGQuality), 0.65), 1.0),
+            minimumCaptureInterval: min(max(defaults.double(forKey: Key.objectCaptureInterval), 0.20), 3.0),
+            minimumAngularStepDegrees: Float(min(max(defaults.double(forKey: Key.objectAngularStepDegrees), 2), 30)),
+            highFeatureSensitivity: defaults.bool(forKey: Key.objectHighFeatureSensitivity),
+            objectMasking: defaults.bool(forKey: Key.objectMasking),
+            useSmoothedDepthForSelection: defaults.bool(forKey: Key.objectUseSmoothedDepth),
+            objectSizePreset: sizePreset,
             keepSourceImages: defaults.bool(forKey: Key.objectKeepSourceImages)
         )
     }
 
-    static func applyPreset(_ preset: Color3DScanQualityPreset) {
+    static func applyAreaPreset(_ preset: Color3DScanQualityPreset) {
         let value = preset.recommended
         defaults.set(preset.rawValue, forKey: Key.roomQualityPreset)
         defaults.set(value.maximumKeyframes, forKey: Key.areaMaximumKeyframes)
@@ -215,7 +391,25 @@ enum Color3DScanSettings {
         defaults.set(value.exportPLY, forKey: Key.areaExportPLY)
         defaults.set(value.exportOBJ, forKey: Key.areaExportOBJ)
         defaults.set(value.exportUSDZ, forKey: Key.areaExportUSDZ)
-        defaults.set(value.previewFreeCamera, forKey: Key.previewFreeCamera)
+    }
+
+    static func applyObjectPreset(_ preset: ObjectScanDensityPreset) {
+        let currentSize = defaults.string(forKey: Key.objectSizePreset) ?? ObjectScanSizePreset.medium.rawValue
+        let value = preset.recommended
+        defaults.set(preset.rawValue, forKey: Key.objectDensityPreset)
+        defaults.set(value.autoCapture, forKey: Key.objectAutoCapture)
+        defaults.set(value.haptics, forKey: Key.objectHaptics)
+        defaults.set(value.targetImageCount, forKey: Key.objectTargetImages)
+        defaults.set(value.minimumImagesBeforeFinish, forKey: Key.objectMinimumImages)
+        defaults.set(value.imageMaxDimension, forKey: Key.objectImageMaxDimension)
+        defaults.set(value.jpegQuality, forKey: Key.objectJPEGQuality)
+        defaults.set(value.minimumCaptureInterval, forKey: Key.objectCaptureInterval)
+        defaults.set(Double(value.minimumAngularStepDegrees), forKey: Key.objectAngularStepDegrees)
+        defaults.set(value.highFeatureSensitivity, forKey: Key.objectHighFeatureSensitivity)
+        defaults.set(value.objectMasking, forKey: Key.objectMasking)
+        defaults.set(value.useSmoothedDepthForSelection, forKey: Key.objectUseSmoothedDepth)
+        defaults.set(currentSize, forKey: Key.objectSizePreset)
+        defaults.set(value.keepSourceImages, forKey: Key.objectKeepSourceImages)
     }
 
     static func resetAll() {
@@ -233,10 +427,19 @@ enum Color3DScanSettings {
             Key.areaExportPLY,
             Key.areaExportOBJ,
             Key.areaExportUSDZ,
-            Key.previewFreeCamera,
+            Key.objectDensityPreset,
             Key.objectAutoCapture,
             Key.objectHaptics,
+            Key.objectTargetImages,
             Key.objectMinimumImages,
+            Key.objectImageMaxDimension,
+            Key.objectJPEGQuality,
+            Key.objectCaptureInterval,
+            Key.objectAngularStepDegrees,
+            Key.objectHighFeatureSensitivity,
+            Key.objectMasking,
+            Key.objectUseSmoothedDepth,
+            Key.objectSizePreset,
             Key.objectKeepSourceImages
         ] {
             defaults.removeObject(forKey: key)

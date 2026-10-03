@@ -30,6 +30,10 @@ struct Color3DScanSupport {
         PhotogrammetrySession.isSupported
     }
 
+    static var objectScanSupported: Bool {
+        ARWorldTrackingConfiguration.isSupported && PhotogrammetrySession.isSupported
+    }
+
     @MainActor
     static var areaModeAvailable: Bool {
         if #available(iOS 18.0, *) {

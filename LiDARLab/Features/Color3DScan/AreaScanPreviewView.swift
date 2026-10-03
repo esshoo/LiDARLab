@@ -1,32 +1,25 @@
 import SceneKit
 import SwiftUI
 
+/// Uses the same Apple SceneKit camera-control style as the established RoomScan 3D viewer.
+/// SceneKit handles orbit, pan and zoom instead of the previous custom fly-camera mode.
 struct AreaScanPreviewView: UIViewRepresentable {
     let mesh: AreaScanTexturedMesh
-    let freeCamera: Bool
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
-        let scene = Color3DMeshExporter.makeScene(mesh: mesh)
-        view.scene = scene
+        view.scene = Color3DMeshExporter.makeScene(mesh: mesh)
         view.allowsCameraControl = true
-        view.autoenablesDefaultLighting = false
+        view.autoenablesDefaultLighting = true
         view.antialiasingMode = .multisampling4X
-        view.backgroundColor = .black
-        view.pointOfView = scene.rootNode.childNode(withName: "PreviewCamera", recursively: true)
-        view.cameraControlConfiguration.allowsTranslation = true
-        view.cameraControlConfiguration.autoSwitchToFreeCamera = true
-        view.cameraControlConfiguration.flyModeVelocity = 0.8
-        if freeCamera {
-            view.defaultCameraController.interactionMode = .fly
-        }
+        view.backgroundColor = .secondarySystemBackground
+        view.rendersContinuously = false
         return view
     }
 
     func updateUIView(_ uiView: SCNView, context: Context) {
-        uiView.cameraControlConfiguration.allowsTranslation = true
-        if freeCamera {
-            uiView.defaultCameraController.interactionMode = .fly
-        }
+        uiView.scene = Color3DMeshExporter.makeScene(mesh: mesh)
+        uiView.allowsCameraControl = true
+        uiView.autoenablesDefaultLighting = true
     }
 }

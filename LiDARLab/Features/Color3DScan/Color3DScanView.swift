@@ -8,7 +8,7 @@ struct Color3DScanView: View {
                     Label("المسح ثلاثي الأبعاد الملون", systemImage: "viewfinder")
                         .font(.title3.bold())
 
-                    Text("قسم مستقل للمسح ثلاثي الأبعاد الحقيقي. مسح الجسم يستخدم Apple Object Capture، ومسح المكان يجمع LiDAR Scene Mesh وصور RGB ثم يبني UV ويستخدم الصور كخامات فعلية بدل ألوان النقاط فقط.")
+                    Text("قسم مستقل للمسح ثلاثي الأبعاد الحقيقي. مسح المجسم يسمح باختيار الهدف باللمس ثم حساب التغطية حوله وجمع صور RGB لإعادة البناء، ومسح المكان يجمع LiDAR Scene Mesh وصور RGB ويكسو الأسطح بخامات فعلية.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -21,7 +21,7 @@ struct Color3DScanView: View {
                 } label: {
                     Color3DScanToolRow(
                         title: "مسح جسم ملوّن",
-                        subtitle: "Object Capture فعلي: التقاط موجّه + Photogrammetry على الجهاز + ملف USDZ.",
+                        subtitle: "اختيار الهدف باللمس + تغطية محيطية + Photogrammetry على الجهاز + ملف USDZ.",
                         systemImage: "cube.transparent"
                     )
                 }
@@ -59,8 +59,8 @@ struct Color3DScanView: View {
                     isSupported: Color3DScanSupport.meshClassificationSupported
                 )
                 Color3DScanSupportRow(
-                    title: "Object Capture",
-                    isSupported: Color3DScanSupport.objectCaptureSupported
+                    title: "مسح المجسم الموجّه",
+                    isSupported: Color3DScanSupport.objectScanSupported
                 )
                 Color3DScanSupportRow(
                     title: "Photogrammetry",
@@ -79,7 +79,7 @@ struct Color3DScanView: View {
             Section("المخرجات الفعلية") {
                 Color3DScanExportRow(
                     format: "USDZ",
-                    detail: "الناتج الأساسي لمسح الأجسام بواسطة Object Capture"
+                    detail: "الناتج الأساسي لمسح المجسمات بعد الالتقاط الموجّه وإعادة البناء"
                 )
                 Color3DScanExportRow(
                     format: "OBJ + MTL + Textures",

@@ -48,25 +48,16 @@ struct AreaScanView: View {
         .sheet(isPresented: $showPreview) {
             if let mesh = model.completedMesh {
                 NavigationStack {
-                    ZStack(alignment: .bottom) {
-                        AreaScanPreviewView(
-                            mesh: mesh,
-                            freeCamera: Color3DScanSettings.areaOptions.previewFreeCamera
-                        )
-                        .ignoresSafeArea(edges: .bottom)
-
-                        if Color3DScanSettings.areaOptions.previewFreeCamera {
-                            Text("إصبع: دوران  •  إصبعان: تحريك  •  3 أصابع: تقدم/تراجع  •  Pinch: مجال الرؤية")
-                                .font(.caption2)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(.ultraThinMaterial, in: Capsule())
-                                .padding(.bottom, 12)
-                                .padding(.horizontal, 10)
+                    Group {
+                        if let usdzURL = model.exportResult?.usdzURL {
+                            QuickLookPreview(url: usdzURL)
+                                .ignoresSafeArea(edges: .bottom)
+                        } else {
+                            AreaScanPreviewView(mesh: mesh)
+                                .ignoresSafeArea(edges: .bottom)
                         }
                     }
-                    .navigationTitle("معاينة الغرفة بالخامات")
+                    .navigationTitle(model.exportResult?.usdzURL != nil ? "معاينة Apple 3D" : "معاينة SceneKit")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
@@ -246,7 +237,7 @@ struct AreaScanView: View {
                 Button {
                     showPreview = true
                 } label: {
-                    Label("دخول ومعاينة الغرفة بكاميرا حرة", systemImage: "move.3d")
+                    Label("معاينة الغرفة بالعارض الافتراضي", systemImage: "arkit")
                 }
             }
 
