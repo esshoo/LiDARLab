@@ -1,7 +1,7 @@
 import RealityKit
 import SwiftUI
 
-struct ObjectScanView: View {
+struct GuidedObjectScanView: View {
     @StateObject private var model = ObjectScanViewModel()
     @State private var showPointCloud = false
     @State private var showModelPreview = false

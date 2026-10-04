@@ -69,7 +69,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .planeDetection: "اكتشاف الأسطح الأفقية والرأسية"
         case .arPlayground: "وضع وتحريك مجسمات داخل المكان"
         case .depthPhoto: "حفظ الصورة وخريطة العمق معًا"
-        case .color3DScan: "مسح أجسام أو غرف كنموذج ثلاثي الأبعاد ملوّن"
+        case .color3DScan: "مسح مجسمات أو مناطق كنماذج ثلاثية الأبعاد ملوّنة"
         case .computerBridge: "تحديد الموقع أولًا، مسح 2D ثانيًا، ومعالجة محلية بعد الإنهاء"
         case .roomScan: "مسح كل غرفة منفصلة وتثبيتها قبل الانتقال"
         case .sensorTests: "اختبار ثبات قراءة العمق وتذبذبها"
@@ -158,7 +158,7 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
         case .depthPhoto:
             ["الصورة الأصلية", "خريطة العمق", "تأثيرات الضباب والعزل"]
         case .color3DScan:
-            ["مسح جسم صغير بالألوان", "مسح غرفة أو مساحة", "تصدير فعلي إلى USDZ وOBJ وPLY"]
+            ["مسح جسم ملوّن بطريقتين", "مسح مكان أو منطقة ملونة", "تصدير USDZ وصور المصدر"]
         case .computerBridge:
             ["تسجيل كل Pose قبل أي عمل آخر", "Depth بنفس Frame ID", "معالجة محلية بعد فصل الالتقاط"]
         case .roomScan:

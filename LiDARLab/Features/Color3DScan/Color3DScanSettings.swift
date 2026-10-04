@@ -329,6 +329,11 @@ enum Color3DScanSettings {
         static let appleObjectOverCapture = "color3d.settings.appleObject.overCapture"
         static let appleObjectShowPreselectionMesh = "color3d.settings.appleObject.showPreselectionMesh"
         static let appleObjectPreferCompletedPassBeforeFinish = "color3d.settings.appleObject.preferCompletedPassBeforeFinish"
+
+        // Turntable capture: fixed camera + rotating object.
+        static let turntableAutoCapture = "color3d.settings.turntable.autoCapture"
+        static let turntableImagesPerPass = "color3d.settings.turntable.imagesPerPass"
+        static let turntableCaptureInterval = "color3d.settings.turntable.captureInterval"
     }
 
     private static let defaults = UserDefaults.standard
@@ -380,7 +385,11 @@ enum Color3DScanSettings {
             Key.appleObjectRecommendedPasses: 3,
             Key.appleObjectOverCapture: false,
             Key.appleObjectShowPreselectionMesh: true,
-            Key.appleObjectPreferCompletedPassBeforeFinish: true
+            Key.appleObjectPreferCompletedPassBeforeFinish: true,
+
+            Key.turntableAutoCapture: true,
+            Key.turntableImagesPerPass: 48,
+            Key.turntableCaptureInterval: 0.85
         ])
     }
 
@@ -450,6 +459,16 @@ enum Color3DScanSettings {
         let preferCompletedPassBeforeFinish: Bool
     }
 
+    struct TurntableCaptureOptions {
+        let autoCapture: Bool
+        let imagesPerPass: Int
+        let captureInterval: TimeInterval
+        let keepSourceImages: Bool
+        let minimumImagesBeforeFinish: Int
+        let highFeatureSensitivity: Bool
+        let objectMasking: Bool
+    }
+
     static var appleAreaOptions: AppleAreaCaptureOptions {
         registerDefaults()
         return AppleAreaCaptureOptions(
@@ -477,6 +496,20 @@ enum Color3DScanSettings {
             objectMasking: object.objectMasking,
             showPreselectionMesh: defaults.bool(forKey: Key.appleObjectShowPreselectionMesh),
             preferCompletedPassBeforeFinish: defaults.bool(forKey: Key.appleObjectPreferCompletedPassBeforeFinish)
+        )
+    }
+
+    static var turntableOptions: TurntableCaptureOptions {
+        registerDefaults()
+        let object = objectOptions
+        return TurntableCaptureOptions(
+            autoCapture: defaults.bool(forKey: Key.turntableAutoCapture),
+            imagesPerPass: min(max(defaults.integer(forKey: Key.turntableImagesPerPass), 18), 120),
+            captureInterval: min(max(defaults.double(forKey: Key.turntableCaptureInterval), 0.35), 3.0),
+            keepSourceImages: object.keepSourceImages,
+            minimumImagesBeforeFinish: object.minimumImagesBeforeFinish,
+            highFeatureSensitivity: object.highFeatureSensitivity,
+            objectMasking: object.objectMasking
         )
     }
 
@@ -561,7 +594,10 @@ enum Color3DScanSettings {
             Key.appleObjectRecommendedPasses,
             Key.appleObjectOverCapture,
             Key.appleObjectShowPreselectionMesh,
-            Key.appleObjectPreferCompletedPassBeforeFinish
+            Key.appleObjectPreferCompletedPassBeforeFinish,
+            Key.turntableAutoCapture,
+            Key.turntableImagesPerPass,
+            Key.turntableCaptureInterval
         ] {
             defaults.removeObject(forKey: key)
         }

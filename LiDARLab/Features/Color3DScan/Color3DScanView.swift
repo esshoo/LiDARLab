@@ -8,7 +8,7 @@ struct Color3DScanView: View {
                     Label("المسح ثلاثي الأبعاد الملون", systemImage: "viewfinder")
                         .font(.title3.bold())
 
-                    Text("قسم مستقل للمسح ثلاثي الأبعاد. للمجسمات نستخدم Object Capture الرسمي مع Point Cloud/Capture Dial. للغرف الكاملة نستخدم RoomPlan لأنه المسار الرسمي لالتقاط الجدران والأرضيات والأبواب والنوافذ. Area Mode يبقى أداة بصرية لمسح سطح أو منطقة محدودة، وليس بديلًا عن RoomPlan للغرفة كاملة.")
+                    Text("هذا القسم مخصص للمسح ثلاثي الأبعاد الملون فقط: مسح مجسمات ملونة أو مسح منطقة/مكان ملون. أدوات RoomPlan والهندسة المعمارية تبقى في قسمها المستقل ولا تتكرر هنا.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -27,21 +27,11 @@ struct Color3DScanView: View {
                 }
 
                 NavigationLink {
-                    RoomScanView()
-                } label: {
-                    Color3DScanToolRow(
-                        title: "مسح غرفة كامل — RoomPlan",
-                        subtitle: "المسار الرسمي للغرفة: الجدران والأرضيات والأبواب والنوافذ والفتحات والأثاث مع هندسة مترابطة قابلة للتصدير.",
-                        systemImage: "house.lodge.fill"
-                    )
-                }
-
-                NavigationLink {
                     AreaScanView()
                 } label: {
                     Color3DScanToolRow(
-                        title: "مسح بصري لمنطقة / سطح — Area Mode",
-                        subtitle: "لجدار أو منطقة أو مشهد 2.5D محدود باستخدام Object Capture Area Mode. يحفظ USDZ وصور المصدر لإعادة معالجة أعلى على Mac.",
+                        title: "مسح مكان / منطقة ملوّنة — Area Mode",
+                        subtitle: "مسح بصري ملوّن لمنطقة أو سطح أو مشهد محدود باستخدام Object Capture Area Mode، مع USDZ وصور المصدر.",
                         systemImage: "square.3.layers.3d"
                     )
                 }
@@ -88,8 +78,8 @@ struct Color3DScanView: View {
 
             Section("المخرجات الفعلية") {
                 Color3DScanExportRow(
-                    format: "RoomPlan / USDZ",
-                    detail: "هندسة الغرفة الكاملة من RoomPlan، بينما Object Capture وArea Mode يخرجان نماذج بصرية عبر Photogrammetry"
+                    format: "USDZ ملوّن",
+                    detail: "الناتج البصري للمجسمات وArea Mode بعد إعادة البناء عبر RealityKit Photogrammetry"
                 )
                 Color3DScanExportRow(
                     format: "Source Capture",
@@ -98,7 +88,7 @@ struct Color3DScanView: View {
             }
 
             Section("مهم") {
-                Text("النظام الجديد لا يغير RoomScan أو Mesh أو أي أداة قديمة. ملفات المسح تحفظ تحت Captures/Color3D في مساحة تخزين 3ELiDAR الحالية.")
+                Text("هذا القسم لا يكرر RoomScan ولا يغيره. ملفات المسح الملون تحفظ تحت Captures/Color3D في مساحة تخزين 3ELiDAR الحالية.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
