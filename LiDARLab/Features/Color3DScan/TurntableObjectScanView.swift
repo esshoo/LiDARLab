@@ -2,8 +2,17 @@ import SwiftUI
 
 struct TurntableObjectScanView: View {
     @StateObject private var model = TurntableObjectScanViewModel()
+    @StateObject private var torch = SharedTorchController()
+    @AppStorage(Color3DScanSettings.Key.turntableCaptureMode) private var captureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
     @State private var showPreview = false
     @State private var showCancelConfirmation = false
+
+    private var selectedCaptureMode: Binding<TurntableCaptureMode> {
+        Binding(
+            get: { TurntableCaptureMode(rawValue: captureModeRaw) ?? .smartAutomatic },
+            set: { captureModeRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         Group {
@@ -55,7 +64,10 @@ struct TurntableObjectScanView: View {
                 }
             }
         }
+        .keepScreenAwakeDuringColor3DScan(model.phase != .idle && model.phase != .completed && model.phase != .failed)
+        .onAppear { torch.refreshAvailability() }
         .onDisappear {
+            torch.turnOff()
             if model.phase != .completed && model.phase != .idle {
                 model.cancelAndReset()
             }
@@ -75,6 +87,23 @@ struct TurntableObjectScanView: View {
                 Text("هذا الوضع يتبع طريقة Turntable التي تسمح بها Apple لالتقاط صور Object Capture: ثبّت الهاتف والخلفية والإضاءة، ولف المجسم ببطء أثناء التقاط سلسلة صور متداخلة.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
+
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("طريقة التقاط الصور")
+                        .font(.headline)
+                    Picker("طريقة الالتقاط", selection: selectedCaptureMode) {
+                        ForEach(TurntableCaptureMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text(selectedCaptureMode.wrappedValue.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
 
                 VStack(alignment: .leading, spacing: 10) {
                     Label("استخدم حاملًا ثابتًا ولا تحرك الهاتف أثناء الجولة.", systemImage: "camera.fill")
@@ -130,6 +159,17 @@ struct TurntableObjectScanView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
+                Button {
+                    torch.toggle()
+                    model.notifyLightingChanged()
+                } label: {
+                    Image(systemName: torch.isOn ? "flashlight.on.fill" : "flashlight.off.fill")
+                        .font(.title3)
+                        .frame(width: 44, height: 42)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(torch.isOn ? .yellow : .gray)
+                .disabled(!torch.isAvailable)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("\(model.capturedImageCount)")
                         .font(.title3.bold().monospacedDigit())
@@ -140,19 +180,24 @@ struct TurntableObjectScanView: View {
             }
 
             if model.phase == .capturing {
-                ProgressView(value: model.progress)
                 HStack {
                     Label("الجولة \(model.passNumber)", systemImage: "arrow.triangle.2.circlepath")
                     Spacer()
-                    Text("\(model.passImageCount)/\(model.targetImagesPerPass)")
+                    Text("\(model.passImageCount) صورة / حد \(model.targetImagesPerPass)")
                         .monospacedDigit()
                 }
                 .font(.caption)
 
-                Text("استهدف دورة كاملة خلال حوالي \(model.estimatedPassDurationSeconds) ثانية لتحافظ على تداخل منتظم بين الصور.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Label(model.smartCaptureState, systemImage: model.isSmartAutomatic ? "sparkles" : "hand.tap")
+                    .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                if model.isSmartAutomatic, model.visualChangeScore > 0 {
+                    Text(String(format: "اختلاف المنظر: %.2f", model.visualChangeScore))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             if model.cameraLocked {
@@ -181,7 +226,7 @@ struct TurntableObjectScanView: View {
                 Button {
                     model.startPass()
                 } label: {
-                    Label("قفل الكاميرا وبدء الدورة", systemImage: "record.circle")
+                    Label(model.isSmartAutomatic ? "قفل الكاميرا وبدء الالتقاط الذكي" : "قفل الكاميرا وبدء الجولة اليدوية", systemImage: "record.circle")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                 }
@@ -193,7 +238,7 @@ struct TurntableObjectScanView: View {
                     Button {
                         model.captureManualPhoto()
                     } label: {
-                        Label("صورة الآن", systemImage: "camera.fill")
+                        Label(model.isSmartAutomatic ? "صورة يدويًا" : "التقاط صورة", systemImage: "camera.fill")
                     }
                     .buttonStyle(.bordered)
 
@@ -308,6 +353,13 @@ struct TurntableObjectScanView: View {
 }
 
 private struct TurntableFramingGuide: View {
+    private var selectedCaptureMode: Binding<TurntableCaptureMode> {
+        Binding(
+            get: { TurntableCaptureMode(rawValue: captureModeRaw) ?? .smartAutomatic },
+            set: { captureModeRaw = $0.rawValue }
+        )
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width * 0.72

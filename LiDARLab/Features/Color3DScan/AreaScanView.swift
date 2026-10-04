@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AreaScanView: View {
     @StateObject private var model = AreaScanViewModel()
+    @StateObject private var torch = SharedTorchController()
     @State private var showPointCloud = false
     @State private var showPreview = false
     @State private var showCancelConfirmation = false
@@ -65,6 +66,9 @@ struct AreaScanView: View {
                 }
             }
         }
+        .keepScreenAwakeDuringColor3DScan(model.phase != .idle && model.phase != .completed && model.phase != .failed)
+        .onAppear { torch.refreshAvailability() }
+        .onDisappear { torch.turnOff() }
     }
 
     @ViewBuilder
@@ -172,6 +176,7 @@ struct AreaScanView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                SharedTorchToggleButton(controller: torch, compact: true)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("\(model.shotCount)")
                         .font(.title3.bold().monospacedDigit())

@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 
 struct Color3DScanSettingsView: View {
+    @AppStorage(Color3DScanSettings.Key.keepScreenAwake) private var keepScreenAwake = true
     @AppStorage(Color3DScanSettings.Key.appleAreaAutoCapture) private var areaAutoCapture = true
     @AppStorage(Color3DScanSettings.Key.appleAreaHaptics) private var areaHaptics = true
     @AppStorage(Color3DScanSettings.Key.appleAreaOverCapture) private var areaOverCapture = false
@@ -23,8 +24,11 @@ struct Color3DScanSettingsView: View {
     @AppStorage(Color3DScanSettings.Key.appleObjectPreferCompletedPassBeforeFinish) private var objectPreferCompletedPassBeforeFinish = true
 
     @AppStorage(Color3DScanSettings.Key.turntableAutoCapture) private var turntableAutoCapture = true
+    @AppStorage(Color3DScanSettings.Key.turntableCaptureMode) private var turntableCaptureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
+    @AppStorage(Color3DScanSettings.Key.turntableNoveltyThreshold) private var turntableNoveltyThreshold = 3.5
+    @AppStorage(Color3DScanSettings.Key.turntableStabilityThreshold) private var turntableStabilityThreshold = 0.85
     @AppStorage(Color3DScanSettings.Key.turntableImagesPerPass) private var turntableImagesPerPass = 48
-    @AppStorage(Color3DScanSettings.Key.turntableCaptureInterval) private var turntableCaptureInterval = 0.85
+    @AppStorage(Color3DScanSettings.Key.turntableCaptureInterval) private var turntableCaptureInterval = 0.75
 
     @State private var showResetConfirmation = false
 
@@ -35,8 +39,27 @@ struct Color3DScanSettingsView: View {
         )
     }
 
+
+    private var selectedTurntableCaptureMode: Binding<TurntableCaptureMode> {
+        Binding(
+            get: { TurntableCaptureMode(rawValue: turntableCaptureModeRaw) ?? .smartAutomatic },
+            set: {
+                turntableCaptureModeRaw = $0.rawValue
+                turntableAutoCapture = ($0 == .smartAutomatic)
+            }
+        )
+    }
+
     var body: some View {
         Form {
+            Section {
+                Toggle("منع إطفاء الشاشة أثناء المسح", isOn: $keepScreenAwake)
+            } header: {
+                Label("عام أثناء المسح", systemImage: "display")
+            } footer: {
+                Text("عند التفعيل يوقف التطبيق مؤقتًا مؤقت قفل الشاشة فقط أثناء جلسة المسح، ثم يعيد السلوك السابق عند الخروج.")
+            }
+
             Section {
                 Toggle("التقاط تلقائي", isOn: $areaAutoCapture)
                 Toggle("اهتزازات أثناء الالتقاط", isOn: $areaHaptics)
@@ -76,22 +99,53 @@ struct Color3DScanSettingsView: View {
             }
 
             Section {
-                Toggle("التقاط تلقائي أثناء دوران المجسم", isOn: $turntableAutoCapture)
-                Stepper("صور لكل دورة: \(turntableImagesPerPass)", value: $turntableImagesPerPass, in: 18...120, step: 6)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("الفاصل بين الصور")
-                        Spacer()
-                        Text(String(format: "%.2f ث", turntableCaptureInterval))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                Picker("طريقة الالتقاط", selection: selectedTurntableCaptureMode) {
+                    ForEach(TurntableCaptureMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
                     }
-                    Slider(value: $turntableCaptureInterval, in: 0.35...3.0, step: 0.05)
+                }
+                .pickerStyle(.segmented)
+
+                Stepper("الحد الأعلى للصور في الجولة: \(turntableImagesPerPass)", value: $turntableImagesPerPass, in: 12...120, step: 6)
+
+                if selectedTurntableCaptureMode.wrappedValue == .smartAutomatic {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("حساسية اكتشاف زاوية جديدة")
+                            Spacer()
+                            Text(String(format: "%.1f", turntableNoveltyThreshold))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $turntableNoveltyThreshold, in: 0.5...12.0, step: 0.25)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("شرط هدوء الحركة")
+                            Spacer()
+                            Text(String(format: "%.2f", turntableStabilityThreshold))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $turntableStabilityThreshold, in: 0.2...2.5, step: 0.05)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("أقل فاصل بين صورتين")
+                            Spacer()
+                            Text(String(format: "%.2f ث", turntableCaptureInterval))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $turntableCaptureInterval, in: 0.25...2.0, step: 0.05)
+                    }
                 }
             } header: {
                 Label("وضع Turntable — كاميرا ثابتة", systemImage: "arrow.triangle.2.circlepath.camera")
             } footer: {
-                Text("ثبّت الهاتف على حامل ولف المجسم ببطء. عدد أكبر من الصور وفاصل أقصر يعطي تداخلًا أعلى لكنه يزيد وقت المعالجة. إعدادات High Feature Sensitivity وObject Masking والاحتفاظ بالصور تُشارك مع إعدادات Object Capture أعلاه.")
+                Text("في التلقائي الذكي يستخدم التطبيق تحليل تشابه بصري بين إطارات الكاميرا: لا يلتقط صورة جديدة إلا بعد تغيّر شكل المجسم عن اللقطات السابقة ثم هدوء الحركة. الوضع اليدوي لا يلتقط أي صورة إلا عند الضغط على زر التصوير.")
             }
 
             Section("المعالجة على iPhone") {
@@ -113,6 +167,7 @@ struct Color3DScanSettingsView: View {
         .confirmationDialog("استعادة إعدادات المسح الافتراضية؟", isPresented: $showResetConfirmation) {
             Button("استعادة", role: .destructive) {
                 Color3DScanSettings.resetAll()
+                keepScreenAwake = true
                 areaAutoCapture = true
                 areaHaptics = true
                 areaOverCapture = false
@@ -132,8 +187,11 @@ struct Color3DScanSettingsView: View {
                 objectShowPreselectionMesh = true
                 objectPreferCompletedPassBeforeFinish = true
                 turntableAutoCapture = true
+                turntableCaptureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
+                turntableNoveltyThreshold = 3.5
+                turntableStabilityThreshold = 0.85
                 turntableImagesPerPass = 48
-                turntableCaptureInterval = 0.85
+                turntableCaptureInterval = 0.75
             }
             Button("إلغاء", role: .cancel) {}
         }

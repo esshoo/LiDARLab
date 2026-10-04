@@ -38,6 +38,14 @@ final class SharedTorchController: ObservableObject {
         statusText = isAvailable ? levelTitle : "الكشاف غير متاح على هذا الجهاز"
     }
 
+    func toggle() {
+        if isOn {
+            turnOff()
+        } else {
+            setLevel(0.50)
+        }
+    }
+
     func cycleLevel() {
         guard isAvailable else {
             refreshAvailability()
@@ -125,5 +133,33 @@ struct SharedTorchButton: View {
         .tint(controller.isOn ? .yellow : .gray)
         .disabled(!controller.isAvailable)
         .accessibilityHint("اضغط للتبديل بين منخفض ومتوسط وقوي ثم إيقاف")
+    }
+}
+
+
+struct SharedTorchToggleButton: View {
+    @ObservedObject var controller: SharedTorchController
+    var compact = true
+
+    var body: some View {
+        Button {
+            controller.toggle()
+        } label: {
+            if compact {
+                Image(systemName: controller.isOn ? "flashlight.on.fill" : "flashlight.off.fill")
+                    .font(.title3)
+                    .frame(width: 44, height: 42)
+            } else {
+                Label(
+                    controller.isOn ? "إطفاء الكشاف" : "تشغيل الكشاف",
+                    systemImage: controller.isOn ? "flashlight.on.fill" : "flashlight.off.fill"
+                )
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(controller.isOn ? .yellow : .gray)
+        .disabled(!controller.isAvailable)
+        .accessibilityHint("تشغيل أو إطفاء كشاف الكاميرا الخلفية")
     }
 }

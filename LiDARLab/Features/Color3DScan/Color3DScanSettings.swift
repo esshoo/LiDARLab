@@ -282,8 +282,30 @@ struct ObjectScanRuntimeOptions {
     }
 }
 
+enum TurntableCaptureMode: String, CaseIterable, Identifiable, Hashable {
+    case smartAutomatic
+    case manual
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .smartAutomatic: "تلقائي ذكي"
+        case .manual: "يدوي"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .smartAutomatic: "يلتقط فقط عند ظهور زاوية جديدة ثم هدوء الحركة"
+        case .manual: "أنت تضغط زر الصورة لكل زاوية تريدها"
+        }
+    }
+}
+
 enum Color3DScanSettings {
     enum Key {
+        static let keepScreenAwake = "color3d.settings.general.keepScreenAwake"
         static let roomQualityPreset = "color3d.settings.room.qualityPreset"
         static let areaMaximumKeyframes = "color3d.settings.area.maximumKeyframes"
         static let areaImageMaxDimension = "color3d.settings.area.imageMaxDimension"
@@ -332,6 +354,9 @@ enum Color3DScanSettings {
 
         // Turntable capture: fixed camera + rotating object.
         static let turntableAutoCapture = "color3d.settings.turntable.autoCapture"
+        static let turntableCaptureMode = "color3d.settings.turntable.captureMode"
+        static let turntableNoveltyThreshold = "color3d.settings.turntable.noveltyThreshold"
+        static let turntableStabilityThreshold = "color3d.settings.turntable.stabilityThreshold"
         static let turntableImagesPerPass = "color3d.settings.turntable.imagesPerPass"
         static let turntableCaptureInterval = "color3d.settings.turntable.captureInterval"
     }
@@ -342,6 +367,7 @@ enum Color3DScanSettings {
         let area = Color3DScanQualityPreset.balanced.recommended
         let object = ObjectScanDensityPreset.balanced.recommended
         defaults.register(defaults: [
+            Key.keepScreenAwake: true,
             Key.roomQualityPreset: Color3DScanQualityPreset.balanced.rawValue,
             Key.areaMaximumKeyframes: area.maximumKeyframes,
             Key.areaImageMaxDimension: area.imageMaxDimension,
@@ -388,8 +414,11 @@ enum Color3DScanSettings {
             Key.appleObjectPreferCompletedPassBeforeFinish: true,
 
             Key.turntableAutoCapture: true,
+            Key.turntableCaptureMode: TurntableCaptureMode.smartAutomatic.rawValue,
+            Key.turntableNoveltyThreshold: 3.5,
+            Key.turntableStabilityThreshold: 0.85,
             Key.turntableImagesPerPass: 48,
-            Key.turntableCaptureInterval: 0.85
+            Key.turntableCaptureInterval: 0.75
         ])
     }
 
@@ -460,9 +489,12 @@ enum Color3DScanSettings {
     }
 
     struct TurntableCaptureOptions {
+        let captureMode: TurntableCaptureMode
         let autoCapture: Bool
         let imagesPerPass: Int
         let captureInterval: TimeInterval
+        let noveltyThreshold: Float
+        let stabilityThreshold: Float
         let keepSourceImages: Bool
         let minimumImagesBeforeFinish: Int
         let highFeatureSensitivity: Bool
@@ -502,10 +534,16 @@ enum Color3DScanSettings {
     static var turntableOptions: TurntableCaptureOptions {
         registerDefaults()
         let object = objectOptions
+        let captureMode = TurntableCaptureMode(
+            rawValue: defaults.string(forKey: Key.turntableCaptureMode) ?? TurntableCaptureMode.smartAutomatic.rawValue
+        ) ?? .smartAutomatic
         return TurntableCaptureOptions(
-            autoCapture: defaults.bool(forKey: Key.turntableAutoCapture),
-            imagesPerPass: min(max(defaults.integer(forKey: Key.turntableImagesPerPass), 18), 120),
-            captureInterval: min(max(defaults.double(forKey: Key.turntableCaptureInterval), 0.35), 3.0),
+            captureMode: captureMode,
+            autoCapture: captureMode == .smartAutomatic,
+            imagesPerPass: min(max(defaults.integer(forKey: Key.turntableImagesPerPass), 12), 120),
+            captureInterval: min(max(defaults.double(forKey: Key.turntableCaptureInterval), 0.25), 3.0),
+            noveltyThreshold: Float(min(max(defaults.double(forKey: Key.turntableNoveltyThreshold), 0.5), 15.0)),
+            stabilityThreshold: Float(min(max(defaults.double(forKey: Key.turntableStabilityThreshold), 0.15), 5.0)),
             keepSourceImages: object.keepSourceImages,
             minimumImagesBeforeFinish: object.minimumImagesBeforeFinish,
             highFeatureSensitivity: object.highFeatureSensitivity,
@@ -554,6 +592,7 @@ enum Color3DScanSettings {
 
     static func resetAll() {
         for key in [
+            Key.keepScreenAwake,
             Key.roomQualityPreset,
             Key.areaMaximumKeyframes,
             Key.areaImageMaxDimension,
@@ -596,6 +635,9 @@ enum Color3DScanSettings {
             Key.appleObjectShowPreselectionMesh,
             Key.appleObjectPreferCompletedPassBeforeFinish,
             Key.turntableAutoCapture,
+            Key.turntableCaptureMode,
+            Key.turntableNoveltyThreshold,
+            Key.turntableStabilityThreshold,
             Key.turntableImagesPerPass,
             Key.turntableCaptureInterval
         ] {

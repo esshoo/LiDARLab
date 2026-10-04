@@ -3,6 +3,7 @@ import SwiftUI
 
 struct GuidedObjectScanView: View {
     @StateObject private var model = ObjectScanViewModel()
+    @StateObject private var torch = SharedTorchController()
     @State private var showPointCloud = false
     @State private var showModelPreview = false
     @State private var showCancelConfirmation = false
@@ -71,6 +72,9 @@ struct GuidedObjectScanView: View {
                 }
             }
         }
+        .keepScreenAwakeDuringColor3DScan(model.phase != .idle && model.phase != .completed && model.phase != .failed)
+        .onAppear { torch.refreshAvailability() }
+        .onDisappear { torch.turnOff() }
     }
 
     @ViewBuilder
@@ -160,6 +164,7 @@ struct GuidedObjectScanView: View {
                 Text(model.phase.title)
                     .font(.headline)
                 Spacer()
+                SharedTorchToggleButton(controller: torch, compact: true)
                 Text(model.trackingState)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
@@ -259,6 +264,7 @@ struct GuidedObjectScanView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                SharedTorchToggleButton(controller: torch, compact: true)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("\(model.shotCount)")
                         .font(.title3.bold().monospacedDigit())
