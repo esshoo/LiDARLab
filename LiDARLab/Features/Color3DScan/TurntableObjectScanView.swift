@@ -353,13 +353,6 @@ struct TurntableObjectScanView: View {
 }
 
 private struct TurntableFramingGuide: View {
-    private var selectedCaptureMode: Binding<TurntableCaptureMode> {
-        Binding(
-            get: { TurntableCaptureMode(rawValue: captureModeRaw) ?? .smartAutomatic },
-            set: { captureModeRaw = $0.rawValue }
-        )
-    }
-
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width * 0.72
