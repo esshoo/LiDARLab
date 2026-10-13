@@ -415,7 +415,7 @@ enum Color3DScanSettings {
 
             Key.turntableAutoCapture: true,
             Key.turntableCaptureMode: TurntableCaptureMode.smartAutomatic.rawValue,
-            Key.turntableNoveltyThreshold: 0.055,
+            Key.turntableNoveltyThreshold: 0.025,
             Key.turntableStabilityThreshold: 0.018,
             Key.turntableImagesPerPass: 48,
             Key.turntableCaptureInterval: 0.75
@@ -541,9 +541,20 @@ enum Color3DScanSettings {
         // luminance signature in the 0...1 range. Migrate legacy stored values safely.
         let storedNovelty = defaults.double(forKey: Key.turntableNoveltyThreshold)
         let storedStability = defaults.double(forKey: Key.turntableStabilityThreshold)
-        let novelty = storedNovelty > 0.35 ? 0.055 : min(max(storedNovelty, 0.02), 0.20)
+
+        // v10 shipped with 0.055, which is too strict for a fixed camera because most
+        // of the frame is static background. Migrate that default to a more practical
+        // threshold while preserving deliberate custom values.
+        let usesLegacyDefault = abs(storedNovelty - 0.055) < 0.0005
+        let novelty: Double
+        if storedNovelty > 0.35 || usesLegacyDefault {
+            novelty = 0.025
+            defaults.set(novelty, forKey: Key.turntableNoveltyThreshold)
+        } else {
+            novelty = min(max(storedNovelty, 0.015), 0.20)
+        }
+
         let stability = storedStability > 0.20 ? 0.018 : min(max(storedStability, 0.004), 0.08)
-        if storedNovelty > 0.35 { defaults.set(novelty, forKey: Key.turntableNoveltyThreshold) }
         if storedStability > 0.20 { defaults.set(stability, forKey: Key.turntableStabilityThreshold) }
 
         return TurntableCaptureOptions(

@@ -24,7 +24,7 @@ struct Color3DScanSettingsView: View {
 
     @AppStorage(Color3DScanSettings.Key.turntableAutoCapture) private var turntableAutoCapture = true
     @AppStorage(Color3DScanSettings.Key.turntableCaptureMode) private var turntableCaptureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
-    @AppStorage(Color3DScanSettings.Key.turntableNoveltyThreshold) private var turntableNoveltyThreshold = 0.055
+    @AppStorage(Color3DScanSettings.Key.turntableNoveltyThreshold) private var turntableNoveltyThreshold = 0.025
     @AppStorage(Color3DScanSettings.Key.turntableStabilityThreshold) private var turntableStabilityThreshold = 0.018
     @AppStorage(Color3DScanSettings.Key.turntableImagesPerPass) private var turntableImagesPerPass = 48
     @AppStorage(Color3DScanSettings.Key.turntableCaptureInterval) private var turntableCaptureInterval = 0.75
@@ -178,7 +178,7 @@ struct Color3DScanSettingsView: View {
                 objectPreferCompletedPassBeforeFinish = true
                 turntableAutoCapture = true
                 turntableCaptureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
-                turntableNoveltyThreshold = 0.055
+                turntableNoveltyThreshold = 0.025
                 turntableStabilityThreshold = 0.018
                 turntableImagesPerPass = 48
                 turntableCaptureInterval = 0.75

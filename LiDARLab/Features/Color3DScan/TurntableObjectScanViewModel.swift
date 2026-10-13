@@ -78,6 +78,8 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     private var lastAcceptedCaptureTimestamp: TimeInterval = -100
     private var analysisPausedUntil: TimeInterval = -100
     private var pendingAction: PendingAction = .none
+    private var autoStableFrameCount = 0
+    private var autoMovementArmed = false
     private var workFolderURL: URL?
     private var imagesURL: URL?
     private var localModelURL: URL?
@@ -101,6 +103,10 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
 
     var canFinishCapture: Bool {
         capturedImageCount >= max(8, options.minimumImagesBeforeFinish)
+    }
+
+    var canStopPass: Bool {
+        phase == .capturing && passImageCount > 0
     }
 
     var estimatedPassDurationSeconds: Int {
@@ -147,27 +153,64 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         }
     }
 
-    func startPass() {
+    func refreshCaptureOptionsForNextPass() {
         guard phase == .ready || phase == .readyToReconstruct else { return }
-        guard cameraReady else { return }
+        options = Color3DScanSettings.turntableOptions
+        targetImagesPerPass = options.imagesPerPass
+        smartCaptureState = options.captureMode == .smartAutomatic ? "التقاط تلقائي ذكي" : "التقاط يدوي"
+    }
 
-        if phase == .readyToReconstruct {
-            passNumber += 1
-            passImageCount = 0
+    func startPass() {
+        guard phase == .ready, cameraReady else { return }
+        refreshCaptureOptionsForNextPass()
+        beginCapturePass()
+    }
+
+    func startAdditionalPass() {
+        guard phase == .readyToReconstruct else { return }
+
+        options = Color3DScanSettings.turntableOptions
+        targetImagesPerPass = options.imagesPerPass
+        passNumber += 1
+        passImageCount = 0
+        phase = .preparingCamera
+        statusMessage = "إعادة تشغيل الكاميرا للجولة \(passNumber)…"
+
+        videoOutput.setSampleBufferDelegate(self, queue: analysisQueue)
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if !self.captureSession.isRunning {
+                self.captureSession.startRunning()
+            }
+            DispatchQueue.main.async {
+                self.cameraReady = self.captureSession.isRunning
+                guard self.cameraReady else {
+                    self.phase = .failed
+                    self.errorMessage = "تعذر إعادة تشغيل كاميرا Turntable للجولة الإضافية."
+                    return
+                }
+                self.beginCapturePass()
+            }
         }
+    }
+
+    private func beginCapturePass() {
+        guard cameraReady else { return }
 
         lockCameraSettings()
         pendingAction = .none
         resetSignatures(keepAccepted: true)
+        autoStableFrameCount = 0
+        autoMovementArmed = false
         phase = .capturing
         lastAnalysisTimestamp = -100
         lastAcceptedCaptureTimestamp = -100
-        analysisPausedUntil = Date().timeIntervalSinceReferenceDate + 0.45
+        analysisPausedUntil = Date().timeIntervalSinceReferenceDate + 0.60
         smartCaptureState = options.captureMode == .smartAutomatic
-            ? "لف المجسم، ثم توقف لحظة عند كل زاوية جديدة"
+            ? "ثبّت المجسم لحظة لالتقاط الصورة الأولى تلقائيًا"
             : "الوضع اليدوي: اضغط التقاط عند كل زاوية"
         statusMessage = options.captureMode == .smartAutomatic
-            ? "الالتقاط الذكي ينتظر تغيّرًا واضحًا ثم ثبات المنظر قبل التصوير."
+            ? "سيتم التقاط الصورة الأولى تلقائيًا عند الثبات، ثم كل زاوية جديدة بعد تدوير المجسم."
             : "لف المجسم للزاوية المطلوبة ثم اضغط التقاط صورة."
     }
 
@@ -209,7 +252,10 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     }
 
     func stopPass() {
-        guard phase == .capturing else { return }
+        guard canStopPass else {
+            statusMessage = "التقط صورة واحدة على الأقل قبل إنهاء الجولة."
+            return
+        }
         if captureInFlight {
             pendingAction = .finishPass
             statusMessage = "انتظار حفظ آخر صورة…"
@@ -219,19 +265,9 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     }
 
     func reconstructNow() {
-        guard phase == .readyToReconstruct || (phase == .capturing && canFinishCapture) else { return }
-
-        // Exit the live-camera UI immediately. If a still image is still being
-        // processed, finish saving it and continue directly into reconstruction.
+        guard phase == .readyToReconstruct, canFinishCapture else { return }
         phase = .reconstructing
         reconstructionProgress = 0
-
-        if captureInFlight {
-            pendingAction = .reconstruct
-            statusMessage = "انتظار حفظ آخر صورة ثم بدء بناء النموذج…"
-            return
-        }
-
         beginReconstruction()
     }
 
@@ -249,6 +285,8 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         cameraLocked = false
         cameraReady = false
         smartCaptureState = "—"
+        autoStableFrameCount = 0
+        autoMovementArmed = false
         visualChangeScore = 0
         skippedDuplicateCount = 0
         statusMessage = "ثبّت الآيفون على حامل ثم لف المجسم بدل تحريك الكاميرا."
@@ -461,8 +499,14 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     }
 
     private func finishCurrentPass() {
+        guard passImageCount > 0 else {
+            statusMessage = "لا يمكن إنهاء الجولة قبل التقاط صورة واحدة على الأقل."
+            return
+        }
+
+        pauseLiveCameraForReview()
         phase = .readyToReconstruct
-        statusMessage = "اكتملت الجولة \(passNumber) بعد \(passImageCount) صورة. يمكنك البناء أو بدء جولة إضافية."
+        statusMessage = "اكتملت الجولة \(passNumber) بعد \(passImageCount) صورة. راجع العدد ثم ابنِ النموذج أو ابدأ جولة إضافية."
     }
 
     func captureOutput(
@@ -487,18 +531,11 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         signatureLock.unlock()
 
         let motionDistance = previous.map { signatureDistance($0, signature) } ?? 0
-        let nearestAccepted: Float
-        if acceptedSnapshot.isEmpty {
-            nearestAccepted = 1
-        } else {
-            nearestAccepted = acceptedSnapshot.reduce(Float.greatestFiniteMagnitude) {
-                min($0, signatureDistance($1, signature))
-            }
-        }
+        let changeFromLastAccepted = acceptedSnapshot.last.map { signatureDistance($0, signature) } ?? 1
 
         DispatchQueue.main.async {
             guard self.phase == .capturing else { return }
-            self.visualChangeScore = nearestAccepted
+            self.visualChangeScore = changeFromLastAccepted
 
             guard self.options.captureMode == .smartAutomatic else {
                 self.smartCaptureState = "يدوي — اضغط التقاط عند الزاوية المطلوبة"
@@ -507,20 +544,59 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
             guard !self.captureInFlight else { return }
 
             let now = Date().timeIntervalSinceReferenceDate
-            guard now >= self.analysisPausedUntil else { return }
+            guard now >= self.analysisPausedUntil else {
+                self.smartCaptureState = "تهيئة الالتقاط التلقائي…"
+                return
+            }
             guard now - self.lastAcceptedCaptureTimestamp >= self.options.captureInterval else { return }
 
-            if !acceptedSnapshot.isEmpty, nearestAccepted < self.options.noveltyThreshold {
-                self.smartCaptureState = "منظر مكرر — واصل تدوير المجسم"
+            let isStable = motionDistance <= self.options.stabilityThreshold
+            if isStable {
+                self.autoStableFrameCount += 1
+            } else {
+                self.autoStableFrameCount = 0
+                if !acceptedSnapshot.isEmpty {
+                    self.autoMovementArmed = true
+                }
+                self.smartCaptureState = "المجسم يتحرك — استمر ثم توقف لحظة"
                 return
             }
 
-            if motionDistance > self.options.stabilityThreshold {
-                self.smartCaptureState = "المجسم يتحرك — توقف لحظة عند الزاوية الجديدة"
+            // Always prove that Smart Auto is alive by taking the first image after
+            // two stable analysis frames. Later images require a genuinely new view.
+            if acceptedSnapshot.isEmpty {
+                guard self.autoStableFrameCount >= 2 else {
+                    self.smartCaptureState = "ثبّت المجسم لحظة للصورة الأولى"
+                    return
+                }
+                self.smartCaptureState = "ثابت — التقاط الصورة الأولى تلقائيًا"
+                self.autoStableFrameCount = 0
+                self.requestPhotoCapture(signature: signature)
                 return
             }
 
-            self.smartCaptureState = "زاوية جديدة وثابتة — التقاط"
+            if changeFromLastAccepted >= self.options.noveltyThreshold {
+                self.autoMovementArmed = true
+            }
+
+            guard self.autoMovementArmed else {
+                self.smartCaptureState = "نفس الزاوية — لف المجسم لمكان جديد"
+                return
+            }
+
+            guard changeFromLastAccepted >= self.options.noveltyThreshold else {
+                self.smartCaptureState = "التغيير قليل — لف المجسم أكثر"
+                return
+            }
+
+            guard self.autoStableFrameCount >= 2 else {
+                self.smartCaptureState = "زاوية جديدة — توقف لحظة"
+                return
+            }
+
+            self.smartCaptureState = "زاوية جديدة وثابتة — التقاط تلقائي"
+            self.autoStableFrameCount = 0
+            self.autoMovementArmed = false
             self.requestPhotoCapture(signature: signature)
         }
     }
@@ -540,10 +616,11 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         let pixels = base.assumingMemoryBound(to: UInt8.self)
         let cols = 32
         let rows = 24
-        let x0 = Int(Double(width) * 0.12)
-        let x1 = Int(Double(width) * 0.88)
-        let y0 = Int(Double(height) * 0.10)
-        let y1 = Int(Double(height) * 0.90)
+        // Concentrate the signature on the framed object, not the static background.
+        let x0 = Int(Double(width) * 0.20)
+        let x1 = Int(Double(width) * 0.80)
+        let y0 = Int(Double(height) * 0.18)
+        let y1 = Int(Double(height) * 0.82)
         let roiWidth = max(1, x1 - x0)
         let roiHeight = max(1, y1 - y0)
 
@@ -685,6 +762,18 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         }
     }
 
+    private func pauseLiveCameraForReview() {
+        videoOutput.setSampleBufferDelegate(nil, queue: nil)
+        cameraReady = false
+        cameraLocked = false
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+            }
+        }
+    }
+
     private func stopLiveCamera() {
         videoOutput.setSampleBufferDelegate(nil, queue: nil)
         cameraReady = false
@@ -701,6 +790,8 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
 
     private func cleanup(removeWorkingFiles: Bool) {
         resetSignatures(keepAccepted: false)
+        autoStableFrameCount = 0
+        autoMovementArmed = false
         pendingAction = .none
         reconstructionTask?.cancel()
         reconstructionTask = nil

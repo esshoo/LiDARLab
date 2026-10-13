@@ -21,7 +21,8 @@ struct TurntableObjectScanView: View {
         Group {
             switch model.phase {
             case .idle: introView
-            case .preparingCamera, .ready, .capturing, .readyToReconstruct: cameraView
+            case .preparingCamera, .ready, .capturing: cameraView
+            case .readyToReconstruct: reviewView
             case .reconstructing: processingView
             case .completed: completedView
             case .failed: failedView
@@ -66,10 +67,16 @@ struct TurntableObjectScanView: View {
             id: "color3d.turntable",
             active: model.phase != .idle && model.phase != .completed && model.phase != .failed
         )
-        .onAppear { torch.refreshAvailability() }
+        .onAppear {
+            torch.refreshAvailability()
+            model.refreshCaptureOptionsForNextPass()
+        }
+        .onChange(of: captureModeRaw) { _, _ in
+            model.refreshCaptureOptionsForNextPass()
+        }
         .onChange(of: model.phase) { _, phase in
             switch phase {
-            case .reconstructing, .completed, .failed:
+            case .readyToReconstruct, .reconstructing, .completed, .failed:
                 torch.turnOff()
                 panel = nil
             default:
@@ -224,11 +231,12 @@ struct TurntableObjectScanView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
+                .disabled(!model.canStopPass)
             }
         case .readyToReconstruct:
             LiveCameraBottomBar {
                 Button {
-                    model.startPass()
+                    model.startAdditionalPass()
                 } label: {
                     Image(systemName: "arrow.2.circlepath")
                 }
@@ -308,10 +316,11 @@ struct TurntableObjectScanView: View {
                             Label("إيقاف الجولة", systemImage: "stop.circle").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
+                        .disabled(!model.canStopPass)
                     }
                     if model.phase == .readyToReconstruct {
                         Button {
-                            model.startPass()
+                            model.startAdditionalPass()
                             self.panel = nil
                         } label: {
                             Label("جولة إضافية", systemImage: "arrow.2.circlepath").frame(maxWidth: .infinity)
@@ -321,6 +330,84 @@ struct TurntableObjectScanView: View {
                 }
             }
         }
+    }
+
+    private var reviewView: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 58))
+                    .foregroundStyle(.green)
+
+                Text("اكتملت الجولة \(model.passNumber)")
+                    .font(.title2.bold())
+
+                Text("تم إيقاف الكاميرا. لديك \(model.capturedImageCount) صورة محفوظة حتى الآن.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    VStack(spacing: 4) {
+                        Text("\(model.passImageCount)")
+                            .font(.title2.bold().monospacedDigit())
+                        Text("صور الجولة")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    Divider().frame(height: 48)
+
+                    VStack(spacing: 4) {
+                        Text("\(model.capturedImageCount)")
+                            .font(.title2.bold().monospacedDigit())
+                        Text("إجمالي الصور")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .padding()
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+
+                if !model.canFinishCapture {
+                    Label(
+                        "عدد الصور غير كافٍ للبناء بعد. ابدأ جولة إضافية والتقط زوايا أكثر.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+                }
+
+                Button {
+                    model.startAdditionalPass()
+                } label: {
+                    Label("بدء جولة إضافية", systemImage: "arrow.2.circlepath")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button {
+                    model.reconstructNow()
+                } label: {
+                    Label("بناء النموذج الآن", systemImage: "cube.transparent.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.large)
+                .disabled(!model.canFinishCapture)
+            }
+            .padding()
+            .frame(maxWidth: 620)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
     }
 
     private var processingView: some View {
