@@ -66,12 +66,18 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     private var pendingCaptureSignature: FrameSignature?
     private var latestSignature: FrameSignature?
 
+    private enum PendingAction {
+        case none
+        case finishPass
+        case reconstruct
+    }
+
     private var cameraDevice: AVCaptureDevice?
     private var captureInFlight = false
     private var lastAnalysisTimestamp: TimeInterval = -100
     private var lastAcceptedCaptureTimestamp: TimeInterval = -100
     private var analysisPausedUntil: TimeInterval = -100
-    private var pendingFinish = false
+    private var pendingAction: PendingAction = .none
     private var workFolderURL: URL?
     private var imagesURL: URL?
     private var localModelURL: URL?
@@ -151,7 +157,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         }
 
         lockCameraSettings()
-        pendingFinish = false
+        pendingAction = .none
         resetSignatures(keepAccepted: true)
         phase = .capturing
         lastAnalysisTimestamp = -100
@@ -205,7 +211,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     func stopPass() {
         guard phase == .capturing else { return }
         if captureInFlight {
-            pendingFinish = true
+            pendingAction = .finishPass
             statusMessage = "انتظار حفظ آخر صورة…"
         } else {
             finishCurrentPass()
@@ -214,11 +220,18 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
 
     func reconstructNow() {
         guard phase == .readyToReconstruct || (phase == .capturing && canFinishCapture) else { return }
+
+        // Exit the live-camera UI immediately. If a still image is still being
+        // processed, finish saving it and continue directly into reconstruction.
+        phase = .reconstructing
+        reconstructionProgress = 0
+
         if captureInFlight {
-            pendingFinish = true
-            statusMessage = "انتظار حفظ آخر صورة قبل البناء…"
+            pendingAction = .reconstruct
+            statusMessage = "انتظار حفظ آخر صورة ثم بدء بناء النموذج…"
             return
         }
+
         beginReconstruction()
     }
 
@@ -374,14 +387,28 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         if let error {
             DispatchQueue.main.async {
                 self.captureInFlight = false
-                self.statusMessage = "تعذر حفظ صورة: \(error.localizedDescription)"
+                if case .reconstruct = self.pendingAction {
+                    self.pendingAction = .none
+                    self.phase = .readyToReconstruct
+                    self.statusMessage = "تعذر حفظ آخر صورة. يمكنك محاولة بناء النموذج مرة أخرى من الصور المحفوظة."
+                } else {
+                    self.pendingAction = .none
+                    self.statusMessage = "تعذر حفظ صورة: \(error.localizedDescription)"
+                }
             }
             return
         }
         guard let data = photo.fileDataRepresentation(), let imagesURL else {
             DispatchQueue.main.async {
                 self.captureInFlight = false
-                self.statusMessage = "تعذر استخراج بيانات الصورة."
+                if case .reconstruct = self.pendingAction {
+                    self.pendingAction = .none
+                    self.phase = .readyToReconstruct
+                    self.statusMessage = "تعذر استخراج آخر صورة. يمكنك محاولة بناء النموذج مرة أخرى من الصور المحفوظة."
+                } else {
+                    self.pendingAction = .none
+                    self.statusMessage = "تعذر استخراج بيانات الصورة."
+                }
             }
             return
         }
@@ -409,11 +436,19 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
                         : "تم التقاط الصورة يدويًا"
                     self.statusMessage = "تم حفظ \(self.passImageCount) صورة في الجولة الحالية."
 
-                    if self.options.captureMode == .smartAutomatic, self.passImageCount >= self.targetImagesPerPass {
-                        self.stopPass()
-                    } else if self.pendingFinish {
-                        self.pendingFinish = false
+                    let pendingAction = self.pendingAction
+                    self.pendingAction = .none
+
+                    switch pendingAction {
+                    case .reconstruct:
+                        self.beginReconstruction()
+                    case .finishPass:
                         self.finishCurrentPass()
+                    case .none:
+                        if self.options.captureMode == .smartAutomatic,
+                           self.passImageCount >= self.targetImagesPerPass {
+                            self.finishCurrentPass()
+                        }
                     }
                 }
             } catch {
@@ -558,15 +593,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
             return
         }
 
-        // Release live camera resources before photogrammetry. Running both pipelines at
-        // once creates unnecessary memory/thermal pressure on the phone.
-        videoOutput.setSampleBufferDelegate(nil, queue: nil)
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            if self.captureSession.isRunning { self.captureSession.stopRunning() }
-        }
-        cameraReady = false
-        cameraLocked = false
+        stopLiveCamera()
 
         phase = .reconstructing
         reconstructionProgress = 0
@@ -637,6 +664,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
                         }
 
                         await MainActor.run {
+                            self.stopLiveCamera()
                             self.modelURL = published
                             self.reconstructionProgress = 1
                             self.phase = .completed
@@ -647,6 +675,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
                 }
             } catch {
                 await MainActor.run {
+                    self.stopLiveCamera()
                     self.phase = .failed
                     self.errorMessage = error.localizedDescription
                     self.statusMessage = "فشلت إعادة بناء نموذج Turntable."
@@ -656,19 +685,28 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         }
     }
 
+    private func stopLiveCamera() {
+        videoOutput.setSampleBufferDelegate(nil, queue: nil)
+        cameraReady = false
+        cameraLocked = false
+
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+            }
+            self.cameraDevice = nil
+        }
+    }
+
     private func cleanup(removeWorkingFiles: Bool) {
         resetSignatures(keepAccepted: false)
-        pendingFinish = false
+        pendingAction = .none
         reconstructionTask?.cancel()
         reconstructionTask = nil
         photogrammetrySession?.cancel()
         photogrammetrySession = nil
-        videoOutput.setSampleBufferDelegate(nil, queue: nil)
-
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            if self.captureSession.isRunning { self.captureSession.stopRunning() }
-        }
+        stopLiveCamera()
 
         if removeWorkingFiles, let workFolderURL { try? fileManager.removeItem(at: workFolderURL) }
         workFolderURL = nil

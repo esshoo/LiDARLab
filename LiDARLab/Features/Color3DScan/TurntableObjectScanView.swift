@@ -67,6 +67,15 @@ struct TurntableObjectScanView: View {
             active: model.phase != .idle && model.phase != .completed && model.phase != .failed
         )
         .onAppear { torch.refreshAvailability() }
+        .onChange(of: model.phase) { _, phase in
+            switch phase {
+            case .reconstructing, .completed, .failed:
+                torch.turnOff()
+                panel = nil
+            default:
+                break
+            }
+        }
         .onDisappear {
             torch.turnOff()
             if model.phase != .completed && model.phase != .idle {
