@@ -2,12 +2,15 @@ import Foundation
 import SwiftUI
 
 struct DistanceMeasureView: View {
+    private enum Panel { case options, results }
+
     @StateObject private var model = MeasurementViewModel()
     @State private var useCentimeters = false
     @State private var showingSaveDialog = false
     @State private var measurementName = "قياس"
     @State private var shareItems: [Any] = []
     @State private var showingShareSheet = false
+    @State private var panel: Panel?
 
     var body: some View {
         GeometryReader { geometry in
@@ -15,39 +18,72 @@ struct DistanceMeasureView: View {
                 MeasurementARViewContainer(model: model)
                     .ignoresSafeArea(edges: .bottom)
 
-                MeasurementOverlay(
-                    projection: model.projection,
-                    useCentimeters: useCentimeters
-                )
-                .allowsHitTesting(false)
+                MeasurementOverlay(projection: model.projection, useCentimeters: useCentimeters)
+                    .allowsHitTesting(false)
 
                 CrosshairView()
                     .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                     .allowsHitTesting(false)
 
-                VStack(spacing: 10) {
-                    topPanel
-                    Spacer(minLength: 120)
-                    resultsPanel
-                    controlsPanel
+                VStack {
+                    HStack {
+                        LiveCameraStatusBadge(
+                            title: model.statusMessage,
+                            detail: "\(model.pointCount) نقطة • AR: \(model.trackingState)",
+                            systemImage: "ruler"
+                        )
+                        Spacer()
+                    }
+                    .padding(.leading, 12)
+                    .padding(.top, 10)
+                    Spacer()
                 }
-                .padding(.horizontal, adaptiveHorizontalPadding(for: geometry.size.width))
-                .padding(.top, 10)
-                .padding(.bottom, 12)
+
+                HStack {
+                    Spacer()
+                    LiveCameraSideRail {
+                        LiveCameraSideButton(systemImage: "slider.horizontal.3", accessibilityLabel: "إعدادات القياس", isSelected: panel == .options) { toggle(.options) }
+                        LiveCameraSideButton(systemImage: "chart.bar.xaxis", accessibilityLabel: "نتائج القياس", isSelected: panel == .results) { toggle(.results) }
+                        LiveCameraSideButton(systemImage: "arrow.uturn.backward", accessibilityLabel: "تراجع", isEnabled: model.pointCount > 0) { model.undo() }
+                        LiveCameraSideButton(systemImage: "square.and.arrow.down", accessibilityLabel: "حفظ", isEnabled: model.pointCount >= 2 && !model.isSaving) { showingSaveDialog = true }
+                        LiveCameraSideButton(systemImage: "trash", accessibilityLabel: "مسح القياس", tint: .red, isEnabled: model.pointCount > 0) { model.clear() }
+                    }
+                    .padding(.trailing, 10)
+                }
+
+                if let panel {
+                    HStack {
+                        Spacer()
+                        panelView(panel).padding(.trailing, 72)
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+
+                VStack {
+                    Spacer()
+                    LiveCameraBottomBar {
+                        Button {
+                            model.addPointAtCenter()
+                        } label: {
+                            Label("إضافة نقطة", systemImage: "plus.viewfinder")
+                                .font(.headline)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.bottom, 12)
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: panel != nil)
         }
         .background(.black)
         .navigationTitle("القياس المتعدد")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "measure.distance")
         .onDisappear { model.stop() }
-        .sheet(isPresented: $showingShareSheet) {
-            ActivityView(items: shareItems)
-        }
+        .sheet(isPresented: $showingShareSheet) { ActivityView(items: shareItems) }
         .alert("حفظ القياس", isPresented: $showingSaveDialog) {
             TextField("اسم القياس", text: $measurementName)
-            Button("حفظ") {
-                model.saveMeasurement(named: measurementName)
-            }
+            Button("حفظ") { model.saveMeasurement(named: measurementName) }
             Button("إلغاء", role: .cancel) {}
         } message: {
             Text("سيتم حفظ JSON وCSV وصورة للمشهد داخل مجلد Measurements.")
@@ -68,128 +104,56 @@ struct DistanceMeasureView: View {
         }
     }
 
-    private var topPanel: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(model.statusMessage)
-                        .font(.headline)
-                    Text("اضغط على أي سطح أو استخدم زر إضافة نقطة عند مؤشر المنتصف.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                Text("\(model.pointCount) نقطة")
-                    .font(.caption.monospacedDigit().bold())
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(.thinMaterial, in: Capsule())
-            }
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
 
-            HStack(spacing: 8) {
-                Label("AR: \(model.trackingState)", systemImage: "location.viewfinder")
-                    .font(.caption2.bold())
-                Spacer()
-                Picker("الوحدة", selection: $useCentimeters) {
-                    Text("متر").tag(false)
-                    Text("سم").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 170)
-            }
-        }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var resultsPanel: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                resultMetric(title: "الإجمالي", value: formatted(model.totalDirectMeters), image: "sum")
-                resultMetric(title: "آخر ضلع", value: formatted(model.latestSegment?.directMeters), image: "ruler")
-            }
-            HStack(spacing: 10) {
-                resultMetric(title: "أفقي", value: formatted(model.latestSegment?.horizontalMeters), image: "arrow.left.and.right")
-                resultMetric(title: "رأسي", value: formatted(model.latestSegment?.verticalMeters), image: "arrow.up.and.down")
-            }
-        }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-    }
-
-    private var controlsPanel: some View {
-        VStack(spacing: 9) {
-            Button {
-                model.addPointAtCenter()
-            } label: {
-                Label("إضافة نقطة عند المؤشر", systemImage: "plus.viewfinder")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.borderedProminent)
-
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                Button {
-                    model.undo()
-                } label: {
-                    Label("تراجع", systemImage: "arrow.uturn.backward")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(model.pointCount == 0)
-
-                Button {
-                    model.toggleClosedPath()
-                } label: {
-                    Label(model.isClosedPath ? "فتح المسار" : "إغلاق المسار", systemImage: model.isClosedPath ? "lock.open" : "point.3.connected.trianglepath.dotted")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(model.pointCount < 3)
-
-                Button {
-                    showingSaveDialog = true
-                } label: {
-                    Label(model.isSaving ? "جارٍ الحفظ" : "حفظ", systemImage: model.isSaving ? "hourglass" : "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(model.pointCount < 2 || model.isSaving)
-
-                Menu {
-                    Button(role: .destructive) {
-                        model.clear()
-                    } label: {
-                        Label("مسح القياس", systemImage: "trash")
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .options:
+            LiveCameraFloatingPanel(title: "إعدادات القياس", systemImage: "slider.horizontal.3", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("الوحدة", selection: $useCentimeters) {
+                        Text("متر").tag(false)
+                        Text("سم").tag(true)
                     }
+                    .pickerStyle(.segmented)
+
+                    Button {
+                        model.toggleClosedPath()
+                    } label: {
+                        Label(model.isClosedPath ? "فتح المسار" : "إغلاق المسار", systemImage: model.isClosedPath ? "lock.open" : "point.3.connected.trianglepath.dotted")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.pointCount < 3)
+
                     Button {
                         model.startSession(resetTracking: true)
                     } label: {
                         Label("إعادة التتبع", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
                     }
-                } label: {
-                    Label("المزيد", systemImage: "ellipsis.circle")
-                        .frame(maxWidth: .infinity)
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
             }
-            .font(.caption.bold())
+        case .results:
+            LiveCameraFloatingPanel(title: "نتائج القياس", systemImage: "chart.bar.xaxis", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    resultMetric(title: "الإجمالي", value: formatted(model.totalDirectMeters), image: "sum")
+                    resultMetric(title: "آخر ضلع", value: formatted(model.latestSegment?.directMeters), image: "ruler")
+                    resultMetric(title: "أفقي", value: formatted(model.latestSegment?.horizontalMeters), image: "arrow.left.and.right")
+                    resultMetric(title: "رأسي", value: formatted(model.latestSegment?.verticalMeters), image: "arrow.up.and.down")
+                }
+            }
         }
     }
 
     private func resultMetric(title: String, value: String, image: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: image)
-                .foregroundStyle(.cyan)
+            Image(systemName: image).foregroundStyle(.cyan)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(value)
-                    .font(.headline.monospacedDigit())
-                    .minimumScaleFactor(0.65)
-                    .lineLimit(1)
+                Text(title).font(.caption2).foregroundStyle(.secondary)
+                Text(value).font(.headline.monospacedDigit()).minimumScaleFactor(0.65).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -200,14 +164,8 @@ struct DistanceMeasureView: View {
 
     private func formatted(_ meters: Double?) -> String {
         guard let meters else { return "—" }
-        if useCentimeters {
-            return String(format: "%.1f سم", meters * 100)
-        }
+        if useCentimeters { return String(format: "%.1f سم", meters * 100) }
         return String(format: "%.3f م", meters)
-    }
-
-    private func adaptiveHorizontalPadding(for width: CGFloat) -> CGFloat {
-        width >= 900 ? 28 : (width >= 600 ? 20 : 12)
     }
 }
 

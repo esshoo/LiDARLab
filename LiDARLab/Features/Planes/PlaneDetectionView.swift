@@ -30,8 +30,11 @@ private struct PlaneScreenOverlay: Identifiable, Equatable {
 }
 
 struct PlaneDetectionView: View {
+    private enum Panel { case filter, summary }
+
     @StateObject private var model = PlaneDetectionViewModel()
     @State private var filter: PlaneFilter = .all
+    @State private var panel: Panel?
 
     var body: some View {
         GeometryReader { geometry in
@@ -42,72 +45,86 @@ struct PlaneDetectionView: View {
                 PlaneOverlaysCanvas(overlays: visibleOverlays)
                     .allowsHitTesting(false)
 
-                VStack(spacing: 12) {
-                    controls
+                VStack {
+                    HStack {
+                        LiveCameraStatusBadge(
+                            title: "\(visibleOverlays.count) مستوى",
+                            detail: "AR: \(model.trackingState)",
+                            systemImage: "viewfinder.rectangular"
+                        )
+                        Spacer()
+                    }
+                    .padding(.leading, 12)
+                    .padding(.top, 10)
                     Spacer()
-                    summaryPanel
                 }
-                .padding(.horizontal, geometry.size.width >= 600 ? 20 : 12)
-                .padding(.vertical, 12)
+
+                HStack {
+                    Spacer()
+                    LiveCameraSideRail {
+                        LiveCameraSideButton(systemImage: "line.3.horizontal.decrease.circle", accessibilityLabel: "تصفية المستويات", isSelected: panel == .filter) { toggle(.filter) }
+                        LiveCameraSideButton(systemImage: "chart.bar.xaxis", accessibilityLabel: "ملخص المستويات", isSelected: panel == .summary) { toggle(.summary) }
+                        LiveCameraSideButton(systemImage: "arrow.clockwise", accessibilityLabel: "إعادة المسح") { model.restart() }
+                    }
+                    .padding(.trailing, 10)
+                }
+
+                if let panel {
+                    HStack {
+                        Spacer()
+                        panelView(panel).padding(.trailing, 72)
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+
+                VStack {
+                    Spacer()
+                    LiveCameraStatusBadge(
+                        title: "حرّك الجهاز ببطء أمام الجدران والأرضية",
+                        detail: filter == .all ? "يعرض كل المستويات" : "الفلتر: \(filter.title)",
+                        systemImage: "figure.walk"
+                    )
+                    .padding(.bottom, 12)
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: panel != nil)
         }
         .background(.black)
         .navigationTitle("اكتشاف المستويات")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "planes.live")
         .onDisappear { model.stop() }
     }
 
     private var visibleOverlays: [PlaneScreenOverlay] {
         switch filter {
-        case .all:
-            model.overlays
-        case .horizontal:
-            model.overlays.filter { $0.alignment == .horizontal }
-        case .vertical:
-            model.overlays.filter { $0.alignment == .vertical }
+        case .all: model.overlays
+        case .horizontal: model.overlays.filter { $0.alignment == .horizontal }
+        case .vertical: model.overlays.filter { $0.alignment == .vertical }
         }
     }
 
-    private var controls: some View {
-        VStack(spacing: 10) {
-            Picker("نوع السطح", selection: $filter) {
-                ForEach(PlaneFilter.allCases) { item in
-                    Text(item.title).tag(item)
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
+
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .filter:
+            LiveCameraFloatingPanel(title: "تصفية المستويات", systemImage: "line.3.horizontal.decrease.circle", onClose: { self.panel = nil }) {
+                Picker("نوع السطح", selection: $filter) {
+                    ForEach(PlaneFilter.allCases) { item in Text(item.title).tag(item) }
+                }
+                .pickerStyle(.segmented)
+            }
+        case .summary:
+            LiveCameraFloatingPanel(title: "ملخص المستويات", systemImage: "chart.bar.xaxis", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    MetricChip(title: "كل المستويات", value: "\(model.overlays.count)", systemImage: "square.3.layers.3d")
+                    MetricChip(title: "أفقية", value: "\(model.horizontalCount)", systemImage: "rectangle.compress.vertical")
+                    MetricChip(title: "رأسية", value: "\(model.verticalCount)", systemImage: "rectangle.compress.horizontal")
                 }
             }
-            .pickerStyle(.segmented)
-
-            HStack {
-                Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
-                    .font(.caption.bold())
-                Spacer()
-                Button {
-                    model.restart()
-                } label: {
-                    Label("إعادة المسح", systemImage: "arrow.clockwise")
-                        .font(.caption.bold())
-                }
-                .buttonStyle(.bordered)
-            }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var summaryPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("حرّك الجهاز ببطء أمام الجدران والأرضية حتى تتسع الحدود المكتشفة.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 9)], spacing: 9) {
-                MetricChip(title: "كل المستويات", value: "\(model.overlays.count)", systemImage: "square.3.layers.3d")
-                MetricChip(title: "أفقية", value: "\(model.horizontalCount)", systemImage: "rectangle.compress.vertical")
-                MetricChip(title: "رأسية", value: "\(model.verticalCount)", systemImage: "rectangle.compress.horizontal")
-            }
-        }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 

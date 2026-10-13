@@ -85,10 +85,6 @@ struct Color3DScanView: View {
                     format: "Source Capture",
                     detail: "يمكن الاحتفاظ بصور Object Capture الأصلية لإعادة معالجة أعلى جودة على Mac"
                 )
-                Color3DScanExportRow(
-                    format: "Quality Report / JSON",
-                    detail: "يحفظ مع كل نموذج تقريرًا عن جودة الالتقاط، الصور المرفوضة، والتحذيرات التي ظهرت أثناء المسح"
-                )
             }
 
             Section("مهم") {

@@ -34,12 +34,15 @@ private enum PointCloudDensity: String, CaseIterable, Identifiable {
 }
 
 struct PointCloudView: View {
+    private enum Panel { case controls, metrics }
+
     @StateObject private var model = PointCloudViewModel()
     @State private var accumulatesPoints = true
     @State private var highConfidenceOnly = false
     @State private var colorMode: PointCloudColorMode = .depth
     @State private var density: PointCloudDensity = .medium
     @State private var pointSize = 5.0
+    @State private var panel: Panel?
 
     var body: some View {
         ZStack {
@@ -53,16 +56,43 @@ struct PointCloudView: View {
             )
             .ignoresSafeArea(edges: .bottom)
 
-            VStack(spacing: 12) {
-                controls
+            VStack {
+                HStack {
+                    LiveCameraStatusBadge(
+                        title: "\(model.pointCount.formatted(.number.notation(.compactName))) نقطة",
+                        detail: "AR: \(model.trackingState)",
+                        systemImage: "circle.grid.3x3.fill"
+                    )
+                    Spacer()
+                }
+                .padding(.leading, 12)
+                .padding(.top, 10)
                 Spacer()
-                metricsPanel
             }
-            .padding(12)
+
+            HStack {
+                Spacer()
+                LiveCameraSideRail {
+                    LiveCameraSideButton(systemImage: "slider.horizontal.3", accessibilityLabel: "إعدادات السحابة", isSelected: panel == .controls) { toggle(.controls) }
+                    LiveCameraSideButton(systemImage: "chart.bar.xaxis", accessibilityLabel: "إحصائيات السحابة", isSelected: panel == .metrics) { toggle(.metrics) }
+                    LiveCameraSideButton(systemImage: "trash", accessibilityLabel: "مسح النقاط", tint: .red) { model.clearCloud() }
+                }
+                .padding(.trailing, 10)
+            }
+
+            if let panel {
+                HStack {
+                    Spacer()
+                    panelView(panel)
+                        .padding(.trailing, 72)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .background(.black)
         .navigationTitle("السحابة النقطية")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "pointcloud.live")
         .onDisappear { model.stop() }
         .alert("تعذر تشغيل السحابة النقطية", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -74,119 +104,41 @@ struct PointCloudView: View {
         }
     }
 
-    private var controls: some View {
-        VStack(spacing: 10) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
+
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .controls:
+            LiveCameraFloatingPanel(title: "إعدادات السحابة", systemImage: "slider.horizontal.3", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 12) {
                     Toggle("تجميع النقاط", isOn: $accumulatesPoints)
                     Toggle("ثقة مرتفعة فقط", isOn: $highConfidenceOnly)
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("تجميع النقاط", isOn: $accumulatesPoints)
-                    Toggle("ثقة مرتفعة فقط", isOn: $highConfidenceOnly)
-                }
-            }
-            .font(.subheadline.bold())
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    menuPicker(title: "التلوين", value: colorMode.title) {
-                        ForEach(PointCloudColorMode.allCases) { item in
-                            Button(item.title) { colorMode = item }
-                        }
+                    Picker("التلوين", selection: $colorMode) {
+                        ForEach(PointCloudColorMode.allCases) { item in Text(item.title).tag(item) }
                     }
-                    menuPicker(title: "الكثافة", value: density.title) {
-                        ForEach(PointCloudDensity.allCases) { item in
-                            Button(item.title) { density = item }
-                        }
+                    Picker("الكثافة", selection: $density) {
+                        ForEach(PointCloudDensity.allCases) { item in Text(item.title).tag(item) }
                     }
-                    Spacer(minLength: 6)
-                    resetButton
-                }
-
-                VStack(spacing: 9) {
-                    HStack(spacing: 10) {
-                        menuPicker(title: "التلوين", value: colorMode.title) {
-                            ForEach(PointCloudColorMode.allCases) { item in
-                                Button(item.title) { colorMode = item }
-                            }
-                        }
-                        menuPicker(title: "الكثافة", value: density.title) {
-                            ForEach(PointCloudDensity.allCases) { item in
-                                Button(item.title) { density = item }
-                            }
-                        }
+                    HStack {
+                        Text("حجم النقطة")
+                        Slider(value: $pointSize, in: 2...10, step: 1)
+                        Text("\(Int(pointSize))").font(.caption.monospacedDigit())
                     }
-                    resetButton.frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
-
-            HStack(spacing: 10) {
-                Image(systemName: "circle.fill")
-                    .font(.system(size: pointSize))
-                Slider(value: $pointSize, in: 2...10, step: 1)
-                Text("\(Int(pointSize))")
-                    .font(.caption.monospacedDigit())
-                    .frame(width: 22)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("حجم النقطة")
-        }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var resetButton: some View {
-        Button { model.clearCloud() } label: {
-            Label("مسح النقاط", systemImage: "trash")
-                .font(.caption.bold())
-        }
-        .buttonStyle(.bordered)
-    }
-
-    private func menuPicker<MenuContent: View>(
-        title: String,
-        value: String,
-        @ViewBuilder content: () -> MenuContent
-    ) -> some View {
-        Menu(content: content) {
-            HStack(spacing: 5) {
-                Text(title).foregroundStyle(.secondary)
-                Text(value).fontWeight(.semibold)
-                Image(systemName: "chevron.up.chevron.down").font(.caption2)
-            }
-            .font(.caption)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.thinMaterial, in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var metricsPanel: some View {
-        VStack(spacing: 10) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 94), spacing: 8)], spacing: 8) {
-                MetricChip(title: "النقاط", value: model.pointCount.formatted(.number.notation(.compactName)), systemImage: "circle.grid.3x3.fill")
-                MetricChip(title: "الإطارات", value: "\(model.processedFrameCount)", systemImage: "rectangle.stack")
-                MetricChip(title: "المعدل", value: String(format: "%.1f Hz", model.processingRate), systemImage: "speedometer")
-            }
-
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
-                    Spacer(minLength: 8)
-                    Text(accumulatesPoints ? "تحرّك ببطء لبناء السحابة" : "عرض مباشر للإطار الحالي")
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
-                    Text(accumulatesPoints ? "تحرّك ببطء لبناء السحابة" : "عرض مباشر للإطار الحالي")
+        case .metrics:
+            LiveCameraFloatingPanel(title: "إحصائيات السحابة", systemImage: "chart.bar.xaxis", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    MetricChip(title: "النقاط", value: model.pointCount.formatted(.number.notation(.compactName)), systemImage: "circle.grid.3x3.fill")
+                    MetricChip(title: "الإطارات", value: "\(model.processedFrameCount)", systemImage: "rectangle.stack")
+                    MetricChip(title: "المعدل", value: String(format: "%.1f Hz", model.processingRate), systemImage: "speedometer")
+                    Text(accumulatesPoints ? "تحرّك ببطء لبناء السحابة." : "عرض مباشر للإطار الحالي.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 

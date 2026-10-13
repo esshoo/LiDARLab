@@ -2,58 +2,53 @@ import RealityKit
 import SwiftUI
 
 struct SceneMeshView: View {
+    private enum Panel { case controls, metrics }
+
     @StateObject private var model = SceneMeshViewModel()
     @State private var showMesh = true
+    @State private var panel: Panel?
 
     var body: some View {
         ZStack {
             SceneMeshARViewContainer(model: model, showMesh: $showMesh)
                 .ignoresSafeArea(edges: .bottom)
 
-            VStack(spacing: 12) {
-                ViewThatFits(in: .horizontal) {
-                    HStack {
-                        meshToggle
-                        Spacer(minLength: 8)
-                        restartButton
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        meshToggle
-                        restartButton
-                    }
+            VStack {
+                HStack {
+                    LiveCameraStatusBadge(
+                        title: "\(model.faceCount.formatted(.number.notation(.compactName))) مثلث",
+                        detail: "AR: \(model.trackingState)",
+                        systemImage: "cube.transparent"
+                    )
+                    Spacer()
                 }
-                .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-
+                .padding(.leading, 12)
+                .padding(.top, 10)
                 Spacer()
-
-                VStack(spacing: 10) {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 94), spacing: 9)], spacing: 9) {
-                        MetricChip(title: "الأجزاء", value: "\(model.anchorCount)", systemImage: "square.stack.3d.up")
-                        MetricChip(title: "الرؤوس", value: formatted(model.vertexCount), systemImage: "circle.grid.3x3")
-                        MetricChip(title: "المثلثات", value: formatted(model.faceCount), systemImage: "triangle")
-                    }
-
-                    ViewThatFits(in: .horizontal) {
-                        HStack {
-                            trackingLabel
-                            Spacer(minLength: 8)
-                            movementHint
-                        }
-                        VStack(alignment: .leading, spacing: 5) {
-                            trackingLabel
-                            movementHint
-                        }
-                    }
-                    .padding(.horizontal, 4)
-                }
             }
-            .padding(14)
+
+            HStack {
+                Spacer()
+                LiveCameraSideRail {
+                    LiveCameraSideButton(systemImage: "slider.horizontal.3", accessibilityLabel: "إعدادات الشبكة", isSelected: panel == .controls) { toggle(.controls) }
+                    LiveCameraSideButton(systemImage: "chart.bar.xaxis", accessibilityLabel: "إحصائيات الشبكة", isSelected: panel == .metrics) { toggle(.metrics) }
+                    LiveCameraSideButton(systemImage: "arrow.clockwise", accessibilityLabel: "إعادة المسح") { model.run(reset: true) }
+                }
+                .padding(.trailing, 10)
+            }
+
+            if let panel {
+                HStack {
+                    Spacer()
+                    panelView(panel).padding(.trailing, 72)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .background(.black)
         .navigationTitle("شبكة المكان")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "mesh.live")
         .onDisappear { model.stop() }
         .alert("تعذر تشغيل الشبكة", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -65,34 +60,30 @@ struct SceneMeshView: View {
         }
     }
 
-    private var meshToggle: some View {
-        Toggle("إظهار الشبكة", isOn: $showMesh)
-            .font(.subheadline.bold())
-    }
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
 
-    private var restartButton: some View {
-        Button {
-            model.run(reset: true)
-        } label: {
-            Label("إعادة المسح", systemImage: "arrow.clockwise")
-                .font(.caption.bold())
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .controls:
+            LiveCameraFloatingPanel(title: "إعدادات الشبكة", systemImage: "slider.horizontal.3", onClose: { self.panel = nil }) {
+                Toggle("إظهار شبكة المكان", isOn: $showMesh)
+                Text("أخفِ الشبكة مؤقتًا لرؤية الكاميرا بوضوح من غير إيقاف جلسة المسح.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .metrics:
+            LiveCameraFloatingPanel(title: "إحصائيات الشبكة", systemImage: "chart.bar.xaxis", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    MetricChip(title: "الأجزاء", value: "\(model.anchorCount)", systemImage: "square.stack.3d.up")
+                    MetricChip(title: "الرؤوس", value: model.vertexCount.formatted(.number.notation(.compactName)), systemImage: "circle.grid.3x3")
+                    MetricChip(title: "المثلثات", value: model.faceCount.formatted(.number.notation(.compactName)), systemImage: "triangle")
+                    Text("تحرّك ببطء حول المكان لتحسين التغطية.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
-        .buttonStyle(.borderedProminent)
-    }
-
-    private var trackingLabel: some View {
-        Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
-            .font(.caption.bold())
-    }
-
-    private var movementHint: some View {
-        Text("تحرّك ببطء حول المكان")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-    }
-
-    private func formatted(_ value: Int) -> String {
-        value.formatted(.number.notation(.compactName))
     }
 }
 

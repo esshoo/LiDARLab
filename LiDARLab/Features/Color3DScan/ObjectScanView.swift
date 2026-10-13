@@ -2,13 +2,15 @@ import RealityKit
 import SwiftUI
 
 struct GuidedObjectScanView: View {
+    private enum Panel { case info, actions }
+
     @StateObject private var model = ObjectScanViewModel()
     @StateObject private var torch = SharedTorchController()
-    @AppStorage(Color3DScanSettings.Key.qualityAssistantEnabled) private var qualityAssistantEnabled = true
     @State private var showPointCloud = false
     @State private var showModelPreview = false
     @State private var showCancelConfirmation = false
     @State private var showEarlyFinishConfirmation = false
+    @State private var panel: Panel?
 
     var body: some View {
         Group {
@@ -73,7 +75,10 @@ struct GuidedObjectScanView: View {
                 }
             }
         }
-        .keepScreenAwakeDuringColor3DScan(model.phase != .idle && model.phase != .completed && model.phase != .failed)
+        .keepScreenAwakeForLiveTool(
+            id: "color3d.object.guided",
+            active: model.phase != .idle && model.phase != .completed && model.phase != .failed
+        )
         .onAppear { torch.refreshAvailability() }
         .onDisappear { torch.turnOff() }
     }
@@ -81,8 +86,7 @@ struct GuidedObjectScanView: View {
     @ViewBuilder
     private func pointCloudView(session: ObjectCaptureSession) -> some View {
         if #available(iOS 18.0, *) {
-            ObjectCapturePointCloudView(session: session)
-                .showShotLocations()
+            ObjectCapturePointCloudView(session: session).showShotLocations()
         } else {
             ObjectCapturePointCloudView(session: session)
         }
@@ -91,18 +95,12 @@ struct GuidedObjectScanView: View {
     @ViewBuilder
     private var content: some View {
         switch model.phase {
-        case .idle:
-            startView
-        case .aiming:
-            aimingView
-        case .preparing, .readyForDetection, .detecting, .capturing, .finishing:
-            officialCaptureView
-        case .reconstructing:
-            processingView
-        case .completed:
-            completedView
-        case .failed:
-            failureView
+        case .idle: startView
+        case .aiming: aimingView
+        case .preparing, .readyForDetection, .detecting, .capturing, .finishing: officialCaptureView
+        case .reconstructing: processingView
+        case .completed: completedView
+        case .failed: failureView
         }
     }
 
@@ -112,24 +110,11 @@ struct GuidedObjectScanView: View {
                 Image(systemName: "cube.transparent.fill")
                     .font(.system(size: 72, weight: .light))
                     .foregroundStyle(.cyan)
-
                 Text("مسح مجسم باستخدام Object Capture")
                     .font(.title2.bold())
-
-                Text("اللمس هنا مرحلة توجيه فقط: تختار المجسم، ثم تضعه في منتصف الإطار. بعد ذلك تتولى واجهة Apple اكتشاف حدوده وعرض الـPoint Cloud وCapture Dial أثناء الدوران.")
+                Text("اختر المجسم باللمس، ضع الهدف في المنتصف، ثم اترك Object Capture يدير الاكتشاف والتغطية.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
-
-                VStack(alignment: .leading, spacing: 9) {
-                    Label("لف ببطء وحافظ على تداخل واضح بين الزوايا، ولا تعتمد على عدد الصور وحده.", systemImage: "arrow.triangle.2.circlepath")
-                    Label("الأجسام الشفافة أو شديدة اللمعان أو عديمة التفاصيل قد تتشوه في Photogrammetry؛ الإضاءة المنتشرة والخلفية البسيطة تساعد كثيرًا.", systemImage: "lightbulb.max")
-                    Label("استهدف إكمال Capture Dial ثم راجع Point Cloud قبل الإنهاء؛ 3 جولات من ارتفاعات مختلفة هي الإعداد الموصى به افتراضيًا.", systemImage: "point.3.connected.trianglepath.dotted")
-                }
-                .font(.subheadline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
-
                 Button {
                     model.startNewScan()
                 } label: {
@@ -141,7 +126,7 @@ struct GuidedObjectScanView: View {
                 .tint(.cyan)
             }
             .padding()
-            .frame(maxWidth: 720)
+            .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
         }
     }
@@ -151,85 +136,60 @@ struct GuidedObjectScanView: View {
             ObjectScanARViewContainer(model: model)
                 .ignoresSafeArea(edges: .bottom)
 
-            VStack(spacing: 0) {
-                aimingStatus
-                Spacer()
-                aimingControls
-            }
-        }
-    }
-
-    private var aimingStatus: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(model.phase.title)
-                    .font(.headline)
-                Spacer()
-                SharedTorchToggleButton(controller: torch, compact: true)
-                Text(model.trackingState)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-            }
-            Text(model.statusMessage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if model.targetSelected {
+            VStack {
                 HStack {
-                    Label(model.targetCentered ? "الهدف في المنتصف" : "حرّك الهدف للمنتصف",
-                          systemImage: model.targetCentered ? "scope" : "arrow.up.left.and.arrow.down.right")
-                        .foregroundStyle(model.targetCentered ? .green : .orange)
+                    LiveCameraStatusBadge(
+                        title: model.targetSelected ? (model.targetCentered ? "الهدف في المنتصف" : "حرّك الهدف للمنتصف") : "المس المجسم",
+                        detail: "AR: \(model.trackingState)",
+                        systemImage: "scope",
+                        accent: model.targetCentered ? .green : .cyan
+                    )
                     Spacer()
-                    if model.currentDistanceMeters > 0 {
-                        Text(String(format: "%.2f م", model.currentDistanceMeters))
-                            .monospacedDigit()
-                    }
                 }
-                .font(.caption)
+                .padding(.leading, 12)
+                .padding(.top, 10)
+                Spacer()
+            }
+
+            sideRail
+
+            if let panel {
+                HStack {
+                    Spacer()
+                    panelView(panel).padding(.trailing, 72)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+
+            VStack {
+                Spacer()
+                aimingBottomBar
+                    .padding(.bottom, 12)
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 17))
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
+        .animation(.easeInOut(duration: 0.18), value: panel != nil)
     }
 
-    private var aimingControls: some View {
-        VStack(spacing: 10) {
-            if !model.cameraReady {
-                ProgressView()
-                Text("تهيئة الكاميرا وبيانات العمق…")
-                    .font(.caption)
-            } else if !model.targetSelected {
-                Label("المس مباشرة على المجسم الذي تريد مسحه", systemImage: "hand.tap.fill")
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-            } else {
-                if model.shouldShowPreselectionMesh {
-                    Label("الشبكة الملوّنة فوق المشهد هي LiDAR Scene Mesh حقيقية تساعدك على التأكد أن الحساس يقرأ شكل السطح قبل بدء Object Capture.", systemImage: "triangle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+    @ViewBuilder
+    private var aimingBottomBar: some View {
+        if !model.cameraReady {
+            LiveCameraStatusBadge(title: "تهيئة الكاميرا…", systemImage: "hourglass")
+        } else if !model.targetSelected {
+            LiveCameraStatusBadge(title: "المس مباشرة على المجسم", detail: "لن يبدأ المسح قبل اختيار الهدف", systemImage: "hand.tap.fill")
+        } else {
+            LiveCameraBottomBar {
+                Button("اختيار من جديد") { model.clearTargetSelection() }
+                    .buttonStyle(.bordered)
+                Button {
+                    model.acceptTargetAndPrepareObjectCapture()
+                } label: {
+                    Label("اعتماد الهدف", systemImage: "checkmark.scope")
                 }
-
-                HStack {
-                    Button("اختيار من جديد") { model.clearTargetSelection() }
-                        .buttonStyle(.bordered)
-
-                    Button {
-                        model.acceptTargetAndPrepareObjectCapture()
-                    } label: {
-                        Label("اعتماد الهدف", systemImage: "checkmark.scope")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.cyan)
-                    .disabled(!model.targetCentered)
-                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+                .disabled(!model.targetCentered)
             }
         }
-        .padding(13)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .padding(12)
     }
 
     private var officialCaptureView: some View {
@@ -243,203 +203,196 @@ struct GuidedObjectScanView: View {
                         .ignoresSafeArea(edges: .bottom)
                 }
             } else {
-                Color.clear
+                Color.black
             }
 
-            VStack(spacing: 0) {
-                officialStatus
+            VStack {
+                HStack {
+                    LiveCameraStatusBadge(
+                        title: model.phase.title,
+                        detail: compactStatusDetail,
+                        systemImage: model.scanPassComplete ? "checkmark.circle.fill" : "viewfinder",
+                        accent: model.scanPassComplete ? .green : .cyan
+                    )
+                    Spacer()
+                }
+                .padding(.leading, 12)
+                .padding(.top, 10)
                 Spacer()
-                officialControls
             }
+
+            sideRail
+
+            if let panel {
+                HStack {
+                    Spacer()
+                    panelView(panel).padding(.trailing, 72)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+
+            VStack {
+                Spacer()
+                officialBottomBar
+                    .padding(.bottom, 12)
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: panel != nil)
+    }
+
+    private var sideRail: some View {
+        HStack {
+            Spacer()
+            LiveCameraSideRail {
+                LiveCameraSideButton(
+                    systemImage: torch.isOn ? "flashlight.on.fill" : "flashlight.off.fill",
+                    accessibilityLabel: "الكشاف",
+                    tint: torch.isOn ? .yellow : nil,
+                    isEnabled: torch.isAvailable
+                ) { torch.toggle() }
+                LiveCameraSideButton(systemImage: "info.circle", accessibilityLabel: "معلومات المسح", isSelected: panel == .info) { toggle(.info) }
+                LiveCameraSideButton(systemImage: "ellipsis.circle", accessibilityLabel: "إجراءات إضافية", isSelected: panel == .actions) { toggle(.actions) }
+                if model.captureSession != nil {
+                    LiveCameraSideButton(systemImage: "point.3.connected.trianglepath.dotted", accessibilityLabel: "مراجعة Point Cloud") { showPointCloud = true }
+                }
+            }
+            .padding(.trailing, 10)
         }
     }
 
-    private var officialStatus: some View {
-        VStack(spacing: 7) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(model.phase.title)
-                        .font(.headline)
-                    Text(model.statusMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                SharedTorchToggleButton(controller: torch, compact: true)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(model.shotCount)")
-                        .font(.title3.bold().monospacedDigit())
-                    Text("صورة")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if model.phase == .capturing {
-                HStack {
-                    Label("الجولة الحالية \(model.passNumber)", systemImage: "arrow.triangle.2.circlepath")
-                    Spacer()
-                    Label("مكتملة \(model.completedPasses)/\(model.recommendedPasses)", systemImage: "checkmark.circle")
-                        .foregroundStyle(model.completedPasses >= model.recommendedPasses ? Color.green : Color.secondary)
-                }
-                .font(.caption)
-
-                HStack {
-                    Label(model.captureTrackingState, systemImage: "scope")
-                    Spacer()
-                    if model.scanPassComplete {
-                        Label("راجع Point Cloud", systemImage: "point.3.connected.trianglepath.dotted")
-                            .foregroundStyle(.green)
-                    } else {
-                        Text("أكمل Capture Dial")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .font(.caption)
-            }
-
-            if let feedback = model.feedbackMessage {
-                Label(feedback, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if qualityAssistantEnabled, model.phase == .capturing || model.phase == .detecting {
-                Color3DScanQualityCard(assessment: model.qualityAssessment, compact: true)
-            }
+    private var compactStatusDetail: String {
+        if model.phase == .capturing {
+            return "\(model.shotCount) صورة • جولة \(model.passNumber) • \(model.captureTrackingState)"
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 17))
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
+        return model.statusMessage
     }
 
     @ViewBuilder
-    private var officialControls: some View {
-        VStack(spacing: 10) {
-            switch model.phase {
-            case .preparing:
-                ProgressView()
-                Text("تهيئة Object Capture الرسمي…")
-                    .font(.caption)
-
-            case .readyForDetection:
-                Text("تأكد أن المجسم في منتصف الإطار؛ Apple ستكتشف حدوده من المركز.")
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
+    private var officialBottomBar: some View {
+        switch model.phase {
+        case .preparing:
+            LiveCameraStatusBadge(title: "تهيئة Object Capture…", systemImage: "hourglass")
+        case .readyForDetection:
+            LiveCameraBottomBar {
                 Button {
                     model.startOfficialDetection()
                 } label: {
-                    Label("بدء التعرف على المجسم", systemImage: "viewfinder")
+                    Label("بدء التعرف", systemImage: "viewfinder")
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.cyan)
-
-            case .detecting:
-                Text("عدّل Bounding Box حتى يحيط بالمجسم فقط. هذه هي مرحلة تحديد الحجم والشكل قبل الالتقاط.")
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-                HStack {
-                    Button("إعادة التحديد") { model.resetDetection() }
-                        .buttonStyle(.bordered)
-                    Button {
-                        model.startCapturing()
-                    } label: {
-                        Label("ابدأ المسح", systemImage: "record.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.cyan)
-                }
-
-            case .capturing:
-                HStack(spacing: 8) {
-                    Button {
-                        model.requestManualShot()
-                    } label: {
-                        Label("صورة إضافية", systemImage: "camera.fill")
-                    }
+            }
+        case .detecting:
+            LiveCameraBottomBar {
+                Button("إعادة التحديد") { model.resetDetection() }
                     .buttonStyle(.bordered)
-
-                    Button {
-                        showPointCloud = true
-                    } label: {
-                        Label("مراجعة الشبكة", systemImage: "point.3.connected.trianglepath.dotted")
-                    }
-                    .buttonStyle(.bordered)
+                Button {
+                    model.startCapturing()
+                } label: {
+                    Label("ابدأ المسح", systemImage: "record.circle")
+                        .font(.headline)
                 }
-
-                if model.scanPassComplete {
-                    Text("تمت الجولة الحالية. المعروض الآن هو Point Cloud الفعلي للجلسة مع مواقع الصور؛ لفّ النموذج وتأكد من عدم وجود مناطق ناقصة قبل المتابعة.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-
-                    HStack(spacing: 8) {
-                        Button("جولة إضافية") { model.beginAdditionalPass() }
-                            .buttonStyle(.bordered)
-                        Button("جولة بعد قلب المجسم") { model.beginPassAfterFlip() }
-                            .buttonStyle(.bordered)
-                    }
-                    .font(.caption)
+                .buttonStyle(.borderedProminent)
+            }
+        case .capturing:
+            LiveCameraBottomBar {
+                Button {
+                    model.requestManualShot()
+                } label: {
+                    Image(systemName: "camera.fill")
                 }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("صورة إضافية")
 
                 Button {
-                    if model.shouldWarnBeforeFinish {
-                        showEarlyFinishConfirmation = true
-                    } else {
-                        model.finishCapture()
-                    }
+                    if model.shouldWarnBeforeFinish { showEarlyFinishConfirmation = true }
+                    else { model.finishCapture() }
                 } label: {
-                    Label("إنهاء الآن وبناء النموذج", systemImage: "stop.circle.fill")
+                    Label("إنهاء", systemImage: "stop.circle.fill")
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
                 .disabled(!model.canFinishCapture)
+            }
+        case .finishing:
+            LiveCameraStatusBadge(title: "حفظ بيانات الالتقاط…", systemImage: "hourglass")
+        default:
+            EmptyView()
+        }
+    }
 
-                if !model.canFinishCapture {
-                    Text("زر الإنهاء يصبح متاحًا بعد \(model.minimumImagesBeforeFinish) صور، لكن جودة الشكل تعتمد أساسًا على اكتمال Capture Dial وPoint Cloud من كل الجهات.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                } else if model.completedPasses < model.recommendedPasses {
-                    Text("يمكنك الإنهاء يدويًا، لكن لديك \(model.completedPasses) من \(model.recommendedPasses) جولات موصى بها. الجولة الإضافية من ارتفاع مختلف تقلل الحواف الناقصة والتشوهات.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
+
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .info:
+            LiveCameraFloatingPanel(title: "حالة المسح", systemImage: "info.circle", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(model.statusMessage)
+                        .font(.caption)
+                    LabeledContent("الصور", value: "\(model.shotCount)")
+                    LabeledContent("الجولة الحالية", value: "\(model.passNumber)")
+                    LabeledContent("الجولات المكتملة", value: "\(model.completedPasses) / \(model.recommendedPasses)")
+                    if model.phase == .capturing {
+                        LabeledContent("تتبع الكاميرا", value: model.captureTrackingState)
+                    }
+                    if let feedback = model.feedbackMessage {
+                        Label(feedback, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    if model.targetSelected, model.currentDistanceMeters > 0 {
+                        LabeledContent("المسافة", value: String(format: "%.2f م", model.currentDistanceMeters))
+                    }
                 }
-
-            case .finishing:
-                ProgressView()
-                Text("حفظ بيانات Object Capture…")
-                    .font(.caption)
-
-            default:
-                EmptyView()
+            }
+        case .actions:
+            LiveCameraFloatingPanel(title: "إجراءات", systemImage: "ellipsis.circle", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    if model.phase == .capturing {
+                        Button {
+                            model.requestManualShot()
+                        } label: {
+                            Label("صورة إضافية", systemImage: "camera.fill").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        if model.scanPassComplete {
+                            Button {
+                                model.beginAdditionalPass()
+                                self.panel = nil
+                            } label: {
+                                Label("جولة إضافية", systemImage: "arrow.triangle.2.circlepath").frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            Button {
+                                model.beginPassAfterFlip()
+                                self.panel = nil
+                            } label: {
+                                Label("جولة بعد قلب المجسم", systemImage: "arrow.2.circlepath").frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    if model.targetSelected && model.phase == .aiming {
+                        Button("إلغاء اختيار الهدف") {
+                            model.clearTargetSelection()
+                            self.panel = nil
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
             }
         }
-        .padding(13)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .padding(12)
     }
 
     private var processingView: some View {
         VStack(spacing: 20) {
-            ProgressView(value: model.reconstructionProgress)
-                .frame(maxWidth: 420)
-            Image(systemName: "cube.transparent")
-                .font(.system(size: 54))
-                .foregroundStyle(.cyan)
-            Text("بناء النموذج بواسطة RealityKit")
-                .font(.title2.bold())
-            Text(model.statusMessage)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            ProgressView(value: model.reconstructionProgress).frame(maxWidth: 420)
+            Image(systemName: "cube.transparent").font(.system(size: 54)).foregroundStyle(.cyan)
+            Text("بناء النموذج بواسطة RealityKit").font(.title2.bold())
+            Text(model.statusMessage).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Text("\(Int(model.reconstructionProgress * 100))%")
                 .font(.title3.bold().monospacedDigit())
         }
@@ -449,43 +402,24 @@ struct GuidedObjectScanView: View {
     private var completedView: some View {
         ScrollView {
             VStack(spacing: 20) {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 70))
-                    .foregroundStyle(.green)
-                Text("تم إنشاء المجسم")
-                    .font(.title2.bold())
-
+                Image(systemName: "checkmark.seal.fill").font(.system(size: 70)).foregroundStyle(.green)
+                Text("تم إنشاء المجسم").font(.title2.bold())
                 if let url = model.modelURL {
-                    Button {
-                        showModelPreview = true
-                    } label: {
-                        Label("معاينة 3D", systemImage: "arkit")
-                            .frame(maxWidth: .infinity)
+                    Button { showModelPreview = true } label: {
+                        Label("معاينة 3D", systemImage: "arkit").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.cyan)
-
                     ShareLink(item: url) {
-                        Label("مشاركة USDZ", systemImage: "square.and.arrow.up")
-                            .frame(maxWidth: .infinity)
+                        Label("مشاركة USDZ", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                 }
-
-                if qualityAssistantEnabled {
-                    Color3DScanQualityCard(assessment: model.qualityAssessment)
-                }
-
                 if model.invalidSampleCount > 0 || model.skippedSampleCount > 0 {
                     VStack(alignment: .leading, spacing: 7) {
-                        Label("تشخيص الجودة", systemImage: "waveform.path.ecg")
-                            .font(.headline)
-                        if model.invalidSampleCount > 0 {
-                            Text("• صور غير صالحة: \(model.invalidSampleCount)")
-                        }
-                        if model.skippedSampleCount > 0 {
-                            Text("• صور لم تستخدمها RealityKit: \(model.skippedSampleCount)")
-                        }
+                        Label("تشخيص RealityKit", systemImage: "waveform.path.ecg").font(.headline)
+                        Text("صور غير صالحة: \(model.invalidSampleCount)")
+                        Text("صور تم تخطيها: \(model.skippedSampleCount)")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -493,7 +427,6 @@ struct GuidedObjectScanView: View {
                     .padding()
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
-
                 Button("مسح مجسم جديد") { model.cancelAndReset() }
             }
             .padding()
@@ -508,8 +441,7 @@ struct GuidedObjectScanView: View {
         } description: {
             Text(model.statusMessage)
         } actions: {
-            Button("بدء جلسة جديدة") { model.cancelAndReset() }
-                .buttonStyle(.borderedProminent)
+            Button("بدء جلسة جديدة") { model.cancelAndReset() }.buttonStyle(.borderedProminent)
         }
     }
 

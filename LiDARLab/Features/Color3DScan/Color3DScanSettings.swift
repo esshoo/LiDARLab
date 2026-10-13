@@ -306,7 +306,6 @@ enum TurntableCaptureMode: String, CaseIterable, Identifiable, Hashable {
 enum Color3DScanSettings {
     enum Key {
         static let keepScreenAwake = "color3d.settings.general.keepScreenAwake"
-        static let qualityAssistantEnabled = "color3d.settings.general.qualityAssistantEnabled"
         static let roomQualityPreset = "color3d.settings.room.qualityPreset"
         static let areaMaximumKeyframes = "color3d.settings.area.maximumKeyframes"
         static let areaImageMaxDimension = "color3d.settings.area.imageMaxDimension"
@@ -369,7 +368,6 @@ enum Color3DScanSettings {
         let object = ObjectScanDensityPreset.balanced.recommended
         defaults.register(defaults: [
             Key.keepScreenAwake: true,
-            Key.qualityAssistantEnabled: true,
             Key.roomQualityPreset: Color3DScanQualityPreset.balanced.rawValue,
             Key.areaMaximumKeyframes: area.maximumKeyframes,
             Key.areaImageMaxDimension: area.imageMaxDimension,
@@ -417,8 +415,8 @@ enum Color3DScanSettings {
 
             Key.turntableAutoCapture: true,
             Key.turntableCaptureMode: TurntableCaptureMode.smartAutomatic.rawValue,
-            Key.turntableNoveltyThreshold: 3.5,
-            Key.turntableStabilityThreshold: 0.85,
+            Key.turntableNoveltyThreshold: 0.055,
+            Key.turntableStabilityThreshold: 0.018,
             Key.turntableImagesPerPass: 48,
             Key.turntableCaptureInterval: 0.75
         ])
@@ -539,13 +537,22 @@ enum Color3DScanSettings {
         let captureMode = TurntableCaptureMode(
             rawValue: defaults.string(forKey: Key.turntableCaptureMode) ?? TurntableCaptureMode.smartAutomatic.rawValue
         ) ?? .smartAutomatic
+        // v8 used Vision feature-print distances. v10 uses a lightweight normalized
+        // luminance signature in the 0...1 range. Migrate legacy stored values safely.
+        let storedNovelty = defaults.double(forKey: Key.turntableNoveltyThreshold)
+        let storedStability = defaults.double(forKey: Key.turntableStabilityThreshold)
+        let novelty = storedNovelty > 0.35 ? 0.055 : min(max(storedNovelty, 0.02), 0.20)
+        let stability = storedStability > 0.20 ? 0.018 : min(max(storedStability, 0.004), 0.08)
+        if storedNovelty > 0.35 { defaults.set(novelty, forKey: Key.turntableNoveltyThreshold) }
+        if storedStability > 0.20 { defaults.set(stability, forKey: Key.turntableStabilityThreshold) }
+
         return TurntableCaptureOptions(
             captureMode: captureMode,
             autoCapture: captureMode == .smartAutomatic,
             imagesPerPass: min(max(defaults.integer(forKey: Key.turntableImagesPerPass), 12), 120),
             captureInterval: min(max(defaults.double(forKey: Key.turntableCaptureInterval), 0.25), 3.0),
-            noveltyThreshold: Float(min(max(defaults.double(forKey: Key.turntableNoveltyThreshold), 0.5), 15.0)),
-            stabilityThreshold: Float(min(max(defaults.double(forKey: Key.turntableStabilityThreshold), 0.15), 5.0)),
+            noveltyThreshold: Float(novelty),
+            stabilityThreshold: Float(stability),
             keepSourceImages: object.keepSourceImages,
             minimumImagesBeforeFinish: object.minimumImagesBeforeFinish,
             highFeatureSensitivity: object.highFeatureSensitivity,
@@ -595,7 +602,6 @@ enum Color3DScanSettings {
     static func resetAll() {
         for key in [
             Key.keepScreenAwake,
-            Key.qualityAssistantEnabled,
             Key.roomQualityPreset,
             Key.areaMaximumKeyframes,
             Key.areaImageMaxDimension,

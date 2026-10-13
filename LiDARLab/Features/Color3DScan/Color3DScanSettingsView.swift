@@ -2,8 +2,6 @@ import Foundation
 import SwiftUI
 
 struct Color3DScanSettingsView: View {
-    @AppStorage(Color3DScanSettings.Key.keepScreenAwake) private var keepScreenAwake = true
-    @AppStorage(Color3DScanSettings.Key.qualityAssistantEnabled) private var qualityAssistantEnabled = true
     @AppStorage(Color3DScanSettings.Key.appleAreaAutoCapture) private var areaAutoCapture = true
     @AppStorage(Color3DScanSettings.Key.appleAreaHaptics) private var areaHaptics = true
     @AppStorage(Color3DScanSettings.Key.appleAreaOverCapture) private var areaOverCapture = false
@@ -26,8 +24,8 @@ struct Color3DScanSettingsView: View {
 
     @AppStorage(Color3DScanSettings.Key.turntableAutoCapture) private var turntableAutoCapture = true
     @AppStorage(Color3DScanSettings.Key.turntableCaptureMode) private var turntableCaptureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
-    @AppStorage(Color3DScanSettings.Key.turntableNoveltyThreshold) private var turntableNoveltyThreshold = 3.5
-    @AppStorage(Color3DScanSettings.Key.turntableStabilityThreshold) private var turntableStabilityThreshold = 0.85
+    @AppStorage(Color3DScanSettings.Key.turntableNoveltyThreshold) private var turntableNoveltyThreshold = 0.055
+    @AppStorage(Color3DScanSettings.Key.turntableStabilityThreshold) private var turntableStabilityThreshold = 0.018
     @AppStorage(Color3DScanSettings.Key.turntableImagesPerPass) private var turntableImagesPerPass = 48
     @AppStorage(Color3DScanSettings.Key.turntableCaptureInterval) private var turntableCaptureInterval = 0.75
 
@@ -53,15 +51,6 @@ struct Color3DScanSettingsView: View {
 
     var body: some View {
         Form {
-            Section {
-                Toggle("منع إطفاء الشاشة أثناء المسح", isOn: $keepScreenAwake)
-                Toggle("مساعد جودة المسح المباشر", isOn: $qualityAssistantEnabled)
-            } header: {
-                Label("عام أثناء المسح", systemImage: "display")
-            } footer: {
-                Text("منع إطفاء الشاشة يعمل فقط أثناء جلسة المسح. مساعد الجودة يعرض تقييمًا لحظيًا مبنيًا على تتبع Apple وتحذيرات الالتقاط ونتائج الصور، ولا يمثل نسبة اكتمال هندسي للنموذج.")
-            }
-
             Section {
                 Toggle("التقاط تلقائي", isOn: $areaAutoCapture)
                 Toggle("اهتزازات أثناء الالتقاط", isOn: $areaHaptics)
@@ -115,22 +104,22 @@ struct Color3DScanSettingsView: View {
                         HStack {
                             Text("حساسية اكتشاف زاوية جديدة")
                             Spacer()
-                            Text(String(format: "%.1f", turntableNoveltyThreshold))
+                            Text(String(format: "%.3f", turntableNoveltyThreshold))
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
                         }
-                        Slider(value: $turntableNoveltyThreshold, in: 0.5...12.0, step: 0.25)
+                        Slider(value: $turntableNoveltyThreshold, in: 0.02...0.20, step: 0.005)
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text("شرط هدوء الحركة")
                             Spacer()
-                            Text(String(format: "%.2f", turntableStabilityThreshold))
+                            Text(String(format: "%.3f", turntableStabilityThreshold))
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
                         }
-                        Slider(value: $turntableStabilityThreshold, in: 0.2...2.5, step: 0.05)
+                        Slider(value: $turntableStabilityThreshold, in: 0.004...0.08, step: 0.002)
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
@@ -147,7 +136,7 @@ struct Color3DScanSettingsView: View {
             } header: {
                 Label("وضع Turntable — كاميرا ثابتة", systemImage: "arrow.triangle.2.circlepath.camera")
             } footer: {
-                Text("في التلقائي الذكي يستخدم التطبيق تحليل تشابه بصري بين إطارات الكاميرا: لا يلتقط صورة جديدة إلا بعد تغيّر شكل المجسم عن اللقطات السابقة ثم هدوء الحركة. الوضع اليدوي لا يلتقط أي صورة إلا عند الضغط على زر التصوير.")
+                Text("في التلقائي الذكي يستخدم التطبيق مقارنة خفيفة لإطارات منخفضة الدقة بدل Vision الثقيلة: لا يلتقط صورة إلا بعد تغيّر واضح ثم هدوء الحركة. الوضع اليدوي لا يلتقط أي صورة إلا عند الضغط على زر التصوير.")
             }
 
             Section("المعالجة على iPhone") {
@@ -169,8 +158,6 @@ struct Color3DScanSettingsView: View {
         .confirmationDialog("استعادة إعدادات المسح الافتراضية؟", isPresented: $showResetConfirmation) {
             Button("استعادة", role: .destructive) {
                 Color3DScanSettings.resetAll()
-                keepScreenAwake = true
-                qualityAssistantEnabled = true
                 areaAutoCapture = true
                 areaHaptics = true
                 areaOverCapture = false
@@ -191,8 +178,8 @@ struct Color3DScanSettingsView: View {
                 objectPreferCompletedPassBeforeFinish = true
                 turntableAutoCapture = true
                 turntableCaptureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
-                turntableNoveltyThreshold = 3.5
-                turntableStabilityThreshold = 0.85
+                turntableNoveltyThreshold = 0.055
+                turntableStabilityThreshold = 0.018
                 turntableImagesPerPass = 48
                 turntableCaptureInterval = 0.75
             }

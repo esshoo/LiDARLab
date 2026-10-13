@@ -1,12 +1,14 @@
 import SwiftUI
 
 struct TurntableObjectScanView: View {
+    private enum Panel { case info, mode, actions }
+
     @StateObject private var model = TurntableObjectScanViewModel()
     @StateObject private var torch = SharedTorchController()
-    @AppStorage(Color3DScanSettings.Key.qualityAssistantEnabled) private var qualityAssistantEnabled = true
     @AppStorage(Color3DScanSettings.Key.turntableCaptureMode) private var captureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
     @State private var showPreview = false
     @State private var showCancelConfirmation = false
+    @State private var panel: Panel?
 
     private var selectedCaptureMode: Binding<TurntableCaptureMode> {
         Binding(
@@ -18,16 +20,11 @@ struct TurntableObjectScanView: View {
     var body: some View {
         Group {
             switch model.phase {
-            case .idle:
-                introView
-            case .preparingCamera, .ready, .capturing, .readyToReconstruct:
-                cameraView
-            case .reconstructing:
-                processingView
-            case .completed:
-                completedView
-            case .failed:
-                failedView
+            case .idle: introView
+            case .preparingCamera, .ready, .capturing, .readyToReconstruct: cameraView
+            case .reconstructing: processingView
+            case .completed: completedView
+            case .failed: failedView
             }
         }
         .navigationTitle("Turntable")
@@ -65,7 +62,10 @@ struct TurntableObjectScanView: View {
                 }
             }
         }
-        .keepScreenAwakeDuringColor3DScan(model.phase != .idle && model.phase != .completed && model.phase != .failed)
+        .keepScreenAwakeForLiveTool(
+            id: "color3d.turntable",
+            active: model.phase != .idle && model.phase != .completed && model.phase != .failed
+        )
         .onAppear { torch.refreshAvailability() }
         .onDisappear {
             torch.turnOff()
@@ -81,41 +81,22 @@ struct TurntableObjectScanView: View {
                 Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
                     .font(.system(size: 68, weight: .light))
                     .foregroundStyle(.cyan)
-
                 Text("الكاميرا ثابتة — المجسم يدور")
                     .font(.title2.bold())
-
-                Text("هذا الوضع يتبع طريقة Turntable التي تسمح بها Apple لالتقاط صور Object Capture: ثبّت الهاتف والخلفية والإضاءة، ولف المجسم ببطء أثناء التقاط سلسلة صور متداخلة.")
+                Text("ثبّت الهاتف والخلفية والإضاءة. اختر تلقائي ذكي أو يدوي، ثم لف المجسم نفسه بدل تحريك الكاميرا.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
 
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("طريقة التقاط الصور")
-                        .font(.headline)
-                    Picker("طريقة الالتقاط", selection: selectedCaptureMode) {
-                        ForEach(TurntableCaptureMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
+                Picker("طريقة الالتقاط", selection: selectedCaptureMode) {
+                    ForEach(TurntableCaptureMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
                     }
-                    .pickerStyle(.segmented)
-                    Text(selectedCaptureMode.wrappedValue.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
-                .padding()
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                .pickerStyle(.segmented)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("استخدم حاملًا ثابتًا ولا تحرك الهاتف أثناء الجولة.", systemImage: "camera.fill")
-                    Label("استخدم خلفية سادة وإضاءة موزعة بدون انعكاسات قوية.", systemImage: "lightbulb.max.fill")
-                    Label("اجعل الجسم يملأ أكبر جزء من الإطار بدون قص أي جزء منه.", systemImage: "viewfinder")
-                    Label("بعد دورة كاملة يمكنك قلب الجسم على جانب آخر وبدء جولة إضافية.", systemImage: "arrow.2.circlepath")
-                }
-                .font(.subheadline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                Text(selectedCaptureMode.wrappedValue.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 Button {
                     model.prepare()
@@ -128,7 +109,7 @@ struct TurntableObjectScanView: View {
                 .tint(.cyan)
             }
             .padding()
-            .frame(maxWidth: 720)
+            .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
         }
     }
@@ -140,164 +121,205 @@ struct TurntableObjectScanView: View {
 
             TurntableFramingGuide()
 
-            VStack(spacing: 0) {
-                statusOverlay
+            VStack {
+                HStack {
+                    LiveCameraStatusBadge(
+                        title: model.phase.title,
+                        detail: compactDetail,
+                        systemImage: model.isSmartAutomatic ? "sparkles" : "hand.tap"
+                    )
+                    Spacer()
+                }
+                .padding(.leading, 12)
+                .padding(.top, 10)
                 Spacer()
-                controlsOverlay
+            }
+
+            HStack {
+                Spacer()
+                LiveCameraSideRail {
+                    LiveCameraSideButton(
+                        systemImage: torch.isOn ? "flashlight.on.fill" : "flashlight.off.fill",
+                        accessibilityLabel: "الكشاف",
+                        tint: torch.isOn ? .yellow : nil,
+                        isEnabled: torch.isAvailable
+                    ) {
+                        torch.toggle()
+                        model.notifyLightingChanged()
+                    }
+                    LiveCameraSideButton(systemImage: "info.circle", accessibilityLabel: "حالة الالتقاط", isSelected: panel == .info) { toggle(.info) }
+                    LiveCameraSideButton(systemImage: "slider.horizontal.3", accessibilityLabel: "طريقة الالتقاط", isSelected: panel == .mode, isEnabled: model.phase == .ready || model.phase == .readyToReconstruct) { toggle(.mode) }
+                    LiveCameraSideButton(systemImage: "ellipsis.circle", accessibilityLabel: "إجراءات إضافية", isSelected: panel == .actions) { toggle(.actions) }
+                }
+                .padding(.trailing, 10)
+            }
+
+            if let panel {
+                HStack {
+                    Spacer()
+                    panelView(panel).padding(.trailing, 72)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+
+            VStack {
+                Spacer()
+                bottomBar
+                    .padding(.bottom, 12)
             }
         }
+        .animation(.easeInOut(duration: 0.18), value: panel != nil)
     }
 
-    private var statusOverlay: some View {
-        VStack(spacing: 8) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(model.phase.title)
-                        .font(.headline)
-                    Text(model.statusMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                Button {
-                    torch.toggle()
-                    model.notifyLightingChanged()
-                } label: {
-                    Image(systemName: torch.isOn ? "flashlight.on.fill" : "flashlight.off.fill")
-                        .font(.title3)
-                        .frame(width: 44, height: 42)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(torch.isOn ? .yellow : .gray)
-                .disabled(!torch.isAvailable)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(model.capturedImageCount)")
-                        .font(.title3.bold().monospacedDigit())
-                    Text("إجمالي الصور")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if model.phase == .capturing {
-                HStack {
-                    Label("الجولة \(model.passNumber)", systemImage: "arrow.triangle.2.circlepath")
-                    Spacer()
-                    Text("\(model.passImageCount) صورة / حد \(model.targetImagesPerPass)")
-                        .monospacedDigit()
-                }
-                .font(.caption)
-
-                Label(model.smartCaptureState, systemImage: model.isSmartAutomatic ? "sparkles" : "hand.tap")
-                    .font(.caption)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                if model.isSmartAutomatic, model.visualChangeScore > 0 {
-                    Text(String(format: "اختلاف المنظر: %.2f", model.visualChangeScore))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-
-            if model.cameraLocked {
-                Label("التركيز والتعريض وتوازن الأبيض مقفلة للجولة", systemImage: "lock.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if qualityAssistantEnabled, model.phase == .capturing {
-                Color3DScanQualityCard(assessment: model.qualityAssessment, compact: true)
-            }
+    private var compactDetail: String {
+        switch model.phase {
+        case .capturing:
+            return "الجولة \(model.passNumber) • \(model.passImageCount) صورة • \(model.smartCaptureState)"
+        case .readyToReconstruct:
+            return "\(model.capturedImageCount) صورة جاهزة للبناء"
+        default:
+            return model.statusMessage
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 17))
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
     }
 
     @ViewBuilder
-    private var controlsOverlay: some View {
-        VStack(spacing: 10) {
-            switch model.phase {
-            case .preparingCamera:
-                ProgressView()
-                Text("تهيئة الكاميرا…")
-                    .font(.caption)
-
-            case .ready:
+    private var bottomBar: some View {
+        switch model.phase {
+        case .preparingCamera:
+            LiveCameraStatusBadge(title: "تهيئة الكاميرا…", systemImage: "hourglass")
+        case .ready:
+            LiveCameraBottomBar {
                 Button {
                     model.startPass()
                 } label: {
-                    Label(model.isSmartAutomatic ? "قفل الكاميرا وبدء الالتقاط الذكي" : "قفل الكاميرا وبدء الجولة اليدوية", systemImage: "record.circle")
+                    Label(model.isSmartAutomatic ? "بدء الالتقاط الذكي" : "بدء الجولة اليدوية", systemImage: "record.circle")
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.cyan)
-
-            case .capturing:
-                HStack(spacing: 10) {
-                    Button {
-                        model.captureManualPhoto()
-                    } label: {
-                        Label(model.isSmartAutomatic ? "صورة يدويًا" : "التقاط صورة", systemImage: "camera.fill")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button {
-                        model.stopPass()
-                    } label: {
-                        Label("إيقاف الجولة", systemImage: "stop.circle.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
+            }
+        case .capturing:
+            LiveCameraBottomBar {
+                Button {
+                    model.captureManualPhoto()
+                } label: {
+                    Image(systemName: "camera.fill")
                 }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("التقاط صورة")
 
-            case .readyToReconstruct:
+                Button {
+                    model.stopPass()
+                } label: {
+                    Label("إيقاف الجولة", systemImage: "stop.circle.fill")
+                        .font(.headline)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+            }
+        case .readyToReconstruct:
+            LiveCameraBottomBar {
                 Button {
                     model.startPass()
                 } label: {
-                    Label("جولة إضافية بوضعية مختلفة", systemImage: "arrow.2.circlepath")
-                        .frame(maxWidth: .infinity)
+                    Image(systemName: "arrow.2.circlepath")
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel("جولة إضافية")
 
                 Button {
                     model.reconstructNow()
                 } label: {
-                    Label("بناء النموذج الآن", systemImage: "cube.transparent.fill")
+                    Label("بناء النموذج", systemImage: "cube.transparent.fill")
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
                 .disabled(!model.canFinishCapture)
+            }
+        default:
+            EmptyView()
+        }
+    }
 
-            default:
-                EmptyView()
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
+
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .info:
+            LiveCameraFloatingPanel(title: "حالة Turntable", systemImage: "info.circle", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(model.statusMessage).font(.caption)
+                    LabeledContent("طريقة الالتقاط", value: model.captureModeTitle)
+                    LabeledContent("إجمالي الصور", value: "\(model.capturedImageCount)")
+                    LabeledContent("الجولة", value: "\(model.passNumber)")
+                    LabeledContent("صور الجولة", value: "\(model.passImageCount) / \(model.targetImagesPerPass)")
+                    if model.phase == .capturing {
+                        LabeledContent("حالة الذكاء", value: model.smartCaptureState)
+                        if model.isSmartAutomatic {
+                            LabeledContent("اختلاف المنظر", value: String(format: "%.3f", model.visualChangeScore))
+                        }
+                    }
+                    if model.cameraLocked {
+                        Label("التركيز والتعريض وتوازن الأبيض مقفلة", systemImage: "lock.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+                }
+            }
+        case .mode:
+            LiveCameraFloatingPanel(title: "طريقة الالتقاط", systemImage: "slider.horizontal.3", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker("طريقة الالتقاط", selection: selectedCaptureMode) {
+                        ForEach(TurntableCaptureMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    .pickerStyle(.segmented)
+                    Text(selectedCaptureMode.wrappedValue.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("التغيير يطبق عند بدء الجولة التالية.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .actions:
+            LiveCameraFloatingPanel(title: "إجراءات", systemImage: "ellipsis.circle", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    if model.phase == .capturing {
+                        Button {
+                            model.captureManualPhoto()
+                        } label: {
+                            Label("التقاط صورة الآن", systemImage: "camera.fill").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        Button {
+                            model.stopPass()
+                            self.panel = nil
+                        } label: {
+                            Label("إيقاف الجولة", systemImage: "stop.circle").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    if model.phase == .readyToReconstruct {
+                        Button {
+                            model.startPass()
+                            self.panel = nil
+                        } label: {
+                            Label("جولة إضافية", systemImage: "arrow.2.circlepath").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
             }
         }
-        .padding(13)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .padding(12)
     }
 
     private var processingView: some View {
         VStack(spacing: 20) {
-            ProgressView(value: model.reconstructionProgress)
-                .frame(maxWidth: 420)
-            Image(systemName: "cube.transparent")
-                .font(.system(size: 54))
-                .foregroundStyle(.cyan)
-            Text("بناء نموذج Turntable")
-                .font(.title2.bold())
-            Text(model.statusMessage)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            ProgressView(value: model.reconstructionProgress).frame(maxWidth: 420)
+            Image(systemName: "cube.transparent").font(.system(size: 54)).foregroundStyle(.cyan)
+            Text("بناء نموذج Turntable").font(.title2.bold())
+            Text(model.statusMessage).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Text("\(Int(model.reconstructionProgress * 100))%")
                 .font(.title3.bold().monospacedDigit())
         }
@@ -308,49 +330,26 @@ struct TurntableObjectScanView: View {
         List {
             Section {
                 VStack(spacing: 10) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 54))
-                        .foregroundStyle(.green)
-                    Text("اكتمل نموذج Turntable")
-                        .font(.title2.bold())
+                    Image(systemName: "checkmark.seal.fill").font(.system(size: 54)).foregroundStyle(.green)
+                    Text("اكتمل نموذج Turntable").font(.title2.bold())
                     Text("استخدم RealityKit \(model.capturedImageCount) صورة من الكاميرا الثابتة.")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
             }
-
-            if qualityAssistantEnabled {
-                Section("تقرير الجودة") {
-                    Color3DScanQualityCard(assessment: model.qualityAssessment)
-                    if model.skippedDuplicateCount > 0 {
-                        LabeledContent("حالات تكرار منعها الالتقاط الذكي", value: "\(model.skippedDuplicateCount)")
-                    }
-                }
-            }
-
             if model.invalidSampleCount > 0 || model.skippedSampleCount > 0 {
                 Section("فحص الصور") {
                     LabeledContent("صور غير صالحة", value: "\(model.invalidSampleCount)")
                     LabeledContent("صور تم تخطيها", value: "\(model.skippedSampleCount)")
                 }
             }
-
             if let url = model.modelURL {
                 Section("النموذج") {
-                    Button {
-                        showPreview = true
-                    } label: {
-                        Label("معاينة 3D", systemImage: "arkit")
-                    }
-                    ShareLink(item: url) {
-                        Label("مشاركة USDZ", systemImage: "square.and.arrow.up")
-                    }
+                    Button { showPreview = true } label: { Label("معاينة 3D", systemImage: "arkit") }
+                    ShareLink(item: url) { Label("مشاركة USDZ", systemImage: "square.and.arrow.up") }
                 }
             }
-
-            Section {
-                Button("مسح مجسم جديد") { model.cancelAndReset() }
-            }
+            Section { Button("مسح مجسم جديد") { model.cancelAndReset() } }
         }
     }
 
@@ -360,8 +359,7 @@ struct TurntableObjectScanView: View {
         } description: {
             Text(model.statusMessage)
         } actions: {
-            Button("العودة") { model.cancelAndReset() }
-                .buttonStyle(.borderedProminent)
+            Button("العودة") { model.cancelAndReset() }.buttonStyle(.borderedProminent)
         }
     }
 }

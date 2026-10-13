@@ -1,10 +1,8 @@
 import AVFoundation
 import Combine
-import CoreVideo
 import Foundation
 import RealityKit
 import UIKit
-import Vision
 
 final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
     enum Phase: Equatable {
@@ -48,8 +46,6 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     @Published private(set) var cameraLocked = false
     @Published private(set) var smartCaptureState = "—"
     @Published private(set) var visualChangeScore: Float = 0
-    @Published private(set) var currentMotionScore: Float = 0
-    @Published private(set) var averageLuminance: Float = 0
     @Published private(set) var skippedDuplicateCount = 0
     @Published var errorMessage: String?
 
@@ -59,18 +55,22 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     private let fileQueue = DispatchQueue(label: "com.essam.3E.LiDARLab.turntable.files", qos: .utility)
     private let analysisQueue = DispatchQueue(label: "com.essam.3E.LiDARLab.turntable.analysis", qos: .userInitiated)
     private let fileManager = FileManager.default
-    private let featureLock = NSLock()
+    private let signatureLock = NSLock()
+
+    // Lightweight 32x24 luminance signatures. This intentionally replaces the old
+    // continuous Vision feature-print pipeline, which was too heavy for a live photo
+    // capture session on some phones and could terminate the app under memory pressure.
+    private typealias FrameSignature = [UInt8]
+    private var previousSignature: FrameSignature?
+    private var acceptedSignatures: [FrameSignature] = []
+    private var pendingCaptureSignature: FrameSignature?
+    private var latestSignature: FrameSignature?
 
     private var cameraDevice: AVCaptureDevice?
     private var captureInFlight = false
     private var lastAnalysisTimestamp: TimeInterval = -100
     private var lastAcceptedCaptureTimestamp: TimeInterval = -100
     private var analysisPausedUntil: TimeInterval = -100
-    private var lastDuplicateCountTimestamp: TimeInterval = -100
-    private var previousFeaturePrint: VNFeaturePrintObservation?
-    private var acceptedFeaturePrints: [VNFeaturePrintObservation] = []
-    private var pendingCaptureFeaturePrint: VNFeaturePrintObservation?
-    private var latestFeaturePrint: VNFeaturePrintObservation?
     private var pendingFinish = false
     private var workFolderURL: URL?
     private var imagesURL: URL?
@@ -86,7 +86,6 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     }
 
     var captureModeTitle: String { options.captureMode.title }
-
     var isSmartAutomatic: Bool { options.captureMode == .smartAutomatic }
 
     var progress: Double {
@@ -100,31 +99,6 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
 
     var estimatedPassDurationSeconds: Int {
         max(1, Int((Double(targetImagesPerPass) * options.captureInterval).rounded()))
-    }
-
-    var minimumImagesBeforeFinish: Int {
-        options.minimumImagesBeforeFinish
-    }
-
-    var qualityAssessment: Color3DScanQualityAssessment {
-        Color3DScanQualityEngine.turntable(
-            isSmartAutomatic: isSmartAutomatic,
-            cameraLocked: cameraLocked,
-            smartCaptureState: smartCaptureState,
-            visualChangeScore: visualChangeScore,
-            motionScore: currentMotionScore,
-            stabilityThreshold: options.stabilityThreshold,
-            averageLuminance: averageLuminance,
-            passImageCount: passImageCount,
-            targetImagesPerPass: targetImagesPerPass,
-            capturedImageCount: capturedImageCount,
-            minimumImages: minimumImagesBeforeFinish,
-            skippedDuplicateCount: skippedDuplicateCount,
-            invalidSampleCount: invalidSampleCount,
-            skippedSampleCount: skippedSampleCount,
-            isActive: phase == .capturing || phase == .readyToReconstruct,
-            isCompleted: phase == .completed
-        )
     }
 
     func prepare() {
@@ -149,16 +123,8 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         cameraReady = false
         smartCaptureState = options.captureMode == .smartAutomatic ? "بانتظار ثبات الكاميرا" : "التقاط يدوي"
         visualChangeScore = 0
-        currentMotionScore = 0
-        averageLuminance = 0
         skippedDuplicateCount = 0
-        lastDuplicateCountTimestamp = -100
-        featureLock.lock()
-        previousFeaturePrint = nil
-        acceptedFeaturePrints.removeAll(keepingCapacity: true)
-        pendingCaptureFeaturePrint = nil
-        latestFeaturePrint = nil
-        featureLock.unlock()
+        resetSignatures(keepAccepted: false)
         phase = .preparingCamera
         statusMessage = "جاري تشغيل الكاميرا الخلفية…"
 
@@ -186,30 +152,22 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
 
         lockCameraSettings()
         pendingFinish = false
-        featureLock.lock()
-        previousFeaturePrint = nil
-        pendingCaptureFeaturePrint = nil
-        latestFeaturePrint = nil
-        featureLock.unlock()
+        resetSignatures(keepAccepted: true)
         phase = .capturing
         lastAnalysisTimestamp = -100
         lastAcceptedCaptureTimestamp = -100
-        analysisPausedUntil = -100
-        lastDuplicateCountTimestamp = -100
+        analysisPausedUntil = Date().timeIntervalSinceReferenceDate + 0.45
         smartCaptureState = options.captureMode == .smartAutomatic
-            ? "لف المجسم ثم ثبته لحظة؛ سيتم التقاط المناظر الجديدة فقط"
-            : "الوضع اليدوي: اضغط صورة الآن لكل زاوية تريدها"
+            ? "لف المجسم، ثم توقف لحظة عند كل زاوية جديدة"
+            : "الوضع اليدوي: اضغط التقاط عند كل زاوية"
         statusMessage = options.captureMode == .smartAutomatic
-            ? "لف المجسم ببطء. التلقائي الذكي ينتظر زاوية جديدة ثم هدوء الحركة قبل التصوير."
-            : "لف المجسم للزاوية المطلوبة ثم اضغط صورة الآن. لا يوجد التقاط تلقائي في هذا الوضع."
+            ? "الالتقاط الذكي ينتظر تغيّرًا واضحًا ثم ثبات المنظر قبل التصوير."
+            : "لف المجسم للزاوية المطلوبة ثم اضغط التقاط صورة."
     }
 
     func notifyLightingChanged() {
         analysisPausedUntil = Date().timeIntervalSinceReferenceDate + 1.25
-        featureLock.lock()
-        previousFeaturePrint = nil
-        latestFeaturePrint = nil
-        featureLock.unlock()
+        resetSignatures(keepAccepted: true)
         smartCaptureState = "تغيّرت الإضاءة — انتظار استقرار الكاميرا"
 
         guard phase == .capturing, let device = cameraDevice else { return }
@@ -238,10 +196,10 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
 
     func captureManualPhoto() {
         guard phase == .capturing else { return }
-        featureLock.lock()
-        let feature = latestFeaturePrint
-        featureLock.unlock()
-        requestPhotoCapture(featurePrint: feature)
+        signatureLock.lock()
+        let signature = latestSignature
+        signatureLock.unlock()
+        requestPhotoCapture(signature: signature)
     }
 
     func stopPass() {
@@ -277,6 +235,9 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         sessionFolderURL = nil
         cameraLocked = false
         cameraReady = false
+        smartCaptureState = "—"
+        visualChangeScore = 0
+        skippedDuplicateCount = 0
         statusMessage = "ثبّت الآيفون على حامل ثم لف المجسم بدل تحريك الكاميرا."
         errorMessage = nil
     }
@@ -293,20 +254,14 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
                 self.captureSession.beginConfiguration()
                 self.captureSession.sessionPreset = .photo
 
-                for input in self.captureSession.inputs {
-                    self.captureSession.removeInput(input)
-                }
-                for output in self.captureSession.outputs {
-                    self.captureSession.removeOutput(output)
-                }
+                for input in self.captureSession.inputs { self.captureSession.removeInput(input) }
+                for output in self.captureSession.outputs { self.captureSession.removeOutput(output) }
 
                 guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
                     throw TurntableScanError.cameraUnavailable
                 }
                 let input = try AVCaptureDeviceInput(device: device)
-                guard self.captureSession.canAddInput(input) else {
-                    throw TurntableScanError.cameraUnavailable
-                }
+                guard self.captureSession.canAddInput(input) else { throw TurntableScanError.cameraUnavailable }
                 self.captureSession.addInput(input)
 
                 guard self.captureSession.canAddOutput(self.photoOutput) else {
@@ -332,10 +287,12 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
                 DispatchQueue.main.async {
                     self.cameraReady = true
                     self.phase = .ready
-                    self.statusMessage = "ثبّت الهاتف، اجعل المجسم يملأ أغلب الإطار بدون قص، ثم اضغط بدء الدورة."
+                    self.statusMessage = "ثبّت الهاتف، اجعل المجسم داخل الإطار، ثم ابدأ الجولة."
                 }
             } catch {
-                self.captureSession.commitConfiguration()
+                if self.captureSession.isRunning == false {
+                    self.captureSession.commitConfiguration()
+                }
                 DispatchQueue.main.async {
                     self.phase = .failed
                     self.errorMessage = error.localizedDescription
@@ -376,31 +333,25 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
             guard let self, let device = self.cameraDevice else { return }
             do {
                 try device.lockForConfiguration()
-                if device.isFocusModeSupported(.locked) {
-                    device.focusMode = .locked
-                }
-                if device.isExposureModeSupported(.locked) {
-                    device.exposureMode = .locked
-                }
-                if device.isWhiteBalanceModeSupported(.locked) {
-                    device.whiteBalanceMode = .locked
-                }
+                if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
+                if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
+                if device.isWhiteBalanceModeSupported(.locked) { device.whiteBalanceMode = .locked }
                 device.unlockForConfiguration()
                 DispatchQueue.main.async { self.cameraLocked = true }
             } catch {
                 DispatchQueue.main.async {
-                    self.statusMessage = "تعذر قفل بعض إعدادات الكاميرا؛ استمر لكن تجنب تغيّر الإضاءة."
+                    self.statusMessage = "تعذر قفل بعض إعدادات الكاميرا؛ تجنب تغيّر الإضاءة أثناء الجولة."
                 }
             }
         }
     }
 
-    private func requestPhotoCapture(featurePrint: VNFeaturePrintObservation? = nil) {
+    private func requestPhotoCapture(signature: FrameSignature? = nil) {
         guard !captureInFlight else { return }
         captureInFlight = true
-        featureLock.lock()
-        pendingCaptureFeaturePrint = featurePrint
-        featureLock.unlock()
+        signatureLock.lock()
+        pendingCaptureSignature = signature
+        signatureLock.unlock()
 
         sessionQueue.async { [weak self] in
             guard let self else { return }
@@ -446,15 +397,15 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
                     self.capturedImageCount += 1
                     self.passImageCount += 1
                     self.captureInFlight = false
-                    self.featureLock.lock()
-                    if let accepted = self.pendingCaptureFeaturePrint {
-                        self.acceptedFeaturePrints.append(accepted)
+                    self.signatureLock.lock()
+                    if let accepted = self.pendingCaptureSignature {
+                        self.acceptedSignatures.append(accepted)
                     }
-                    self.pendingCaptureFeaturePrint = nil
-                    self.featureLock.unlock()
+                    self.pendingCaptureSignature = nil
+                    self.signatureLock.unlock()
                     self.lastAcceptedCaptureTimestamp = Date().timeIntervalSinceReferenceDate
                     self.smartCaptureState = self.options.captureMode == .smartAutomatic
-                        ? "تم التقاط منظر جديد — حرّك المجسم للزاوية التالية"
+                        ? "تم التقاط زاوية جديدة — حرّك المجسم"
                         : "تم التقاط الصورة يدويًا"
                     self.statusMessage = "تم حفظ \(self.passImageCount) صورة في الجولة الحالية."
 
@@ -476,7 +427,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
 
     private func finishCurrentPass() {
         phase = .readyToReconstruct
-        statusMessage = "اكتملت الجولة \(passNumber) بعد \(passImageCount) صورة. يمكنك بناء النموذج أو وضع المجسم على جانب آخر وبدء جولة إضافية."
+        statusMessage = "اكتملت الجولة \(passNumber) بعد \(passImageCount) صورة. يمكنك البناء أو بدء جولة إضافية."
     }
 
     func captureOutput(
@@ -484,131 +435,116 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard output === videoOutput, phase == .capturing else { return }
+        guard output === videoOutput else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
-        guard timestamp.isFinite, timestamp - lastAnalysisTimestamp >= 0.18 else { return }
+        guard timestamp.isFinite, timestamp - lastAnalysisTimestamp >= 0.24 else { return }
         lastAnalysisTimestamp = timestamp
 
-        guard let feature = makeFeaturePrint(pixelBuffer: pixelBuffer) else { return }
-        let luminance = averageLuminanceValue(pixelBuffer: pixelBuffer)
+        guard let signature = makeFrameSignature(pixelBuffer: pixelBuffer) else { return }
 
-        featureLock.lock()
-        let previous = previousFeaturePrint
-        let acceptedSnapshot = acceptedFeaturePrints
-        latestFeaturePrint = feature
-        previousFeaturePrint = feature
-        featureLock.unlock()
+        signatureLock.lock()
+        let previous = previousSignature
+        let acceptedSnapshot = acceptedSignatures
+        latestSignature = signature
+        previousSignature = signature
+        signatureLock.unlock()
 
-        var motionDistance: Float = 0
-        if let previous {
-            try? previous.computeDistance(&motionDistance, to: feature)
-        }
-
-        var nearestAccepted = Float.greatestFiniteMagnitude
-        for accepted in acceptedSnapshot {
-            var distance: Float = 0
-            if (try? accepted.computeDistance(&distance, to: feature)) != nil {
-                nearestAccepted = min(nearestAccepted, distance)
+        let motionDistance = previous.map { signatureDistance($0, signature) } ?? 0
+        let nearestAccepted: Float
+        if acceptedSnapshot.isEmpty {
+            nearestAccepted = 1
+        } else {
+            nearestAccepted = acceptedSnapshot.reduce(Float.greatestFiniteMagnitude) {
+                min($0, signatureDistance($1, signature))
             }
-        }
-        if acceptedSnapshot.isEmpty { nearestAccepted = Float.greatestFiniteMagnitude }
-
-        DispatchQueue.main.async {
-            self.visualChangeScore = nearestAccepted.isFinite ? nearestAccepted : 0
-            self.currentMotionScore = motionDistance
-            self.averageLuminance = luminance
-        }
-
-        guard options.captureMode == .smartAutomatic else {
-            DispatchQueue.main.async { self.smartCaptureState = "يدوي — اضغط صورة الآن عند الزاوية المطلوبة" }
-            return
-        }
-        guard !captureInFlight else { return }
-
-        let now = Date().timeIntervalSinceReferenceDate
-        guard now >= analysisPausedUntil else { return }
-        let elapsed = now - lastAcceptedCaptureTimestamp
-        guard elapsed >= options.captureInterval else { return }
-
-        if !acceptedSnapshot.isEmpty, nearestAccepted < options.noveltyThreshold {
-            if now - lastDuplicateCountTimestamp >= 0.75 {
-                lastDuplicateCountTimestamp = now
-                DispatchQueue.main.async {
-                    self.skippedDuplicateCount += 1
-                }
-            }
-            DispatchQueue.main.async {
-                self.smartCaptureState = "منظر قريب من لقطة سابقة — واصل تدوير المجسم"
-            }
-            return
-        }
-
-        if motionDistance > options.stabilityThreshold {
-            DispatchQueue.main.async {
-                self.smartCaptureState = "المجسم يتحرك — ثبته لحظة عند الزاوية الجديدة"
-            }
-            return
         }
 
         DispatchQueue.main.async {
-            guard self.phase == .capturing, !self.captureInFlight else { return }
+            guard self.phase == .capturing else { return }
+            self.visualChangeScore = nearestAccepted
+
+            guard self.options.captureMode == .smartAutomatic else {
+                self.smartCaptureState = "يدوي — اضغط التقاط عند الزاوية المطلوبة"
+                return
+            }
+            guard !self.captureInFlight else { return }
+
+            let now = Date().timeIntervalSinceReferenceDate
+            guard now >= self.analysisPausedUntil else { return }
+            guard now - self.lastAcceptedCaptureTimestamp >= self.options.captureInterval else { return }
+
+            if !acceptedSnapshot.isEmpty, nearestAccepted < self.options.noveltyThreshold {
+                self.smartCaptureState = "منظر مكرر — واصل تدوير المجسم"
+                return
+            }
+
+            if motionDistance > self.options.stabilityThreshold {
+                self.smartCaptureState = "المجسم يتحرك — توقف لحظة عند الزاوية الجديدة"
+                return
+            }
+
             self.smartCaptureState = "زاوية جديدة وثابتة — التقاط"
-            self.requestPhotoCapture(featurePrint: feature)
+            self.requestPhotoCapture(signature: signature)
         }
     }
 
-    private func makeFeaturePrint(pixelBuffer: CVPixelBuffer) -> VNFeaturePrintObservation? {
-        let request = VNGenerateImageFeaturePrintRequest()
-        request.revision = VNGenerateImageFeaturePrintRequestRevision1
-        request.imageCropAndScaleOption = .scaleFill
-        request.regionOfInterest = CGRect(x: 0.12, y: 0.10, width: 0.76, height: 0.80)
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
-        do {
-            try handler.perform([request])
-            return request.results?.first
-        } catch {
-            return nil
-        }
-    }
-
-    private func averageLuminanceValue(pixelBuffer: CVPixelBuffer) -> Float {
+    private func makeFrameSignature(pixelBuffer: CVPixelBuffer) -> FrameSignature? {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return 0 }
+
+        guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA,
+              let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 40, height > 40 else { return nil }
+
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        guard width > 0, height > 0, bytesPerRow >= width * 4 else { return 0 }
+        let pixels = base.assumingMemoryBound(to: UInt8.self)
+        let cols = 32
+        let rows = 24
+        let x0 = Int(Double(width) * 0.12)
+        let x1 = Int(Double(width) * 0.88)
+        let y0 = Int(Double(height) * 0.10)
+        let y1 = Int(Double(height) * 0.90)
+        let roiWidth = max(1, x1 - x0)
+        let roiHeight = max(1, y1 - y0)
 
-        let x0 = Int(Float(width) * 0.12)
-        let x1 = max(x0 + 1, Int(Float(width) * 0.88))
-        let y0 = Int(Float(height) * 0.10)
-        let y1 = max(y0 + 1, Int(Float(height) * 0.90))
-        let stepX = max((x1 - x0) / 24, 1)
-        let stepY = max((y1 - y0) / 24, 1)
-        let bytes = base.assumingMemoryBound(to: UInt8.self)
-
-        var sum: Float = 0
-        var count: Int = 0
-        var y = y0
-        while y < y1 {
-            var x = x0
-            while x < x1 {
+        var signature = FrameSignature()
+        signature.reserveCapacity(cols * rows)
+        for row in 0..<rows {
+            let y = min(height - 1, y0 + (row * roiHeight) / max(1, rows - 1))
+            for col in 0..<cols {
+                let x = min(width - 1, x0 + (col * roiWidth) / max(1, cols - 1))
                 let offset = y * bytesPerRow + x * 4
-                let blue = Float(bytes[offset]) / 255
-                let green = Float(bytes[offset + 1]) / 255
-                let red = Float(bytes[offset + 2]) / 255
-                sum += 0.2126 * red + 0.7152 * green + 0.0722 * blue
-                count += 1
-                x += stepX
+                let b = UInt16(pixels[offset])
+                let g = UInt16(pixels[offset + 1])
+                let r = UInt16(pixels[offset + 2])
+                let luminance = UInt8(min(255, (r + 2 * g + b) / 4))
+                signature.append(luminance)
             }
-            y += stepY
         }
+        return signature
+    }
 
-        return count > 0 ? sum / Float(count) : 0
+    private func signatureDistance(_ lhs: FrameSignature, _ rhs: FrameSignature) -> Float {
+        guard lhs.count == rhs.count, !lhs.isEmpty else { return 1 }
+        var sum: UInt64 = 0
+        for index in lhs.indices {
+            sum += UInt64(abs(Int(lhs[index]) - Int(rhs[index])))
+        }
+        return Float(sum) / Float(lhs.count * 255)
+    }
+
+    private func resetSignatures(keepAccepted: Bool) {
+        signatureLock.lock()
+        previousSignature = nil
+        pendingCaptureSignature = nil
+        latestSignature = nil
+        if !keepAccepted { acceptedSignatures.removeAll(keepingCapacity: false) }
+        signatureLock.unlock()
     }
 
     private func beginReconstruction() {
@@ -621,6 +557,16 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
             statusMessage = "التقط صورًا أكثر قبل البناء."
             return
         }
+
+        // Release live camera resources before photogrammetry. Running both pipelines at
+        // once creates unnecessary memory/thermal pressure on the phone.
+        videoOutput.setSampleBufferDelegate(nil, queue: nil)
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if self.captureSession.isRunning { self.captureSession.stopRunning() }
+        }
+        cameraReady = false
+        cameraLocked = false
 
         phase = .reconstructing
         reconstructionProgress = 0
@@ -695,23 +641,8 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
                             self.reconstructionProgress = 1
                             self.phase = .completed
                             self.statusMessage = "اكتمل نموذج Turntable الملوّن."
-                            Color3DScanQualityReport.write(
-                                scanType: "turntable-object-capture",
-                                assessment: self.qualityAssessment,
-                                imageCount: self.capturedImageCount,
-                                invalidSampleCount: self.invalidSampleCount,
-                                skippedSampleCount: self.skippedSampleCount,
-                                metadata: [
-                                    "captureMode": self.captureModeTitle,
-                                    "passes": String(self.passNumber),
-                                    "duplicateViewsSkipped": String(self.skippedDuplicateCount)
-                                ],
-                                to: finalFolder
-                            )
                         }
-                        if let workFolder {
-                            try? self.fileManager.removeItem(at: workFolder)
-                        }
+                        if let workFolder { try? self.fileManager.removeItem(at: workFolder) }
                     }
                 }
             } catch {
@@ -726,28 +657,20 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     }
 
     private func cleanup(removeWorkingFiles: Bool) {
-        featureLock.lock()
-        previousFeaturePrint = nil
-        acceptedFeaturePrints.removeAll(keepingCapacity: false)
-        pendingCaptureFeaturePrint = nil
-        latestFeaturePrint = nil
-        featureLock.unlock()
+        resetSignatures(keepAccepted: false)
         pendingFinish = false
         reconstructionTask?.cancel()
         reconstructionTask = nil
         photogrammetrySession?.cancel()
         photogrammetrySession = nil
+        videoOutput.setSampleBufferDelegate(nil, queue: nil)
 
         sessionQueue.async { [weak self] in
             guard let self else { return }
-            if self.captureSession.isRunning {
-                self.captureSession.stopRunning()
-            }
+            if self.captureSession.isRunning { self.captureSession.stopRunning() }
         }
 
-        if removeWorkingFiles, let workFolderURL {
-            try? fileManager.removeItem(at: workFolderURL)
-        }
+        if removeWorkingFiles, let workFolderURL { try? fileManager.removeItem(at: workFolderURL) }
         workFolderURL = nil
         imagesURL = nil
         localModelURL = nil
@@ -762,12 +685,9 @@ private enum TurntableScanError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .cameraUnavailable:
-            return "تعذر تشغيل الكاميرا الخلفية."
-        case .photoOutputUnavailable:
-            return "تعذر تشغيل التقاط الصور عالية الجودة."
-        case .videoOutputUnavailable:
-            return "تعذر تشغيل تحليل الفيديو الذكي للـTurntable."
+        case .cameraUnavailable: "تعذر تشغيل الكاميرا الخلفية."
+        case .photoOutputUnavailable: "تعذر تشغيل التقاط الصور عالية الجودة."
+        case .videoOutputUnavailable: "تعذر تشغيل تحليل الفيديو للـTurntable."
         }
     }
 }

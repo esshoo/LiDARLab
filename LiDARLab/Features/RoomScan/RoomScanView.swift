@@ -12,6 +12,7 @@ struct RoomScanView: View {
     @State private var shareItems: [Any] = []
     @State private var setupThicknessCentimeters = 15.0
     @State private var setupMode: RoomThicknessSetupMode = .building
+    @State private var showingActiveCaptureInfo = false
 
     var body: some View {
         ZStack {
@@ -41,6 +42,7 @@ struct RoomScanView: View {
         .background(.black)
         .navigationTitle("مسح متعدد الغرف")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "room.scan", active: model.isScanning || model.isProcessing || model.isRelocalizing || model.requiresRelocalization)
         .navigationBarBackButtonHidden(model.isScanning || model.isProcessing || model.isRelocalizing)
         .toolbar(model.isScanning ? .hidden : .visible, for: .navigationBar)
         .onAppear {
@@ -134,65 +136,92 @@ struct RoomScanView: View {
         }
     }
 
-    /// Minimal full-screen capture interface. Project summaries, exports and
-    /// review controls stay hidden until the active RoomPlan session finishes.
+    /// Full-screen capture stays camera-first: compact status, a small side rail,
+    /// and one optional information panel instead of stacked cards.
     private var activeCaptureHUD: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: model.isRoomRescanActive
-                      ? "arrow.triangle.2.circlepath.camera"
-                      : (model.isRoomCorrectionScanActive ? "plus.viewfinder" : "viewfinder"))
-                    .foregroundStyle(.cyan)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(activeCaptureTitle)
-                        .font(.subheadline.bold())
-                    Text(model.statusMessage)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+        ZStack {
+            VStack {
+                HStack {
+                    LiveCameraStatusBadge(
+                        title: activeCaptureTitle,
+                        detail: model.statusMessage,
+                        systemImage: model.isRoomRescanActive
+                            ? "arrow.triangle.2.circlepath.camera"
+                            : (model.isRoomCorrectionScanActive ? "plus.viewfinder" : "viewfinder"),
+                        accent: .cyan
+                    )
+                    Spacer()
                 }
-
-                Spacer(minLength: 8)
-
-                SharedTorchButton(controller: torch, compact: true)
-
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 8, height: 8)
-                    Text("مسح")
-                        .font(.caption.bold())
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
+                Spacer()
             }
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .allowsHitTesting(false)
 
-            Spacer(minLength: 0)
+            HStack {
+                Spacer()
+                VStack {
+                    LiveCameraSideRail {
+                        LiveCameraSideButton(
+                            systemImage: torch.isOn ? "flashlight.on.fill" : "flashlight.off.fill",
+                            accessibilityLabel: torch.isOn ? "إطفاء الكشاف" : "تشغيل الكشاف",
+                            isSelected: torch.isOn,
+                            tint: torch.isOn ? .yellow : nil,
+                            isEnabled: torch.isAvailable
+                        ) {
+                            torch.toggle()
+                        }
 
-            VStack(spacing: 9) {
-                Text(activeCaptureInstruction)
-                    .font(.caption.bold())
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.55), in: Capsule())
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { activeScanControls }
-                    VStack(spacing: 10) { activeScanControls }
+                        LiveCameraSideButton(
+                            systemImage: "info.circle",
+                            accessibilityLabel: "تعليمات المسح",
+                            isSelected: showingActiveCaptureInfo
+                        ) {
+                            showingActiveCaptureInfo.toggle()
+                        }
+                    }
+                    Spacer()
                 }
+                .padding(.top, 66)
+                .padding(.bottom, 96)
             }
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+            .padding(.trailing, 10)
+
+            if showingActiveCaptureInfo {
+                HStack {
+                    Spacer(minLength: 14)
+                    LiveCameraFloatingPanel(
+                        title: activeCaptureTitle,
+                        systemImage: "info.circle",
+                        onClose: { showingActiveCaptureInfo = false }
+                    ) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(activeCaptureInstruction)
+                                .font(.subheadline.bold())
+                            Divider()
+                            LabeledContent("الحالة", value: model.statusMessage)
+                                .font(.caption)
+                            Text("أغلق هذه اللوحة أثناء الحركة لتبقى الكاميرا كاملة أمامك.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Color.clear.frame(width: 62)
+                }
+                .padding(.horizontal, 10)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+
+            VStack {
+                Spacer()
+                LiveCameraBottomBar {
+                    activeScanControls
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 14)
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 8)
-        .padding(.bottom, 14)
+        .animation(.easeInOut(duration: 0.18), value: showingActiveCaptureInfo)
     }
 
     private var activeCaptureTitle: String {

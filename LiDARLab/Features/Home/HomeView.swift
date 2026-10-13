@@ -203,36 +203,47 @@ struct HomeView: View {
 
     @ViewBuilder
     private var featureCollection: some View {
-        if layoutMode.wrappedValue == .grid {
-            LazyVGrid(
-                columns: [
-                    GridItem(
-                        .adaptive(minimum: cardMinimumWidth, maximum: cardMaximumWidth),
-                        spacing: horizontalSizeClass == .regular ? 16 : 10,
-                        alignment: .top
-                    )
-                ],
-                alignment: .center,
-                spacing: horizontalSizeClass == .regular ? 16 : 10
-            ) {
-                ForEach(LiDARFeature.allCases) { feature in
-                    NavigationLink(value: feature) {
-                        FeatureGridCard(feature: feature, capabilities: capabilities)
+        VStack(alignment: .leading, spacing: 22) {
+            ForEach(LiDARFeatureCategory.allCases) { category in
+                let features = LiDARFeature.allCases.filter { $0.category == category }
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(category.title, systemImage: category.systemImage)
+                        .font(.headline)
+                        .padding(.horizontal, 2)
+
+                    if layoutMode.wrappedValue == .grid {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(
+                                    .adaptive(minimum: cardMinimumWidth, maximum: cardMaximumWidth),
+                                    spacing: horizontalSizeClass == .regular ? 16 : 10,
+                                    alignment: .top
+                                )
+                            ],
+                            alignment: .center,
+                            spacing: horizontalSizeClass == .regular ? 16 : 10
+                        ) {
+                            ForEach(features) { feature in
+                                NavigationLink(value: feature) {
+                                    FeatureGridCard(feature: feature, capabilities: capabilities)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    } else {
+                        LazyVStack(spacing: 11) {
+                            ForEach(features) { feature in
+                                NavigationLink(value: feature) {
+                                    FeatureListRow(feature: feature, capabilities: capabilities)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .frame(maxWidth: 860)
+                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.plain)
                 }
             }
-        } else {
-            LazyVStack(spacing: 11) {
-                ForEach(LiDARFeature.allCases) { feature in
-                    NavigationLink(value: feature) {
-                        FeatureListRow(feature: feature, capabilities: capabilities)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .frame(maxWidth: 860)
-            .frame(maxWidth: .infinity)
         }
     }
 }

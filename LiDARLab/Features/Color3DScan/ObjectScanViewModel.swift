@@ -90,22 +90,6 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
         options.recommendedPasses
     }
 
-    var qualityAssessment: Color3DScanQualityAssessment {
-        Color3DScanQualityEngine.objectCapture(
-            trackingText: captureTrackingState,
-            feedback: feedbackMessage,
-            shotCount: shotCount,
-            minimumImages: minimumImagesBeforeFinish,
-            completedPasses: completedPasses,
-            recommendedPasses: recommendedPasses,
-            scanPassComplete: scanPassComplete,
-            invalidSampleCount: invalidSampleCount,
-            skippedSampleCount: skippedSampleCount,
-            isActive: phase == .capturing || phase == .detecting || phase == .finishing,
-            isCompleted: phase == .completed
-        )
-    }
-
     var shouldShowPreselectionMesh: Bool {
         phase == .aiming && targetSelected && options.showPreselectionMesh
     }
@@ -609,19 +593,6 @@ final class ObjectScanViewModel: NSObject, ObservableObject, ARSessionDelegate {
                         self.reconstructionProgress = 1
                         self.phase = .completed
                         self.statusMessage = "اكتمل نموذج USDZ الملوّن."
-                        Color3DScanQualityReport.write(
-                            scanType: "guided-object-capture",
-                            assessment: self.qualityAssessment,
-                            imageCount: self.shotCount,
-                            invalidSampleCount: self.invalidSampleCount,
-                            skippedSampleCount: self.skippedSampleCount,
-                            metadata: [
-                                "completedPasses": String(self.completedPasses),
-                                "recommendedPasses": String(self.recommendedPasses),
-                                "tracking": self.captureTrackingState
-                            ],
-                            to: finalFolder
-                        )
                         if let workingFolder {
                             try? self.fileManager.removeItem(at: workingFolder)
                             self.workFolderURL = nil

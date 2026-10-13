@@ -156,7 +156,10 @@ private final class ThreePointAngleViewModel: NSObject, ObservableObject, ARSess
 }
 
 struct ThreePointAngleView: View {
+    private enum Panel { case help, result }
+
     @StateObject private var model = ThreePointAngleViewModel()
+    @State private var panel: Panel?
 
     var body: some View {
         GeometryReader { geometry in
@@ -167,19 +170,57 @@ struct ThreePointAngleView: View {
                 AngleMeasurementOverlay(projection: model.projection)
                     .allowsHitTesting(false)
 
-                VStack(spacing: 12) {
-                    headerPanel
-                    Spacer(minLength: 100)
-                    resultPanel
+                VStack {
+                    HStack {
+                        LiveCameraStatusBadge(
+                            title: model.statusMessage,
+                            detail: "\(model.pointCount)/3 • AR: \(model.trackingState)",
+                            systemImage: "angle",
+                            accent: .orange
+                        )
+                        Spacer()
+                    }
+                    .padding(.leading, 12)
+                    .padding(.top, 10)
+                    Spacer()
                 }
-                .padding(.horizontal, geometry.size.width >= 700 ? 22 : 12)
-                .padding(.top, 10)
-                .padding(.bottom, 14)
+
+                HStack {
+                    Spacer()
+                    LiveCameraSideRail {
+                        LiveCameraSideButton(systemImage: "questionmark.circle", accessibilityLabel: "طريقة الاستخدام", isSelected: panel == .help) { toggle(.help) }
+                        LiveCameraSideButton(systemImage: "angle", accessibilityLabel: "النتيجة", isSelected: panel == .result) { toggle(.result) }
+                        LiveCameraSideButton(systemImage: "arrow.uturn.backward", accessibilityLabel: "تراجع", isEnabled: model.pointCount > 0) { model.undo() }
+                        LiveCameraSideButton(systemImage: "trash", accessibilityLabel: "مسح القياس", tint: .red, isEnabled: model.pointCount > 0) { model.reset() }
+                    }
+                    .padding(.trailing, 10)
+                }
+
+                if let panel {
+                    HStack {
+                        Spacer()
+                        panelView(panel).padding(.trailing, 72)
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+
+                VStack {
+                    Spacer()
+                    LiveCameraStatusBadge(
+                        title: model.projection.angleDegrees.map { String(format: "%.2f°", $0) } ?? "اضغط على السطح لتحديد النقاط",
+                        detail: model.projection.angleDegrees == nil ? "الضلع الأول ← رأس الزاوية ← الضلع الثاني" : "تم القياس",
+                        systemImage: "scope",
+                        accent: model.projection.angleDegrees == nil ? .cyan : .green
+                    )
+                    .padding(.bottom, 12)
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: panel != nil)
         }
         .background(.black)
         .navigationTitle("قياس الزوايا")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "measure.angle")
         .onDisappear { model.stop() }
         .alert("تعذر تشغيل قياس الزوايا", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -191,81 +232,32 @@ struct ThreePointAngleView: View {
         }
     }
 
-    private var headerPanel: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                instructions
-                Spacer(minLength: 8)
-                actionButtons
-            }
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
 
-            VStack(alignment: .leading, spacing: 10) {
-                instructions
-                actionButtons
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .help:
+            LiveCameraFloatingPanel(title: "طريقة القياس", systemImage: "questionmark.circle", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("اضغط النقطة الأولى على الضلع الأول", systemImage: "1.circle")
+                    Label("اضغط رأس الزاوية", systemImage: "2.circle")
+                    Label("اضغط النقطة الثالثة على الضلع الثاني", systemImage: "3.circle")
+                    Text("النقاط تثبت في العالم الحقيقي. لو لم يُكتشف السطح، حرّك الجهاز ببطء حتى يتحسن تتبع AR.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .result:
+            LiveCameraFloatingPanel(title: "النتيجة", systemImage: "angle", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(model.projection.angleDegrees.map { String(format: "%.2f°", $0) } ?? "—")
+                        .font(.system(.largeTitle, design: .rounded).monospacedDigit().bold())
+                    LabeledContent("النقاط", value: "\(model.pointCount) / 3")
+                    LabeledContent("حالة التتبع", value: model.trackingState)
+                }
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var instructions: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(model.statusMessage)
-                .font(.headline)
-            Text("اضغط ثلاث نقاط: ضلع أول، ثم رأس الزاوية، ثم الضلع الثاني. النقاط تثبت في المكان الحقيقي.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Label("AR: \(model.trackingState)", systemImage: "location.viewfinder")
-                .font(.caption2.bold())
-        }
-    }
-
-    private var actionButtons: some View {
-        HStack(spacing: 8) {
-            Button {
-                model.undo()
-            } label: {
-                Label("تراجع", systemImage: "arrow.uturn.backward")
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.pointCount == 0)
-
-            Button(role: .destructive) {
-                model.reset()
-            } label: {
-                Label("مسح", systemImage: "trash")
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.pointCount == 0)
-        }
-        .font(.caption.bold())
-    }
-
-    private var resultPanel: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "angle")
-                .font(.title2)
-                .foregroundStyle(.orange)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("الزاوية بين الضلعين")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(model.projection.angleDegrees.map { String(format: "%.2f°", $0) } ?? "—")
-                    .font(.title2.monospacedDigit().bold())
-            }
-
-            Spacer(minLength: 0)
-
-            Text("\(model.pointCount) / 3")
-                .font(.caption.monospacedDigit().bold())
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.thinMaterial, in: Capsule())
-        }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 

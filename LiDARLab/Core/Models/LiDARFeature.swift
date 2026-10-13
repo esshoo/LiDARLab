@@ -5,6 +5,47 @@ enum FeaturePhase: String {
     case comingSoon
 }
 
+
+enum LiDARFeatureCategory: String, CaseIterable, Identifiable {
+    case measure
+    case lidar
+    case scan
+    case workflow
+
+    var id: String { rawValue }
+
+    var category: LiDARFeatureCategory {
+        switch self {
+        case .distanceMeasure, .angleMeasure, .levelTool, .arPlayground:
+            .measure
+        case .depthCamera, .pointCloud, .sceneMesh, .surfaceClassification, .planeDetection, .sensorTests, .deviceInfo:
+            .lidar
+        case .depthPhoto, .color3DScan, .roomScan:
+            .scan
+        case .computerBridge, .recordings, .exportCenter:
+            .workflow
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .measure: "القياس والأدوات"
+        case .lidar: "LiDAR وتحليل المكان"
+        case .scan: "المسح والتصوير"
+        case .workflow: "الجلسات والملفات"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .measure: "ruler"
+        case .lidar: "sensor.tag.radiowaves.forward"
+        case .scan: "viewfinder"
+        case .workflow: "folder"
+        }
+    }
+}
+
 enum FeatureRequirement {
     case none
     case worldTracking
@@ -34,6 +75,19 @@ enum LiDARFeature: String, CaseIterable, Identifiable, Hashable {
     case deviceInfo
 
     var id: String { rawValue }
+
+    var category: LiDARFeatureCategory {
+        switch self {
+        case .distanceMeasure, .angleMeasure, .levelTool, .arPlayground:
+            .measure
+        case .depthCamera, .pointCloud, .sceneMesh, .surfaceClassification, .planeDetection, .sensorTests, .deviceInfo:
+            .lidar
+        case .depthPhoto, .color3DScan, .roomScan:
+            .scan
+        case .computerBridge, .recordings, .exportCenter:
+            .workflow
+        }
+    }
 
     var title: String {
         switch self {

@@ -35,6 +35,7 @@ struct ComputerBridgeView: View {
         .background(.black)
         .navigationTitle("البث والمسح 2D")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "computer.bridge")
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()

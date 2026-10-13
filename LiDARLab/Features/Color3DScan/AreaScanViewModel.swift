@@ -73,19 +73,6 @@ final class AreaScanViewModel: ObservableObject {
         options.minimumImagesBeforeFinish
     }
 
-    var qualityAssessment: Color3DScanQualityAssessment {
-        Color3DScanQualityEngine.areaCapture(
-            feedback: feedbackMessage,
-            shotCount: shotCount,
-            minimumImages: minimumImagesBeforeFinish,
-            invalidSampleCount: invalidSampleCount,
-            skippedSampleCount: skippedSampleCount,
-            automaticDownsamplingOccurred: automaticDownsamplingOccurred,
-            isActive: phase == .capturing || phase == .finishing,
-            isCompleted: phase == .completed
-        )
-    }
-
     func prepareSession() {
         guard #available(iOS 18.0, *) else {
             errorMessage = "Apple Object Capture Area Mode يحتاج iOS 18 أو أحدث."
@@ -350,18 +337,6 @@ final class AreaScanViewModel: ObservableObject {
                         self.reconstructionProgress = 1
                         self.phase = .completed
                         self.statusMessage = "اكتمل نموذج Apple Area Mode ويمكن فتحه في Quick Look."
-                        Color3DScanQualityReport.write(
-                            scanType: "apple-area-mode",
-                            assessment: self.qualityAssessment,
-                            imageCount: self.shotCount,
-                            invalidSampleCount: self.invalidSampleCount,
-                            skippedSampleCount: self.skippedSampleCount,
-                            metadata: [
-                                "automaticDownsampling": self.automaticDownsamplingOccurred ? "true" : "false",
-                                "recoverEntireScene": self.options.recoverEntireScene ? "true" : "false"
-                            ],
-                            to: finalFolder
-                        )
                         if let workingFolder {
                             try? self.fileManager.removeItem(at: workingFolder)
                             self.workFolderURL = nil

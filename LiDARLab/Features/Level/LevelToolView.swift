@@ -19,11 +19,14 @@ fileprivate enum LevelToolMode: String, CaseIterable, Identifiable {
 }
 
 struct LevelToolView: View {
+    private enum Panel { case mode, result }
+
     @StateObject private var model = LevelToolViewModel()
     @State private var mode: LevelToolMode = .automatic
     @State private var manualCenter = CGPoint(x: 0.5, y: 0.5)
     @State private var manualAngleDegrees: Double = 0
     @State private var lastLevelState = false
+    @State private var panel: Panel?
 
     private var measurement: LevelMeasurement? {
         switch mode {
@@ -54,21 +57,13 @@ struct LevelToolView: View {
                 }
 
                 if let screenAxes = model.screenReferenceAxes {
-                    ReferenceAxesOverlay(
-                        axes: screenAxes,
-                        isLevel: measurement?.isLevel == true,
-                        style: .screenCompass
-                    )
-                    .allowsHitTesting(false)
+                    ReferenceAxesOverlay(axes: screenAxes, isLevel: measurement?.isLevel == true, style: .screenCompass)
+                        .allowsHitTesting(false)
                 }
 
                 if let wallAxes = model.wallReferenceAxes, mode != .manualLine {
-                    ReferenceAxesOverlay(
-                        axes: wallAxes,
-                        isLevel: measurement?.isLevel == true,
-                        style: .wallAnchor
-                    )
-                    .allowsHitTesting(false)
+                    ReferenceAxesOverlay(axes: wallAxes, isLevel: measurement?.isLevel == true, style: .wallAnchor)
+                        .allowsHitTesting(false)
                 }
 
                 if let target = model.target, mode != .manualLine {
@@ -82,25 +77,59 @@ struct LevelToolView: View {
                 }
 
                 if mode == .manualLine {
-                    ManualLevelLineOverlay(
-                        center: $manualCenter,
-                        angleDegrees: $manualAngleDegrees
-                    )
+                    ManualLevelLineOverlay(center: $manualCenter, angleDegrees: $manualAngleDegrees)
                 }
 
-                VStack(spacing: 12) {
-                    controls
-                    Spacer(minLength: 90)
-                    measurementPanel
+                VStack {
+                    HStack {
+                        LiveCameraStatusBadge(
+                            title: measurement?.statusText ?? model.statusMessage,
+                            detail: "\(mode.title) • AR: \(model.trackingState)",
+                            systemImage: measurement?.isLevel == true ? "checkmark.circle.fill" : "level",
+                            accent: measurement?.isLevel == true ? .green : .orange
+                        )
+                        Spacer()
+                    }
+                    .padding(.leading, 12)
+                    .padding(.top, 10)
+                    Spacer()
                 }
-                .padding(.horizontal, adaptiveHorizontalPadding(for: geometry.size.width))
-                .padding(.top, 10)
-                .padding(.bottom, 14)
+
+                HStack {
+                    Spacer()
+                    LiveCameraSideRail {
+                        LiveCameraSideButton(systemImage: "slider.horizontal.3", accessibilityLabel: "وضع القياس", isSelected: panel == .mode) { toggle(.mode) }
+                        LiveCameraSideButton(systemImage: "chart.bar.xaxis", accessibilityLabel: "نتيجة القياس", isSelected: panel == .result) { toggle(.result) }
+                        if mode == .fourPoints {
+                            LiveCameraSideButton(systemImage: "arrow.uturn.backward", accessibilityLabel: "تراجع", isEnabled: !model.draftCornerPoints.isEmpty) { model.undoDraftCorner() }
+                        }
+                        LiveCameraSideButton(systemImage: "xmark", accessibilityLabel: "مسح التحديد", tint: .red) {
+                            if mode == .fourPoints { model.beginFourPointSelection() } else { model.clearSelection() }
+                        }
+                    }
+                    .padding(.trailing, 10)
+                }
+
+                if let panel {
+                    HStack {
+                        Spacer()
+                        panelView(panel).padding(.trailing, 72)
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+
+                VStack {
+                    Spacer()
+                    primaryBar
+                        .padding(.bottom, 12)
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: panel != nil)
         }
         .background(.black)
         .navigationTitle("ميزان الميل والزاوية")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "level.live")
         .onChange(of: mode) { _, newMode in
             switch newMode {
             case .automatic:
@@ -121,9 +150,7 @@ struct LevelToolView: View {
             lastLevelState = true
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         }
-        .onDisappear {
-            model.stop()
-        }
+        .onDisappear { model.stop() }
         .alert("تعذر تشغيل أداة الميل", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.clearError() } }
@@ -134,175 +161,91 @@ struct LevelToolView: View {
         }
     }
 
-    private var controls: some View {
-        VStack(spacing: 10) {
-            Picker("طريقة القياس", selection: $mode) {
-                ForEach(LevelToolMode.allCases) { item in
-                    Text(item.title).tag(item)
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
+
+    @ViewBuilder
+    private var primaryBar: some View {
+        switch mode {
+        case .automatic:
+            LiveCameraBottomBar {
+                Button {
+                    model.scanForRectangle()
+                } label: {
+                    Label(model.isDetecting ? "جاري التحديد" : "تحديد من المنتصف", systemImage: model.isDetecting ? "viewfinder.circle" : "viewfinder")
+                        .font(.headline)
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isDetecting)
             }
-            .pickerStyle(.segmented)
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    modeActions
-                    Spacer(minLength: 8)
-                    trackingLabel
+        case .fourPoints:
+            LiveCameraStatusBadge(
+                title: "اضغط الزوايا الأربع على الشكل",
+                detail: "\(model.draftCornerPoints.count) / 4",
+                systemImage: "rectangle.dashed"
+            )
+        case .manualLine:
+            LiveCameraBottomBar {
+                Button {
+                    manualCenter = CGPoint(x: 0.5, y: 0.5)
+                    manualAngleDegrees = model.horizonAngleDegrees
+                } label: {
+                    Label("محاذاة بالأفقي", systemImage: "level")
                 }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        modeActions
-                        Spacer(minLength: 0)
-                    }
-                    trackingLabel
-                }
+                .buttonStyle(.borderedProminent)
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     @ViewBuilder
-    private var modeActions: some View {
-        switch mode {
-        case .automatic:
-            Button {
-                model.scanForRectangle()
-            } label: {
-                Label(
-                    model.isDetecting ? "جاري التحديد" : "تحديد من المنتصف",
-                    systemImage: model.isDetecting ? "viewfinder.circle" : "viewfinder"
-                )
-                .font(.caption.bold())
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.isDetecting)
-
-            clearButton
-
-        case .fourPoints:
-            Button {
-                model.undoDraftCorner()
-            } label: {
-                Label("تراجع", systemImage: "arrow.uturn.backward")
-                    .font(.caption.bold())
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.draftCornerPoints.isEmpty)
-
-            clearButton
-
-        case .manualLine:
-            Button {
-                manualCenter = CGPoint(x: 0.5, y: 0.5)
-                manualAngleDegrees = model.horizonAngleDegrees
-            } label: {
-                Label("محاذاة بالأفقي", systemImage: "level")
-                    .font(.caption.bold())
-            }
-            .buttonStyle(.borderedProminent)
-        }
-    }
-
-    private var clearButton: some View {
-        Button {
-            if mode == .fourPoints {
-                model.beginFourPointSelection()
-            } else {
-                model.clearSelection()
-            }
-        } label: {
-            Image(systemName: "xmark")
-        }
-        .buttonStyle(.bordered)
-    }
-
-    private var trackingLabel: some View {
-        HStack(spacing: 7) {
-            Label("AR: \(model.trackingState)", systemImage: "location.viewfinder")
-            Text("•").foregroundStyle(.tertiary)
-            Text(model.gravityReliabilityText)
-            if model.target != nil {
-                Text("•").foregroundStyle(.tertiary)
-                Text(model.isTrackingTarget ? "العنصر متتبع" : "مثبت بالموقع")
-            }
-        }
-        .font(.caption2.bold())
-        .lineLimit(2)
-        .minimumScaleFactor(0.7)
-    }
-
-    private var measurementPanel: some View {
-        VStack(spacing: 11) {
-            HStack(spacing: 10) {
-                Image(systemName: measurement?.isLevel == true ? "checkmark.circle.fill" : "angle")
-                    .font(.title2)
-                    .foregroundStyle(measurement?.isLevel == true ? .green : .orange)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(measurement?.statusText ?? model.statusMessage)
-                        .font(.headline)
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .mode:
+            LiveCameraFloatingPanel(title: "طريقة القياس", systemImage: "slider.horizontal.3", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("طريقة القياس", selection: $mode) {
+                        ForEach(LevelToolMode.allCases) { item in Text(item.title).tag(item) }
+                    }
+                    .pickerStyle(.segmented)
                     Text(instructionText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(3)
+                    if mode == .manualLine {
+                        HStack {
+                            Image(systemName: "rotate.right")
+                            Slider(value: $manualAngleDegrees, in: -90...90, step: 0.1)
+                            Text(degrees(manualAngleDegrees))
+                                .font(.caption.monospacedDigit().bold())
+                        }
+                    }
                 }
-
-                Spacer(minLength: 0)
             }
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 9)], spacing: 9) {
-                MetricChip(
-                    title: "الميل عن الأفقي",
-                    value: measurement.map { signedDegrees($0.signedHorizontalDeviation) } ?? "—",
-                    systemImage: "arrow.left.and.right"
-                )
-                MetricChip(
-                    title: "الانحراف عن الرأسي",
-                    value: measurement.map { signedDegrees($0.signedVerticalDeviation) } ?? "—",
-                    systemImage: "arrow.up.and.down"
-                )
-                MetricChip(
-                    title: "ثقة التتبع",
-                    value: confidenceText,
-                    systemImage: "scope"
-                )
-            }
-
-            if mode == .manualLine {
-                HStack(spacing: 10) {
-                    Image(systemName: "rotate.right")
-                    Slider(value: $manualAngleDegrees, in: -90...90, step: 0.1)
-                    Text(degrees(manualAngleDegrees))
-                        .font(.caption.monospacedDigit().bold())
-                        .frame(minWidth: 55, alignment: .trailing)
+        case .result:
+            LiveCameraFloatingPanel(title: "القياس", systemImage: "chart.bar.xaxis", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    MetricChip(title: "الميل عن الأفقي", value: measurement.map { signedDegrees($0.signedHorizontalDeviation) } ?? "—", systemImage: "arrow.left.and.right")
+                    MetricChip(title: "الانحراف عن الرأسي", value: measurement.map { signedDegrees($0.signedVerticalDeviation) } ?? "—", systemImage: "arrow.up.and.down")
+                    MetricChip(title: "ثقة التتبع", value: confidenceText, systemImage: "scope")
+                    Text(model.gravityReliabilityText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var instructionText: String {
         switch mode {
         case .automatic:
-            model.target == nil
-                ? "اضغط على اللوحة نفسها؛ سيُثبّت الرسم على الحائط ويستمر في تتبعها."
-                : "الخطان المتصلان مرجع الشاشة، والمتقطعان مثبتان عند العنصر على الحائط."
+            model.target == nil ? "ضع العنصر قرب المنتصف ثم اضغط تحديد." : "تم تثبيت العنصر؛ حرّك الجهاز لمتابعة الميل."
         case .fourPoints:
-            model.target == nil
-                ? "اضغط الزوايا الأربع حول أي شكل عندما لا ينجح الاكتشاف التلقائي."
-                : "الإطار والنقاط ثابتة في العالم، والخطان المتقطعان هما مرجع الحائط الحقيقي."
+            model.target == nil ? "اضغط الزوايا الأربع حول الشكل." : "النقاط مثبتة في العالم الحقيقي."
         case .manualLine:
-            "اضغط لنقل الخط، واسحب دائرة التدوير أو استخدم شريط الزاوية."
+            "اضغط لنقل الخط واسحب دائرة التدوير أو استخدم شريط الزاوية."
         }
     }
 
     private var confidenceText: String {
-        guard let target = model.target else {
-            return mode == .manualLine ? "يدوي" : "—"
-        }
+        guard let target = model.target else { return mode == .manualLine ? "يدوي" : "—" }
         return String(format: "%.0f%%", target.confidence * 100)
     }
 
@@ -314,17 +257,8 @@ struct LevelToolView: View {
         )
     }
 
-    private func degrees(_ value: Double) -> String {
-        String(format: "%.1f°", value)
-    }
-
-    private func signedDegrees(_ value: Double) -> String {
-        String(format: "%+.1f°", value)
-    }
-
-    private func adaptiveHorizontalPadding(for width: CGFloat) -> CGFloat {
-        width >= 900 ? 28 : (width >= 600 ? 20 : 12)
-    }
+    private func degrees(_ value: Double) -> String { String(format: "%.1f°", value) }
+    private func signedDegrees(_ value: Double) -> String { String(format: "%+.2f°", value) }
 }
 
 private struct ReferenceAxesOverlay: View {

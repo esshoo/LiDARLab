@@ -3,59 +3,79 @@ import SwiftUI
 
 struct ARPlaygroundView: View {
     @StateObject private var model = ARPlaygroundViewModel()
+    @State private var showHelp = false
 
     var body: some View {
         ZStack {
             ARPlaygroundContainer(model: model)
                 .ignoresSafeArea(edges: .bottom)
 
-            VStack(spacing: 12) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) {
-                        objectCountLabel
-                        Spacer(minLength: 8)
-                        clearButton
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        objectCountLabel
-                        clearButton
-                    }
+            VStack {
+                HStack {
+                    LiveCameraStatusBadge(
+                        title: "\(model.objectCount) مجسم",
+                        detail: model.statusMessage,
+                        systemImage: "cube.fill",
+                        accent: .cyan
+                    )
+                    Spacer()
                 }
-                .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-
                 Spacer()
-
-                Text(model.statusMessage)
-                    .font(.subheadline.bold())
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .background(.ultraThinMaterial, in: Capsule())
             }
-            .padding(14)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .allowsHitTesting(false)
+
+            HStack {
+                Spacer()
+                VStack {
+                    LiveCameraSideRail {
+                        LiveCameraSideButton(
+                            systemImage: "questionmark.circle",
+                            accessibilityLabel: "طريقة الاستخدام",
+                            isSelected: showHelp
+                        ) {
+                            showHelp.toggle()
+                        }
+
+                        LiveCameraSideButton(
+                            systemImage: "trash",
+                            accessibilityLabel: "مسح المجسمات",
+                            tint: .red,
+                            isEnabled: model.objectCount > 0
+                        ) {
+                            model.clearObjects()
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.top, 66)
+                .padding(.bottom, 80)
+            }
+            .padding(.trailing, 10)
+
+            if showHelp {
+                HStack {
+                    Spacer(minLength: 14)
+                    LiveCameraFloatingPanel(
+                        title: "مختبر الواقع المعزز",
+                        systemImage: "hand.tap",
+                        onClose: { showHelp = false }
+                    ) {
+                        Text("المس أي سطح ظاهر في الكاميرا لإضافة مجسم. استخدم زر الحذف على جانب الشاشة لمسح كل المجسمات.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Color.clear.frame(width: 62)
+                }
+                .padding(.horizontal, 10)
+            }
         }
         .background(.black)
         .navigationTitle("مختبر الواقع المعزز")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "playground.live")
         .onDisappear { model.stop() }
-    }
-
-    private var objectCountLabel: some View {
-        Label("المجسمات: \(model.objectCount)", systemImage: "cube.fill")
-            .font(.subheadline.bold())
-    }
-
-    private var clearButton: some View {
-        Button(role: .destructive) {
-            model.clearObjects()
-        } label: {
-            Label("مسح المجسمات", systemImage: "trash")
-                .font(.caption.bold())
-        }
-        .buttonStyle(.bordered)
-        .disabled(model.objectCount == 0)
     }
 }
 

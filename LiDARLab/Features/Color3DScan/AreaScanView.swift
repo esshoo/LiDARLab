@@ -2,12 +2,14 @@ import RealityKit
 import SwiftUI
 
 struct AreaScanView: View {
+    private enum Panel { case info, actions }
+
     @StateObject private var model = AreaScanViewModel()
     @StateObject private var torch = SharedTorchController()
-    @AppStorage(Color3DScanSettings.Key.qualityAssistantEnabled) private var qualityAssistantEnabled = true
     @State private var showPointCloud = false
     @State private var showPreview = false
     @State private var showCancelConfirmation = false
+    @State private var panel: Panel?
 
     var body: some View {
         Group {
@@ -17,7 +19,7 @@ struct AreaScanView: View {
                 content
             }
         }
-        .navigationTitle("مسح منطقة بصري 3D")
+        .navigationTitle("مسح منطقة ملوّنة")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if model.phase == .capturing || model.phase == .ready || model.phase == .initializing {
@@ -26,7 +28,7 @@ struct AreaScanView: View {
                 }
             }
         }
-        .confirmationDialog("إلغاء مسح المكان؟", isPresented: $showCancelConfirmation) {
+        .confirmationDialog("إلغاء مسح المنطقة؟", isPresented: $showCancelConfirmation) {
             Button("إلغاء المسح", role: .destructive) { model.cancelAndReset() }
             Button("متابعة", role: .cancel) {}
         }
@@ -57,7 +59,7 @@ struct AreaScanView: View {
                 NavigationStack {
                     QuickLookPreview(url: url)
                         .ignoresSafeArea(edges: .bottom)
-                        .navigationTitle("معاينة Apple Quick Look")
+                        .navigationTitle("معاينة النموذج")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
@@ -67,7 +69,10 @@ struct AreaScanView: View {
                 }
             }
         }
-        .keepScreenAwakeDuringColor3DScan(model.phase != .idle && model.phase != .completed && model.phase != .failed)
+        .keepScreenAwakeForLiveTool(
+            id: "color3d.area",
+            active: model.phase != .idle && model.phase != .completed && model.phase != .failed
+        )
         .onAppear { torch.refreshAvailability() }
         .onDisappear { torch.turnOff() }
     }
@@ -75,8 +80,7 @@ struct AreaScanView: View {
     @ViewBuilder
     private func pointCloudView(session: ObjectCaptureSession) -> some View {
         if #available(iOS 18.0, *) {
-            ObjectCapturePointCloudView(session: session)
-                .showShotLocations()
+            ObjectCapturePointCloudView(session: session).showShotLocations()
         } else {
             ObjectCapturePointCloudView(session: session)
         }
@@ -85,16 +89,11 @@ struct AreaScanView: View {
     @ViewBuilder
     private var content: some View {
         switch model.phase {
-        case .idle:
-            startView
-        case .initializing, .ready, .capturing, .finishing:
-            captureView
-        case .reconstructing:
-            processingView
-        case .completed:
-            completedView
-        case .failed:
-            failedView
+        case .idle: startView
+        case .initializing, .ready, .capturing, .finishing: captureView
+        case .reconstructing: processingView
+        case .completed: completedView
+        case .failed: failedView
         }
     }
 
@@ -104,39 +103,25 @@ struct AreaScanView: View {
                 Image(systemName: "viewfinder")
                     .font(.system(size: 68, weight: .light))
                     .foregroundStyle(.cyan)
-
-                Text("Apple Area Mode — منطقة / سطح")
+                Text("Apple Area Mode")
                     .font(.title2.bold())
-
-                Text("هذا الوضع مخصص لمسح منطقة أو سطح بصريًا باستخدام Apple Object Capture Area Mode. لا نستخدمه بعد الآن كبديل لـRoomPlan عند الحاجة إلى غرفة هندسية كاملة.")
+                Text("هذا القسم للمسح البصري الملون فقط. امسح جدارًا أو سطحًا أو منطقة محدودة، ويفضل تقسيم المساحات الكبيرة إلى أجزاء.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("قسّم الغرفة الكبيرة إلى جدران أو مناطق صغيرة بدل لقطة واحدة ضخمة", systemImage: "square.split.2x2")
-                    Label("تحرك ببطء، موازياً للسطح، مع تداخل واضح بين اللقطات", systemImage: "figure.walk")
+                VStack(alignment: .leading, spacing: 9) {
+                    Label("تحرك ببطء وبشكل موازٍ للسطح", systemImage: "figure.walk")
+                    Label("حافظ على تداخل واضح بين اللقطات", systemImage: "square.on.square")
                     Label("كرر المرور من ارتفاعات مختلفة", systemImage: "arrow.up.and.down")
-                    Label("تجنب الإضاءة القاسية والظلال الحادة", systemImage: "sun.max")
-                    Label("المعالجة على iPhone تستخدم Reduced detail", systemImage: "iphone")
                 }
                 .font(.subheadline)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
 
-                NavigationLink {
-                    RoomScanView()
-                } label: {
-                    Label("غرفة كاملة ودقيقة — RoomPlan", systemImage: "ruler.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
                 Button {
                     model.prepareSession()
                 } label: {
-                    Label("مسح منطقة / سطح بصري", systemImage: "camera.viewfinder")
+                    Label("فتح المسح الملون", systemImage: "camera.viewfinder")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                 }
@@ -144,7 +129,7 @@ struct AreaScanView: View {
                 .tint(.cyan)
             }
             .padding()
-            .frame(maxWidth: 720)
+            .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
         }
     }
@@ -155,129 +140,144 @@ struct AreaScanView: View {
                 AppleAreaObjectCaptureView(session: session)
                     .ignoresSafeArea(edges: .bottom)
             } else {
-                Color.clear
+                Color.black
             }
 
-            VStack(spacing: 0) {
-                statusOverlay
+            VStack {
+                HStack {
+                    LiveCameraStatusBadge(
+                        title: model.phase.title,
+                        detail: "\(model.shotCount) صورة",
+                        systemImage: "square.3.layers.3d"
+                    )
+                    Spacer()
+                }
+                .padding(.leading, 12)
+                .padding(.top, 10)
                 Spacer()
-                controlsOverlay
             }
-        }
-    }
 
-    private var statusOverlay: some View {
-        VStack(spacing: 7) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(model.phase.title)
-                        .font(.headline)
-                    Text(model.statusMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
                 Spacer()
-                SharedTorchToggleButton(controller: torch, compact: true)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(model.shotCount)")
-                        .font(.title3.bold().monospacedDigit())
-                    Text("صورة")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                LiveCameraSideRail {
+                    LiveCameraSideButton(
+                        systemImage: torch.isOn ? "flashlight.on.fill" : "flashlight.off.fill",
+                        accessibilityLabel: "الكشاف",
+                        tint: torch.isOn ? .yellow : nil,
+                        isEnabled: torch.isAvailable
+                    ) { torch.toggle() }
+                    LiveCameraSideButton(systemImage: "info.circle", accessibilityLabel: "حالة المسح", isSelected: panel == .info) { toggle(.info) }
+                    LiveCameraSideButton(systemImage: "ellipsis.circle", accessibilityLabel: "إجراءات إضافية", isSelected: panel == .actions) { toggle(.actions) }
+                    if model.captureSession != nil {
+                        LiveCameraSideButton(systemImage: "point.3.connected.trianglepath.dotted", accessibilityLabel: "التغطية") { showPointCloud = true }
+                    }
                 }
+                .padding(.trailing, 10)
             }
 
-            if let feedback = model.feedbackMessage {
-                Label(feedback, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if let panel {
+                HStack {
+                    Spacer()
+                    panelView(panel).padding(.trailing, 72)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
 
-            if qualityAssistantEnabled, model.phase == .capturing {
-                Color3DScanQualityCard(assessment: model.qualityAssessment, compact: true)
+            VStack {
+                Spacer()
+                bottomBar
+                    .padding(.bottom, 12)
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 17))
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
+        .animation(.easeInOut(duration: 0.18), value: panel != nil)
     }
 
     @ViewBuilder
-    private var controlsOverlay: some View {
-        VStack(spacing: 10) {
-            if model.phase == .initializing {
-                ProgressView()
-                Text("تهيئة Object Capture…")
-                    .font(.caption)
-            } else if model.phase == .ready {
+    private var bottomBar: some View {
+        if model.phase == .initializing {
+            LiveCameraStatusBadge(title: "تهيئة Object Capture…", systemImage: "hourglass")
+        } else if model.phase == .ready {
+            LiveCameraBottomBar {
                 Button {
                     model.startAreaCapture()
                 } label: {
                     Label("بدء المسح", systemImage: "record.circle")
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.cyan)
-            } else if model.phase == .capturing {
-                HStack(spacing: 9) {
-                    Button {
-                        model.requestManualShot()
-                    } label: {
-                        Label("صورة", systemImage: "camera.fill")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button {
-                        showPointCloud = true
-                    } label: {
-                        Label("التغطية", systemImage: "point.3.connected.trianglepath.dotted")
-                    }
-                    .buttonStyle(.bordered)
+            }
+        } else if model.phase == .capturing {
+            LiveCameraBottomBar {
+                Button {
+                    model.requestManualShot()
+                } label: {
+                    Image(systemName: "camera.fill")
                 }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("صورة إضافية")
 
                 Button {
                     model.finishCapture()
                 } label: {
-                    Label("إنهاء وبناء النموذج", systemImage: "stop.circle.fill")
+                    Label("إنهاء", systemImage: "stop.circle.fill")
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
                 .disabled(!model.canFinishCapture)
+            }
+        } else if model.phase == .finishing {
+            LiveCameraStatusBadge(title: "حفظ بيانات الالتقاط…", systemImage: "hourglass")
+        }
+    }
 
-                if !model.canFinishCapture {
-                    Text("يمكن الإنهاء بعد \(model.minimumImagesBeforeFinish) صور على الأقل. أنت من يحدد وقت الإنهاء، وليس التطبيق.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
+
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .info:
+            LiveCameraFloatingPanel(title: "حالة المسح", systemImage: "info.circle", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(model.statusMessage)
+                        .font(.caption)
+                    LabeledContent("الصور", value: "\(model.shotCount)")
+                    LabeledContent("الحد الأدنى للإنهاء", value: "\(model.minimumImagesBeforeFinish)")
+                    if let feedback = model.feedbackMessage {
+                        Label(feedback, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
-            } else if model.phase == .finishing {
-                ProgressView()
-                Text("حفظ بيانات الالتقاط…")
-                    .font(.caption)
+            }
+        case .actions:
+            LiveCameraFloatingPanel(title: "إجراءات", systemImage: "ellipsis.circle", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    if model.phase == .capturing {
+                        Button {
+                            model.requestManualShot()
+                        } label: {
+                            Label("صورة إضافية", systemImage: "camera.fill").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        Button {
+                            showPointCloud = true
+                        } label: {
+                            Label("مراجعة التغطية", systemImage: "point.3.connected.trianglepath.dotted").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
             }
         }
-        .padding(13)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .padding(12)
     }
 
     private var processingView: some View {
         VStack(spacing: 20) {
-            ProgressView(value: model.reconstructionProgress)
-                .frame(maxWidth: 420)
-            Image(systemName: "cube.transparent")
-                .font(.system(size: 54))
-                .foregroundStyle(.cyan)
-            Text("بناء النموذج بواسطة RealityKit")
-                .font(.title2.bold())
-            Text(model.statusMessage)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            ProgressView(value: model.reconstructionProgress).frame(maxWidth: 420)
+            Image(systemName: "cube.transparent").font(.system(size: 54)).foregroundStyle(.cyan)
+            Text("بناء النموذج بواسطة RealityKit").font(.title2.bold())
+            Text(model.statusMessage).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Text("\(Int(model.reconstructionProgress * 100))%")
                 .font(.title3.bold().monospacedDigit())
         }
@@ -288,46 +288,26 @@ struct AreaScanView: View {
         List {
             Section {
                 VStack(spacing: 10) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 54))
-                        .foregroundStyle(.green)
-                    Text("اكتمل المسح البصري للمنطقة")
-                        .font(.title2.bold())
-                    Text("النتيجة هي Photogrammetry رسمي من Apple. إذا كانت المنطقة أكبر من قدرة المعالجة على الهاتف، احتفظ بصور المصدر لمعالجة أعلى جودة على Mac.")
+                    Image(systemName: "checkmark.seal.fill").font(.system(size: 54)).foregroundStyle(.green)
+                    Text("اكتمل المسح البصري الملون").font(.title2.bold())
+                    Text("النتيجة هي Photogrammetry رسمي من Apple للمنطقة التي تم تصويرها.")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
             }
-
-            if qualityAssistantEnabled {
-                Section("تقرير الجودة") {
-                    Color3DScanQualityCard(assessment: model.qualityAssessment)
-                }
-            }
-
             Section("تشخيص إعادة البناء") {
                 LabeledContent("صور غير صالحة", value: "\(model.invalidSampleCount)")
                 LabeledContent("صور تم تخطيها", value: "\(model.skippedSampleCount)")
                 LabeledContent("خفض تلقائي للبيانات", value: model.automaticDownsamplingOccurred ? "نعم" : "لا")
             }
-
             if let url = model.modelURL {
                 Section("النموذج") {
-                    Button {
-                        showPreview = true
-                    } label: {
-                        Label("فتح في Quick Look", systemImage: "arkit")
-                    }
-                    ShareLink(item: url) {
-                        Label("مشاركة USDZ", systemImage: "square.and.arrow.up")
-                    }
+                    Button { showPreview = true } label: { Label("فتح في Quick Look", systemImage: "arkit") }
+                    ShareLink(item: url) { Label("مشاركة USDZ", systemImage: "square.and.arrow.up") }
                 }
             }
-
-            Section {
-                Button("مسح مكان جديد") { model.cancelAndReset() }
-            }
+            Section { Button("مسح منطقة جديدة") { model.cancelAndReset() } }
         }
     }
 
@@ -337,8 +317,7 @@ struct AreaScanView: View {
         } description: {
             Text(model.statusMessage)
         } actions: {
-            Button("العودة") { model.cancelAndReset() }
-                .buttonStyle(.borderedProminent)
+            Button("العودة") { model.cancelAndReset() }.buttonStyle(.borderedProminent)
         }
     }
 
@@ -346,7 +325,7 @@ struct AreaScanView: View {
         ContentUnavailableView {
             Label("Area Mode غير متاح", systemImage: "iphone.slash")
         } description: {
-            Text("Apple Area Mode يحتاج iOS 18 أو أحدث وجهازًا يدعم Object Capture. للمسح الهندسي الكامل للغرفة استخدم RoomPlan المتاح كأداة مستقلة داخل التطبيق.")
+            Text("Apple Area Mode يحتاج iOS 18 أو أحدث وجهازًا يدعم Object Capture.")
         }
     }
 }

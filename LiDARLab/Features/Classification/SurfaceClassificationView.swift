@@ -71,11 +71,14 @@ private enum SurfaceClassificationFilter: String, CaseIterable, Identifiable {
 }
 
 struct SurfaceClassificationView: View {
+    private enum Panel { case controls, summary }
+
     @StateObject private var model = SurfaceClassificationViewModel()
     @State private var filter: SurfaceClassificationFilter = .all
     @State private var showUnknown = false
     @State private var opacity = 0.46
     @State private var wireframe = false
+    @State private var panel: Panel?
 
     var body: some View {
         ZStack {
@@ -88,16 +91,42 @@ struct SurfaceClassificationView: View {
             )
             .ignoresSafeArea(edges: .bottom)
 
-            VStack(spacing: 12) {
-                controls
+            VStack {
+                HStack {
+                    LiveCameraStatusBadge(
+                        title: model.classifiedPercentageText,
+                        detail: "AR: \(model.trackingState)",
+                        systemImage: "square.3.layers.3d"
+                    )
+                    Spacer()
+                }
+                .padding(.leading, 12)
+                .padding(.top, 10)
                 Spacer()
-                summaryPanel
             }
-            .padding(12)
+
+            HStack {
+                Spacer()
+                LiveCameraSideRail {
+                    LiveCameraSideButton(systemImage: "slider.horizontal.3", accessibilityLabel: "إعدادات التصنيف", isSelected: panel == .controls) { toggle(.controls) }
+                    LiveCameraSideButton(systemImage: "chart.bar.xaxis", accessibilityLabel: "ملخص التصنيف", isSelected: panel == .summary) { toggle(.summary) }
+                    LiveCameraSideButton(systemImage: "arrow.clockwise", accessibilityLabel: "إعادة المسح") { model.restart() }
+                }
+                .padding(.trailing, 10)
+            }
+
+            if let panel {
+                HStack {
+                    Spacer()
+                    panelView(panel).padding(.trailing, 72)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .background(.black)
         .navigationTitle("تصنيف الأسطح")
         .navigationBarTitleDisplayMode(.inline)
+        .keepScreenAwakeForLiveTool(id: "classification.live")
         .onDisappear { model.stop() }
         .alert("تعذر تشغيل تصنيف الأسطح", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -109,120 +138,47 @@ struct SurfaceClassificationView: View {
         }
     }
 
-    private var controls: some View {
-        VStack(spacing: 10) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    filterMenu
-                    Toggle("غير المصنف", isOn: $showUnknown)
-                        .font(.caption.bold())
-                    Toggle("شبكي", isOn: $wireframe)
-                        .font(.caption.bold())
-                    Spacer(minLength: 4)
-                    restartButton
-                }
-                VStack(spacing: 9) {
-                    HStack(spacing: 10) {
-                        filterMenu
-                        Toggle("غير المصنف", isOn: $showUnknown)
-                            .font(.caption.bold())
-                        Toggle("شبكي", isOn: $wireframe)
-                            .font(.caption.bold())
+    private func toggle(_ newPanel: Panel) { panel = panel == newPanel ? nil : newPanel }
+
+    @ViewBuilder
+    private func panelView(_ panel: Panel) -> some View {
+        switch panel {
+        case .controls:
+            LiveCameraFloatingPanel(title: "إعدادات التصنيف", systemImage: "slider.horizontal.3", onClose: { self.panel = nil }) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("نوع السطح", selection: $filter) {
+                        ForEach(SurfaceClassificationFilter.allCases) { item in Text(item.title).tag(item) }
                     }
-                    restartButton.frame(maxWidth: .infinity, alignment: .trailing)
-                }
-            }
-
-            HStack(spacing: 10) {
-                Image(systemName: "circle.lefthalf.filled")
-                Slider(value: $opacity, in: 0.15...0.9)
-                Text("\(Int(opacity * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .frame(width: 38)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("شفافية الأسطح")
-        }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var filterMenu: some View {
-        Menu {
-            ForEach(SurfaceClassificationFilter.allCases) { item in
-                Button {
-                    filter = item
-                } label: {
-                    if filter == item {
-                        Label(item.title, systemImage: "checkmark")
-                    } else {
-                        Text(item.title)
+                    Toggle("إظهار غير المصنف", isOn: $showUnknown)
+                    Toggle("عرض شبكي", isOn: $wireframe)
+                    HStack {
+                        Text("الشفافية")
+                        Slider(value: $opacity, in: 0.15...0.9)
+                        Text("\(Int(opacity * 100))%")
+                            .font(.caption.monospacedDigit())
                     }
                 }
             }
-        } label: {
-            Label(filter.title, systemImage: "line.3.horizontal.decrease.circle")
-                .font(.caption.bold())
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(.thinMaterial, in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var restartButton: some View {
-        Button { model.restart() } label: {
-            Label("إعادة المسح", systemImage: "arrow.clockwise")
-                .font(.caption.bold())
-        }
-        .buttonStyle(.bordered)
-    }
-
-    private var summaryPanel: some View {
-        VStack(spacing: 10) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 8)], spacing: 8) {
-                MetricChip(title: "الأجزاء", value: "\(model.anchorCount)", systemImage: "square.stack.3d.up")
-                MetricChip(title: "الوجوه", value: model.totalFaceCount.formatted(.number.notation(.compactName)), systemImage: "triangle")
-                MetricChip(title: "المصنف", value: model.classifiedPercentageText, systemImage: "tag")
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+        case .summary:
+            LiveCameraFloatingPanel(title: "ملخص التصنيف", systemImage: "chart.bar.xaxis", onClose: { self.panel = nil }) {
+                VStack(spacing: 10) {
+                    MetricChip(title: "الأجزاء", value: "\(model.anchorCount)", systemImage: "square.stack.3d.up")
+                    MetricChip(title: "الوجوه", value: model.totalFaceCount.formatted(.number.notation(.compactName)), systemImage: "triangle")
+                    MetricChip(title: "المصنف", value: model.classifiedPercentageText, systemImage: "tag")
+                    Divider()
                     ForEach(SurfaceClassKind.allCases) { kind in
-                        classificationChip(kind)
+                        HStack {
+                            Circle().fill(kind.color).frame(width: 9, height: 9)
+                            Text(kind.title)
+                            Spacer()
+                            Text("\(model.classificationCounts[kind.rawValue, default: 0])")
+                                .font(.caption.monospacedDigit().bold())
+                        }
+                        .font(.caption)
                     }
                 }
             }
-
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
-                    Spacer(minLength: 8)
-                    Text("وجّه الجهاز ببطء إلى الجدران والأرضية والأثاث")
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("التتبع: \(model.trackingState)", systemImage: "location.viewfinder")
-                    Text("وجّه الجهاز ببطء إلى الجدران والأرضية والأثاث")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private func classificationChip(_ kind: SurfaceClassKind) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(kind.color).frame(width: 9, height: 9)
-            Text(kind.title)
-            Text("\(model.classificationCounts[kind.rawValue, default: 0])")
-                .font(.caption.monospacedDigit().bold())
-        }
-        .font(.caption)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(.thinMaterial, in: Capsule())
     }
 }
 
