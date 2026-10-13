@@ -14,19 +14,6 @@ enum LiDARFeatureCategory: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var category: LiDARFeatureCategory {
-        switch self {
-        case .distanceMeasure, .angleMeasure, .levelTool, .arPlayground:
-            .measure
-        case .depthCamera, .pointCloud, .sceneMesh, .surfaceClassification, .planeDetection, .sensorTests, .deviceInfo:
-            .lidar
-        case .depthPhoto, .color3DScan, .roomScan:
-            .scan
-        case .computerBridge, .recordings, .exportCenter:
-            .workflow
-        }
-    }
-
     var title: String {
         switch self {
         case .measure: "القياس والأدوات"
