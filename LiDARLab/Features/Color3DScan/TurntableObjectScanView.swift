@@ -3,6 +3,7 @@ import SwiftUI
 struct TurntableObjectScanView: View {
     @StateObject private var model = TurntableObjectScanViewModel()
     @StateObject private var torch = SharedTorchController()
+    @AppStorage(Color3DScanSettings.Key.qualityAssistantEnabled) private var qualityAssistantEnabled = true
     @AppStorage(Color3DScanSettings.Key.turntableCaptureMode) private var captureModeRaw = TurntableCaptureMode.smartAutomatic.rawValue
     @State private var showPreview = false
     @State private var showCancelConfirmation = false
@@ -206,6 +207,10 @@ struct TurntableObjectScanView: View {
                     .foregroundStyle(.green)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            if qualityAssistantEnabled, model.phase == .capturing {
+                Color3DScanQualityCard(assessment: model.qualityAssessment, compact: true)
+            }
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 17))
@@ -312,6 +317,15 @@ struct TurntableObjectScanView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
+            }
+
+            if qualityAssistantEnabled {
+                Section("تقرير الجودة") {
+                    Color3DScanQualityCard(assessment: model.qualityAssessment)
+                    if model.skippedDuplicateCount > 0 {
+                        LabeledContent("حالات تكرار منعها الالتقاط الذكي", value: "\(model.skippedDuplicateCount)")
+                    }
+                }
             }
 
             if model.invalidSampleCount > 0 || model.skippedSampleCount > 0 {

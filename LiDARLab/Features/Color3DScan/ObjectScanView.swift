@@ -4,6 +4,7 @@ import SwiftUI
 struct GuidedObjectScanView: View {
     @StateObject private var model = ObjectScanViewModel()
     @StateObject private var torch = SharedTorchController()
+    @AppStorage(Color3DScanSettings.Key.qualityAssistantEnabled) private var qualityAssistantEnabled = true
     @State private var showPointCloud = false
     @State private var showModelPreview = false
     @State private var showCancelConfirmation = false
@@ -303,6 +304,10 @@ struct GuidedObjectScanView: View {
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            if qualityAssistantEnabled, model.phase == .capturing || model.phase == .detecting {
+                Color3DScanQualityCard(assessment: model.qualityAssessment, compact: true)
+            }
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 17))
@@ -465,6 +470,10 @@ struct GuidedObjectScanView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                }
+
+                if qualityAssistantEnabled {
+                    Color3DScanQualityCard(assessment: model.qualityAssessment)
                 }
 
                 if model.invalidSampleCount > 0 || model.skippedSampleCount > 0 {

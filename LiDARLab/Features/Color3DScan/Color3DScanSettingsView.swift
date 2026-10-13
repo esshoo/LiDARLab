@@ -3,6 +3,7 @@ import SwiftUI
 
 struct Color3DScanSettingsView: View {
     @AppStorage(Color3DScanSettings.Key.keepScreenAwake) private var keepScreenAwake = true
+    @AppStorage(Color3DScanSettings.Key.qualityAssistantEnabled) private var qualityAssistantEnabled = true
     @AppStorage(Color3DScanSettings.Key.appleAreaAutoCapture) private var areaAutoCapture = true
     @AppStorage(Color3DScanSettings.Key.appleAreaHaptics) private var areaHaptics = true
     @AppStorage(Color3DScanSettings.Key.appleAreaOverCapture) private var areaOverCapture = false
@@ -54,10 +55,11 @@ struct Color3DScanSettingsView: View {
         Form {
             Section {
                 Toggle("منع إطفاء الشاشة أثناء المسح", isOn: $keepScreenAwake)
+                Toggle("مساعد جودة المسح المباشر", isOn: $qualityAssistantEnabled)
             } header: {
                 Label("عام أثناء المسح", systemImage: "display")
             } footer: {
-                Text("عند التفعيل يوقف التطبيق مؤقتًا مؤقت قفل الشاشة فقط أثناء جلسة المسح، ثم يعيد السلوك السابق عند الخروج.")
+                Text("منع إطفاء الشاشة يعمل فقط أثناء جلسة المسح. مساعد الجودة يعرض تقييمًا لحظيًا مبنيًا على تتبع Apple وتحذيرات الالتقاط ونتائج الصور، ولا يمثل نسبة اكتمال هندسي للنموذج.")
             }
 
             Section {
@@ -168,6 +170,7 @@ struct Color3DScanSettingsView: View {
             Button("استعادة", role: .destructive) {
                 Color3DScanSettings.resetAll()
                 keepScreenAwake = true
+                qualityAssistantEnabled = true
                 areaAutoCapture = true
                 areaHaptics = true
                 areaOverCapture = false

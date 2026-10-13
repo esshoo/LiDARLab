@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import CoreVideo
 import Foundation
 import RealityKit
 import UIKit
@@ -47,6 +48,8 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     @Published private(set) var cameraLocked = false
     @Published private(set) var smartCaptureState = "—"
     @Published private(set) var visualChangeScore: Float = 0
+    @Published private(set) var currentMotionScore: Float = 0
+    @Published private(set) var averageLuminance: Float = 0
     @Published private(set) var skippedDuplicateCount = 0
     @Published var errorMessage: String?
 
@@ -63,6 +66,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
     private var lastAnalysisTimestamp: TimeInterval = -100
     private var lastAcceptedCaptureTimestamp: TimeInterval = -100
     private var analysisPausedUntil: TimeInterval = -100
+    private var lastDuplicateCountTimestamp: TimeInterval = -100
     private var previousFeaturePrint: VNFeaturePrintObservation?
     private var acceptedFeaturePrints: [VNFeaturePrintObservation] = []
     private var pendingCaptureFeaturePrint: VNFeaturePrintObservation?
@@ -98,6 +102,31 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         max(1, Int((Double(targetImagesPerPass) * options.captureInterval).rounded()))
     }
 
+    var minimumImagesBeforeFinish: Int {
+        options.minimumImagesBeforeFinish
+    }
+
+    var qualityAssessment: Color3DScanQualityAssessment {
+        Color3DScanQualityEngine.turntable(
+            isSmartAutomatic: isSmartAutomatic,
+            cameraLocked: cameraLocked,
+            smartCaptureState: smartCaptureState,
+            visualChangeScore: visualChangeScore,
+            motionScore: currentMotionScore,
+            stabilityThreshold: options.stabilityThreshold,
+            averageLuminance: averageLuminance,
+            passImageCount: passImageCount,
+            targetImagesPerPass: targetImagesPerPass,
+            capturedImageCount: capturedImageCount,
+            minimumImages: minimumImagesBeforeFinish,
+            skippedDuplicateCount: skippedDuplicateCount,
+            invalidSampleCount: invalidSampleCount,
+            skippedSampleCount: skippedSampleCount,
+            isActive: phase == .capturing || phase == .readyToReconstruct,
+            isCompleted: phase == .completed
+        )
+    }
+
     func prepare() {
         guard isSupported else {
             phase = .failed
@@ -120,7 +149,10 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         cameraReady = false
         smartCaptureState = options.captureMode == .smartAutomatic ? "بانتظار ثبات الكاميرا" : "التقاط يدوي"
         visualChangeScore = 0
+        currentMotionScore = 0
+        averageLuminance = 0
         skippedDuplicateCount = 0
+        lastDuplicateCountTimestamp = -100
         featureLock.lock()
         previousFeaturePrint = nil
         acceptedFeaturePrints.removeAll(keepingCapacity: true)
@@ -163,6 +195,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         lastAnalysisTimestamp = -100
         lastAcceptedCaptureTimestamp = -100
         analysisPausedUntil = -100
+        lastDuplicateCountTimestamp = -100
         smartCaptureState = options.captureMode == .smartAutomatic
             ? "لف المجسم ثم ثبته لحظة؛ سيتم التقاط المناظر الجديدة فقط"
             : "الوضع اليدوي: اضغط صورة الآن لكل زاوية تريدها"
@@ -459,6 +492,7 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         lastAnalysisTimestamp = timestamp
 
         guard let feature = makeFeaturePrint(pixelBuffer: pixelBuffer) else { return }
+        let luminance = averageLuminanceValue(pixelBuffer: pixelBuffer)
 
         featureLock.lock()
         let previous = previousFeaturePrint
@@ -483,6 +517,8 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
 
         DispatchQueue.main.async {
             self.visualChangeScore = nearestAccepted.isFinite ? nearestAccepted : 0
+            self.currentMotionScore = motionDistance
+            self.averageLuminance = luminance
         }
 
         guard options.captureMode == .smartAutomatic else {
@@ -497,6 +533,12 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         guard elapsed >= options.captureInterval else { return }
 
         if !acceptedSnapshot.isEmpty, nearestAccepted < options.noveltyThreshold {
+            if now - lastDuplicateCountTimestamp >= 0.75 {
+                lastDuplicateCountTimestamp = now
+                DispatchQueue.main.async {
+                    self.skippedDuplicateCount += 1
+                }
+            }
             DispatchQueue.main.async {
                 self.smartCaptureState = "منظر قريب من لقطة سابقة — واصل تدوير المجسم"
             }
@@ -529,6 +571,44 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
         } catch {
             return nil
         }
+    }
+
+    private func averageLuminanceValue(pixelBuffer: CVPixelBuffer) -> Float {
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return 0 }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        guard width > 0, height > 0, bytesPerRow >= width * 4 else { return 0 }
+
+        let x0 = Int(Float(width) * 0.12)
+        let x1 = max(x0 + 1, Int(Float(width) * 0.88))
+        let y0 = Int(Float(height) * 0.10)
+        let y1 = max(y0 + 1, Int(Float(height) * 0.90))
+        let stepX = max((x1 - x0) / 24, 1)
+        let stepY = max((y1 - y0) / 24, 1)
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+
+        var sum: Float = 0
+        var count: Int = 0
+        var y = y0
+        while y < y1 {
+            var x = x0
+            while x < x1 {
+                let offset = y * bytesPerRow + x * 4
+                let blue = Float(bytes[offset]) / 255
+                let green = Float(bytes[offset + 1]) / 255
+                let red = Float(bytes[offset + 2]) / 255
+                sum += 0.2126 * red + 0.7152 * green + 0.0722 * blue
+                count += 1
+                x += stepX
+            }
+            y += stepY
+        }
+
+        return count > 0 ? sum / Float(count) : 0
     }
 
     private func beginReconstruction() {
@@ -615,6 +695,19 @@ final class TurntableObjectScanViewModel: NSObject, ObservableObject, AVCaptureP
                             self.reconstructionProgress = 1
                             self.phase = .completed
                             self.statusMessage = "اكتمل نموذج Turntable الملوّن."
+                            Color3DScanQualityReport.write(
+                                scanType: "turntable-object-capture",
+                                assessment: self.qualityAssessment,
+                                imageCount: self.capturedImageCount,
+                                invalidSampleCount: self.invalidSampleCount,
+                                skippedSampleCount: self.skippedSampleCount,
+                                metadata: [
+                                    "captureMode": self.captureModeTitle,
+                                    "passes": String(self.passNumber),
+                                    "duplicateViewsSkipped": String(self.skippedDuplicateCount)
+                                ],
+                                to: finalFolder
+                            )
                         }
                         if let workFolder {
                             try? self.fileManager.removeItem(at: workFolder)

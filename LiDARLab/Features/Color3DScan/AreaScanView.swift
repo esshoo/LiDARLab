@@ -4,6 +4,7 @@ import SwiftUI
 struct AreaScanView: View {
     @StateObject private var model = AreaScanViewModel()
     @StateObject private var torch = SharedTorchController()
+    @AppStorage(Color3DScanSettings.Key.qualityAssistantEnabled) private var qualityAssistantEnabled = true
     @State private var showPointCloud = false
     @State private var showPreview = false
     @State private var showCancelConfirmation = false
@@ -192,6 +193,10 @@ struct AreaScanView: View {
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            if qualityAssistantEnabled, model.phase == .capturing {
+                Color3DScanQualityCard(assessment: model.qualityAssessment, compact: true)
+            }
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 17))
@@ -293,6 +298,12 @@ struct AreaScanView: View {
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
+            }
+
+            if qualityAssistantEnabled {
+                Section("تقرير الجودة") {
+                    Color3DScanQualityCard(assessment: model.qualityAssessment)
+                }
             }
 
             Section("تشخيص إعادة البناء") {

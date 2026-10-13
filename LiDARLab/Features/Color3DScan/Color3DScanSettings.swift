@@ -306,6 +306,7 @@ enum TurntableCaptureMode: String, CaseIterable, Identifiable, Hashable {
 enum Color3DScanSettings {
     enum Key {
         static let keepScreenAwake = "color3d.settings.general.keepScreenAwake"
+        static let qualityAssistantEnabled = "color3d.settings.general.qualityAssistantEnabled"
         static let roomQualityPreset = "color3d.settings.room.qualityPreset"
         static let areaMaximumKeyframes = "color3d.settings.area.maximumKeyframes"
         static let areaImageMaxDimension = "color3d.settings.area.imageMaxDimension"
@@ -368,6 +369,7 @@ enum Color3DScanSettings {
         let object = ObjectScanDensityPreset.balanced.recommended
         defaults.register(defaults: [
             Key.keepScreenAwake: true,
+            Key.qualityAssistantEnabled: true,
             Key.roomQualityPreset: Color3DScanQualityPreset.balanced.rawValue,
             Key.areaMaximumKeyframes: area.maximumKeyframes,
             Key.areaImageMaxDimension: area.imageMaxDimension,
@@ -593,6 +595,7 @@ enum Color3DScanSettings {
     static func resetAll() {
         for key in [
             Key.keepScreenAwake,
+            Key.qualityAssistantEnabled,
             Key.roomQualityPreset,
             Key.areaMaximumKeyframes,
             Key.areaImageMaxDimension,
